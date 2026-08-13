@@ -31,6 +31,7 @@ import numpy as np
 TOA_TO_HOURS = 1.0
 
 HORIZONS_H = (12, 24, 48, 72, 96, 120, 168, 240, 336)
+PUBLIC_BUCKET_URL = "https://pub-691b6945028a43fd9af9d984fcf17f14.r2.dev"
 BASELINE_TOL_H = 3.0     # baseline = latest perimeter <= run + this
 ACTUAL_TOL_H = 12.0      # actual must be within +/- this of run + H
 SQM_PER_ACRE = 4046.8564224
@@ -355,7 +356,9 @@ def overlay(slug, run_ts, pct, H):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--sync-url", help="public r2.dev bucket URL to mirror into raw/ first")
+    ap.add_argument("--sync", action="store_true",
+                    help=f"mirror the R2 bucket ({PUBLIC_BUCKET_URL}) into raw/ first")
+    ap.add_argument("--sync-url", help="override the public bucket URL for --sync")
     ap.add_argument("--refresh-perims", action="store_true",
                     help="re-fetch Cornea perimeter snapshots before computing")
     ap.add_argument("--inspect", metavar="TIF")
@@ -366,8 +369,8 @@ def main():
     if args.inspect:
         inspect(args.inspect)
         return
-    if args.sync_url:
-        sync_bucket(args.sync_url)
+    if args.sync or args.sync_url:
+        sync_bucket(args.sync_url or PUBLIC_BUCKET_URL)
     if args.refresh_perims:
         import collect
         archive = collect.Archive(RAW)

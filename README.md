@@ -47,7 +47,7 @@ fire_matches.json                                       # slug -> cornea fire
 python3 -m venv .venv && ./.venv/bin/pip install requests "rasterio>=1.4,<1.5" "shapely>=2,<2.1"
 ./.venv/bin/python collect.py --local        # capture now, into raw/ (no cloud needed)
 ./.venv/bin/python collect.py --push         # upload a raw/ archive into R2  ⚠ see below
-./.venv/bin/python analyze.py                # sync archive + write data/metrics.csv
+./.venv/bin/python analyze.py --sync         # mirror the bucket + write data/metrics.csv
 ./.venv/bin/python analyze.py --inspect raw/forecast_archive/ca-bug/<run>/50.tif
 open report.html                             # or serve the dir statically
 ```
