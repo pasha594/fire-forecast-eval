@@ -149,6 +149,8 @@ def make_r2():
     endpoint = env("S3_ENDPOINT") or (
         f"https://{env('R2_ACCOUNT_ID')}.r2.cloudflarestorage.com"
         if env("R2_ACCOUNT_ID") else None)
+    if endpoint and "://" not in endpoint:  # boto3 requires a scheme
+        endpoint = f"https://{endpoint}"
     access = env("S3_ACCESS_KEY_ID") or env("R2_ACCESS_KEY_ID")
     secret = env("S3_SECRET_ACCESS_KEY") or env("R2_SECRET_ACCESS_KEY")
     bucket = env("S3_BUCKET") or env("R2_BUCKET") or "fire-forecast-archive"
