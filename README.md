@@ -18,6 +18,7 @@ which retains dated perimeter snapshots per fire (~2–3/day for active fires).
 | `.github/workflows/collect.yml` | cron `17 */6 * * *` + manual dispatch; concurrency group = single writer |
 | `analyze.py` | local: syncs the archive, computes growth-only P/R → `data/metrics.csv` |
 | `report.html` | static Plotly report over `data/metrics.csv` |
+| `map.html` | interactive map: pyrecast forecast layers (live WMS, all variables/percentiles) over Cornea perimeter history + hotspots |
 | `overrides.json` | manual slug→cornea_id match overrides (string forces, null skips) |
 
 Archive layout (R2 bucket or local `raw/`):
@@ -49,7 +50,8 @@ python3 -m venv .venv && ./.venv/bin/pip install requests "rasterio>=1.4,<1.5" "
 ./.venv/bin/python collect.py --push         # upload a raw/ archive into R2  ⚠ see below
 ./.venv/bin/python analyze.py --sync         # mirror the bucket + write data/metrics.csv
 ./.venv/bin/python analyze.py --inspect raw/forecast_archive/ca-bug/<run>/50.tif
-open report.html                             # or serve the dir statically
+python3 serve.py                             # then http://localhost:8090/report.html
+                                             #  and http://localhost:8090/map.html
 ```
 
 ⚠ `--push` and the CI workflow must not run at the same time — the manifest

@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fire forecast map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root {
+    --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e;
+    --muted: #898781; --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    --accent: #2a78d6; --actual: #eb6834;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: flex; background: var(--page); color: var(--ink);
+    font: 13.5px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  #side {
+    width: 320px; min-width: 320px; overflow-y: auto; padding: 14px;
+    background: var(--surface); border-right: 1px solid var(--grid);
+  }
+  #map { flex: 1; }
+  h1 { font-size: 15px; margin: 0 0 2px; }
+  .sub { color: var(--ink-2); font-size: 12px; margin: 0 0 10px; }
+  .sec { border-top: 1px solid var(--grid); margin-top: 12px; padding-top: 10px; }
+  .sec h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+            color: var(--ink-2); margin: 0 0 6px; }
+  select, input[type=text] {
+    font: inherit; width: 100%; padding: 5px 6px; margin-bottom: 6px;
+    border: 1px solid var(--axis); border-radius: 6px; background: var(--surface);
+  }
+  label.row { display: flex; gap: 6px; align-items: center; margin: 3px 0; cursor: pointer; }
+  label.row .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  #firelist { max-height: 200px; overflow-y: auto; border: 1px solid var(--grid);
+              border-radius: 6px; }
+  #firelist div { padding: 4px 8px; cursor: pointer; border-bottom: 1px solid var(--grid); }
+  #firelist div:hover { background: var(--page); }
+  #firelist div.sel { background: #e8f0fb; font-weight: 600; }
+  #firelist .meta { color: var(--muted); font-size: 11px; font-weight: 400; }
+  .note { color: var(--muted); font-size: 11.5px; margin: 4px 0; }
+  .warn { color: #b3591f; font-size: 11.5px; margin: 4px 0; }
+  #legendimg { max-width: 100%; margin-top: 6px; background: #fff;
+               border: 1px solid var(--grid); border-radius: 4px; }
+  input[type=range] { width: 100%; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div id="side">
+  <h1>Fire forecast map</h1>
+  <p class="sub">pyrecast ELMFIRE layers (live WMS) over Cornea perimeters &amp; hotspots ·
+  <a href="report.html">skill report</a></p>
+
+  <input type="text" id="search" placeholder="filter fires…">
+  <div id="firelist"></div>
+
+  <div class="sec">
+    <h2>Forecast layer</h2>
+    <select id="selRun"></select>
+    <select id="selVar">
+      <option value="time-of-arrival" selected>time of arrival</option>
+      <option value="spread-rate">spread rate</option>
+      <option value="flame-length">flame length</option>
+      <option value="crown-fire">crown fire</option>
+      <option value="hours-since-burned">hours since burned</option>
+      <option value="isochrones">isochrones (vector)</option>
+      <option value="">— none —</option>
+    </select>
+    <select id="selPct">
+      <option value="10">10th percentile weather</option>
+      <option value="30">30th percentile</option>
+      <option value="50" selected>50th percentile</option>
+      <option value="70">70th percentile</option>
+      <option value="90">90th percentile weather</option>
+    </select>
+    <label class="row">opacity <input type="range" id="opacity" min="10" max="100" value="70"></label>
+    <div class="note" id="wmsnote"></div>
+    <img id="legendimg" alt="" hidden>
+  </div>
+
+  <div class="sec">
+    <h2>Perimeters (Cornea)</h2>
+    <div id="perimlist" class="note">select a fire</div>
+  </div>
+
+  <div class="sec">
+    <h2>Hotspots (Cornea)</h2>
+    <label class="row"><input type="checkbox" id="chkHot" checked>
+      <span class="dot" style="background:#d03b3b"></span>last 7 days</label>
+    <div class="note" id="hotnote"></div>
+  </div>
+</div>
+<div id="map"></div>
+
+<script>
+"use strict";
+const CORNEA = "https://fire-api-prod.web.app";
+const WMS = "https://geoserver-usw1.pyrecast.org/geoserver02/wms";
+const BUCKET = "https://pub-691b6945028a43fd9af9d984fcf17f14.r2.dev";
+
+const map = L.map("map").setView([41, -114], 5);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  { maxZoom: 16, attribution: "OSM · forecasts: pyrecast.org · perimeters: Cornea" }).addTo(map);
+
+const state = {
+  fires: [],            // [{slug, title, cornea_id, centroid:[lon,lat], runs:[ts...]}]
+  sel: null,
+  wmsLayer: null,
+  perimLayers: new Map(),   // epochms -> L.geoJSON
+  perimIndex: [],           // [{ems, date}]
+  hotLayer: null,
+  seq: 0,
+};
+
+async function getJson(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
+  return r.json();
+}
+
+async function loadLocalOrBucket(key) {
+  try { return await getJson("raw/" + key); }
+  catch (e) { return getJson(BUCKET + "/" + key); }
+}
+
+// ---------------------------------------------------------------- fire list
+
+async function init() {
+  const [matches, manifest] = await Promise.all([
+    loadLocalOrBucket("fire_matches.json"), loadLocalOrBucket("manifest.json")]);
+  const bySlug = {};
+  for (const [runKey, e] of Object.entries(manifest.runs)) {
+    const f = bySlug[e.slug] = bySlug[e.slug] || { slug: e.slug, runs: [], centroid: null };
+    f.runs.push(e.run_ts);
+    if (e.centroid) f.centroid = e.centroid;
+  }
+  for (const f of Object.values(bySlug)) {
+    f.runs.sort().reverse();
+    const m = matches.matches[f.slug];
+    f.title = m ? (m.post_title || f.slug) : null;
+    f.cornea_id = m ? m.cornea_id : null;
+  }
+  state.fires = Object.values(bySlug).sort((a, b) => a.slug.localeCompare(b.slug));
+  for (const f of state.fires) {
+    if (!f.centroid) continue;
+    f.marker = L.circleMarker([f.centroid[1], f.centroid[0]],
+      { radius: 5, color: "#52514e", weight: 1.5, fillColor: "#eb6834", fillOpacity: 0.8 })
+      .addTo(map).bindTooltip(`${f.title || f.slug}`).on("click", () => select(f.slug));
+  }
+  renderList();
+  document.getElementById("search").addEventListener("input", renderList);
+  for (const id of ["selRun", "selVar", "selPct"])
+    document.getElementById(id).addEventListener("change", refreshWms);
+  document.getElementById("opacity").addEventListener("input", () =>
+    state.wmsLayer && state.wmsLayer.setOpacity(+document.getElementById("opacity").value / 100));
+  document.getElementById("chkHot").addEventListener("change", refreshHotspots);
+}
+
+function renderList() {
+  const q = document.getElementById("search").value.toLowerCase();
+  const el = document.getElementById("firelist");
+  el.innerHTML = "";
+  for (const f of state.fires) {
+    const label = `${f.title || f.slug}`;
+    if (q && !(f.slug + " " + label).toLowerCase().includes(q)) continue;
+    const d = document.createElement("div");
+    d.className = f.slug === state.sel ? "sel" : "";
+    d.innerHTML = `${label} <span class="meta">${f.slug} · ${f.runs.length} runs` +
+      `${f.cornea_id ? "" : " · no Cornea match"}</span>`;
+    d.onclick = () => select(f.slug);
+    el.appendChild(d);
+  }
+}
+
+// ---------------------------------------------------------------- selection
+
+async function select(slug) {
+  const f = state.fires.find(x => x.slug === slug);
+  if (!f) return;
+  state.sel = slug;
+  const seq = ++state.seq;   // guard stale async responses after reselect
+  renderList();
+  if (f.centroid) map.setView([f.centroid[1], f.centroid[0]], 11);
+
+  const selRun = document.getElementById("selRun");
+  selRun.innerHTML = f.runs.slice(0, 4).map((r, i) =>
+    `<option value="${r}"${i === 0 ? " selected" : ""}>run ${fmtRun(r)}${i === 0 ? " (latest)" : ""}</option>`).join("");
+  refreshWms();
+  await Promise.all([loadPerims(f, seq), refreshHotspots()]);
+}
+
+function fmtRun(ts) {
+  return `${ts.slice(0, 4)}-${ts.slice(4, 6)}-${ts.slice(6, 8)} ${ts.slice(9, 11)}:${ts.slice(11, 13)}Z`;
+}
+
+// ---------------------------------------------------------------- WMS layer
+
+function refreshWms() {
+  const f = state.fires.find(x => x.slug === state.sel);
+  const run = document.getElementById("selRun").value;
+  const variable = document.getElementById("selVar").value;
+  const pct = document.getElementById("selPct").value;
+  const note = document.getElementById("wmsnote");
+  const legend = document.getElementById("legendimg");
+  if (state.wmsLayer) { map.removeLayer(state.wmsLayer); state.wmsLayer = null; }
+  legend.hidden = true;
+  note.textContent = "";
+  note.className = "note";
+  if (!f || !run || !variable) return;
+  const layer = `fire-spread-forecast_${f.slug}_${run}:elmfire_landfire_${pct}_${variable}`;
+  state.wmsLayer = L.tileLayer.wms(WMS, {
+    layers: layer, format: "image/png", transparent: true, version: "1.1.1",
+    opacity: +document.getElementById("opacity").value / 100,
+  }).addTo(map);
+  let errored = 0;
+  state.wmsLayer.on("tileerror", () => {
+    if (++errored === 3) {
+      note.textContent = "tiles failing — this run may have expired off pyrecast's geoserver; try the other run";
+      note.className = "warn";
+    }
+  });
+  note.textContent = layer;
+  legend.src = `${WMS}?REQUEST=GetLegendGraphic&VERSION=1.1.1&FORMAT=image/png&LAYER=${encodeURIComponent(layer)}&transparent=true`;
+  legend.hidden = false;
+}
+
+// ---------------------------------------------------------------- perimeters
+
+async function loadPerims(f, seq) {
+  const el = document.getElementById("perimlist");
+  for (const l of state.perimLayers.values()) map.removeLayer(l);
+  state.perimLayers.clear();
+  state.perimIndex = [];
+  if (!f.cornea_id) { el.textContent = "no Cornea match for this fire"; return; }
+  el.textContent = "loading…";
+  let idx;
+  try {
+    idx = await getJson(`${CORNEA}/fires/${encodeURIComponent(f.cornea_id)}/perimeters`);
+  } catch (e) {
+    try { idx = (await loadLocalOrBucket(`perimeter_archive/${f.slug}/index.json`)).index; }
+    catch (e2) { el.textContent = "no perimeters available"; return; }
+  }
+  if (state.seq !== seq) return;
+  state.perimIndex = idx.map(p => ({
+    ems: p.path.split("/").pop(), path: p.path, date: p.date,
+  })).sort((a, b) => a.date < b.date ? -1 : 1);
+  if (!state.perimIndex.length) { el.textContent = "no perimeters recorded"; return; }
+  el.innerHTML = "";
+  const n = state.perimIndex.length;
+  state.perimIndex.forEach((p, i) => {
+    const latest = i === n - 1;
+    const lab = document.createElement("label");
+    lab.className = "row";
+    const color = latest ? "#eb6834" : "#52514e";
+    lab.innerHTML = `<input type="checkbox" data-ems="${p.ems}" ${latest ? "checked" : ""}>
+      <span class="dot" style="background:${color}"></span>
+      ${p.date.slice(0, 16).replace("T", " ")}Z${latest ? " (current)" : ""}`;
+    lab.querySelector("input").addEventListener("change", ev =>
+      togglePerim(f, p, ev.target.checked, latest));
+    el.appendChild(lab);
+  });
+  togglePerim(f, state.perimIndex[n - 1], true, true);
+}
+
+async function togglePerim(f, p, on, latest) {
+  if (!on) {
+    const l = state.perimLayers.get(p.ems);
+    if (l) { map.removeLayer(l); state.perimLayers.delete(p.ems); }
+    return;
+  }
+  if (state.perimLayers.has(p.ems)) return;
+  let gj;
+  try { gj = await getJson(CORNEA + p.path); }
+  catch (e) {
+    try { gj = await loadLocalOrBucket(`perimeter_archive/${f.slug}/${p.ems}.geojson`); }
+    catch (e2) { return; }
+  }
+  const layer = L.geoJSON(gj, {
+    style: latest
+      ? { color: "#eb6834", weight: 2.5, fillOpacity: 0.08 }
+      : { color: "#52514e", weight: 1.5, dashArray: "4 3", fillOpacity: 0 },
+  }).addTo(map).bindTooltip(`perimeter ${p.date.slice(0, 16).replace("T", " ")}Z`);
+  state.perimLayers.set(p.ems, layer);
+}
+
+// ---------------------------------------------------------------- hotspots
+
+async function refreshHotspots() {
+  const note = document.getElementById("hotnote");
+  if (state.hotLayer) { map.removeLayer(state.hotLayer); state.hotLayer = null; }
+  const f = state.fires.find(x => x.slug === state.sel);
+  if (!f || !f.centroid || !document.getElementById("chkHot").checked) {
+    note.textContent = f ? "" : "select a fire";
+    return;
+  }
+  const [lon, lat] = f.centroid;
+  const d = 0.4;
+  const since = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
+  try {
+    const gj = await getJson(`${CORNEA}/hotspots?bbox=${lon - d},${lat - d},${lon + d},${lat + d}&since=${since}&limit=2000`);
+    const n = (gj.features || []).length;
+    note.textContent = `${n} hotspot${n === 1 ? "" : "s"} returned` +
+      (n ? "" : " (endpoint currently returns no data for any bbox)");
+    if (n) {
+      state.hotLayer = L.geoJSON(gj, {
+        pointToLayer: (feat, ll) => L.circleMarker(ll, {
+          radius: 3.5, color: "#d03b3b", weight: 1, fillColor: "#d03b3b", fillOpacity: 0.6,
+        }).bindTooltip(Object.entries(feat.properties || {}).map(([k, v]) => `${k}: ${v}`).join("<br>")),
+      }).addTo(map);
+    }
+  } catch (e) {
+    note.textContent = "hotspots request failed: " + e.message;
+  }
+}
+
+init();
+</script>
+</body>
+</html>
