@@ -13,12 +13,16 @@ Layout mirrored into the archive:
   fire_matches.json                              slug -> cornea fire match
 """
 import argparse
+import concurrent.futures
+import io
 import json
 import math
 import os
 import re
 import sys
+import tarfile
 import tempfile
+import threading
 import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -29,6 +33,12 @@ import requests
 PYRECAST_BASE = "https://data.pyrecast.org/fire_spread_forecast/"
 CORNEA_BASE = "https://fire-api-prod.web.app"
 PERCENTILES = ("10", "30", "50", "70", "90")
+# hourly-mosaic variables; each granule dir is tarred into ONE archive object per
+# (run, pct, var) so R2 write-ops stay in the free tier (169 files -> 1 PUT)
+VAR_DIRS = ("crown-fire", "flame-length", "hours-since-burned", "spread-rate")
+ISO_EXTS = (".shp", ".dbf", ".prj", ".shx", ".qix")
+FETCH_WORKERS = 12
+VAR_COMPLETE_H = 167  # granules reaching run+167h == variable fully published
 RUN_RE = re.compile(r"^\d{8}_\d{6}/$")
 HREF_RE = re.compile(r'href="([^"]+)"')
 TIFF_MAGIC = (b"II*\x00", b"MM\x00*")
@@ -253,6 +263,113 @@ def download_run(archive, manifest, slug, run_ts):
         dirs = [h for h in hrefs if h.endswith("/") and h != "../"]
         if dirs and "landfire/" not in dirs:
             log(f"WARNING {run_key}: unexpected layout under elmfire/: {dirs}")
+    return changed
+
+
+_tls = threading.local()
+
+
+def thread_session():
+    if not hasattr(_tls, "s"):
+        _tls.s = requests.Session()
+        _tls.s.headers.update(SESSION.headers)
+    return _tls.s
+
+
+def fetch_content(url, tries=2):
+    """Thread-safe GET returning bytes or None (for parallel granule fetches)."""
+    for attempt in range(tries):
+        try:
+            r = thread_session().get(url, timeout=(10, 60))
+            if r.status_code == 200:
+                return r.content
+            if r.status_code == 404:
+                return None
+        except requests.RequestException:
+            pass
+        time.sleep(0.5)
+    return None
+
+
+def write_tar(path, files):
+    """Atomically write {name: bytes} as an uncompressed tar (tifs are already
+    deflate-compressed internally, so gzip would buy little)."""
+    tmp = path.with_suffix(path.suffix + ".part")
+    with tarfile.open(tmp, "w") as tf:
+        for name in sorted(files):
+            info = tarfile.TarInfo(name)
+            info.size = len(files[name])
+            info.mtime = 0  # deterministic output
+            tf.addfile(info, io.BytesIO(files[name]))
+    os.replace(tmp, path)
+
+
+def archive_run_variables(archive, manifest, slug, run_ts):
+    """Tar + upload the hourly-mosaic variables and isochrones for one listed run.
+    Retries while the run is listed; a variable is final once its granules reach
+    the forecast horizon or the granule set is stable across two invocations."""
+    entry = manifest["runs"][f"{slug}/{run_ts}"]
+    vars_state = entry.setdefault("vars", {})
+    run_dt = datetime.strptime(run_ts, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
+    base = f"{PYRECAST_BASE}{slug}/{run_ts}/elmfire/landfire"
+    changed = False
+    for pct in PERCENTILES:
+        pstate = vars_state.setdefault(pct, {})
+        if not pstate.get("isochrones", {}).get("ok"):
+            files = {}
+            for ext in ISO_EXTS:
+                data = fetch_content(f"{base}/{pct}/isochrones{ext}")
+                if data:
+                    files[f"isochrones{ext}"] = data
+                elif ext != ".qix":  # qix spatial index is optional
+                    files = None
+                    break
+            if files:
+                key = f"forecast_archive/{slug}/{run_ts}/{pct}_isochrones.tar"
+                write_tar(archive.local_path(key), files)
+                archive.commit_file(key)
+                pstate["isochrones"] = {"ok": True, "n": len(files)}
+                bump("iso_tars")
+                changed = True
+        for var in VAR_DIRS:
+            vstate = pstate.get(var, {})
+            if vstate.get("complete"):
+                continue
+            hrefs = list_hrefs(f"{base}/{pct}/{var}/")
+            if hrefs is None:
+                continue
+            gran = sorted(h for h in hrefs
+                          if re.fullmatch(rf"{re.escape(var)}_\d{{8}}_\d{{6}}\.tif", h))
+            if not gran:
+                continue
+            last_ts = gran[-1][len(var) + 1:-4]
+            last_dt = datetime.strptime(last_ts, "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
+            complete = last_dt >= run_dt + timedelta(hours=VAR_COMPLETE_H)
+            stable = (vstate.get("n") == len(gran) and vstate.get("last") == last_ts)
+            if vstate.get("ok") and (complete or stable):
+                vstate["complete"] = True  # existing tar already holds the final set
+                pstate[var] = vstate
+                changed = True
+                continue
+            contents = {}
+            with concurrent.futures.ThreadPoolExecutor(FETCH_WORKERS) as ex:
+                futs = {ex.submit(fetch_content, f"{base}/{pct}/{var}/{g}"): g for g in gran}
+                for fut in concurrent.futures.as_completed(futs):
+                    data = fut.result()
+                    if data and data[:4] in TIFF_MAGIC:
+                        contents[futs[fut]] = data
+            if len(contents) < len(gran) * 0.9:
+                # upstream mid-publish or flaky; try again next invocation
+                bump("var_fetch_deferred")
+                continue
+            key = f"forecast_archive/{slug}/{run_ts}/{pct}_{var}.tar"
+            write_tar(archive.local_path(key), contents)
+            archive.commit_file(key)
+            pstate[var] = {"ok": True, "n": len(gran), "got": len(contents),
+                           "last": last_ts, "complete": complete}
+            bump("var_tars")
+            bump("var_granules", len(contents))
+            changed = True
     return changed
 
 
@@ -484,6 +601,18 @@ def push_local_to_r2(local_root):
         rentry["complete"] = all(rentry["files"].get(p, {}).get("ok") for p in PERCENTILES)
         if lentry.get("centroid") and not rentry.get("centroid"):
             rentry["centroid"] = lentry["centroid"]
+        # variable/isochrone tars produced by --local runs
+        for pct, lp in (lentry.get("vars") or {}).items():
+            rp = rentry.setdefault("vars", {}).setdefault(pct, {})
+            for name, linfo in lp.items():
+                if not linfo.get("ok") or rp.get(name, {}).get("ok"):
+                    continue
+                suffix = "isochrones" if name == "isochrones" else name
+                key = f"forecast_archive/{run_key}/{pct}_{suffix}.tar"
+                if (local.root / key).exists():
+                    remote.commit_file(key)
+                    rp[name] = linfo
+                    bump("pushed_tars")
     for slug, epochs in (lman.get("perimeters") or {}).items():
         have = set(rman["perimeters"].get(slug, []))
         for ems in epochs:
@@ -519,6 +648,8 @@ def main():
     ap.add_argument("--only", action="append",
                     help="restrict to slug (repeatable, for debugging)")
     ap.add_argument("--skip-perimeters", action="store_true")
+    ap.add_argument("--skip-vars", action="store_true",
+                    help="skip the hourly-mosaic variable tars (time-of-arrival only)")
     args = ap.parse_args()
 
     repo = Path(__file__).resolve().parent
@@ -541,6 +672,8 @@ def main():
         changed = False
         for run_ts in runs:
             changed = download_run(archive, manifest, slug, run_ts) or changed
+            if not args.skip_vars:
+                changed = archive_run_variables(archive, manifest, slug, run_ts) or changed
         if changed:
             manifest["generated"] = iso(utcnow())
             archive.save_json("manifest.json", manifest)  # checkpoint per slug

@@ -2,7 +2,9 @@ name: collect
 
 on:
   schedule:
-    - cron: "17 */6 * * *"   # every 6h, offset from top-of-hour congestion
+    # every 3h: pyrecast purges the hourly variable granules within hours of
+    # publishing, so 6h polling would miss roughly half of them
+    - cron: "17 */3 * * *"
   workflow_dispatch: {}
 
 # Single writer for manifest.json in R2 — never run two collectors at once.
@@ -13,7 +15,9 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # first run after enabling full ingestion backfills every listed run (~30-45
+    # min); manifest checkpoints per fire make a timeout kill lose nothing
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
