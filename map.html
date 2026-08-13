@@ -95,8 +95,13 @@
 
   <div class="sec">
     <h2>Hotspots (Cornea)</h2>
-    <label class="row"><input type="checkbox" id="chkHot" checked>
-      <span class="dot" style="background:#d03b3b"></span>last 7 days</label>
+    <label class="row"><input type="checkbox" id="chkHot" checked>show detections</label>
+    <label class="row" style="display:block">playhead: <b id="hotTimeLabel">now</b>
+      <input type="range" id="hotTime" min="0" max="336" value="0"></label>
+    <div style="height:10px;border-radius:5px;margin:2px 0;
+      background:linear-gradient(to right,#ffd21f,hsl(20,90%,50%),hsl(340,90%,43%),hsl(275,90%,33%))"></div>
+    <div class="note" style="display:flex;justify-content:space-between">
+      <span>&le;24h before playhead</span><span>7d before</span></div>
     <div class="note" id="hotnote"></div>
   </div>
 </div>
@@ -119,6 +124,7 @@ const state = {
   perimLayers: new Map(),   // epochms -> L.geoJSON
   perimIndex: [],           // [{ems, date}]
   hotLayer: null,
+  hotMarkers: [],
   seq: 0,
 };
 
@@ -182,6 +188,12 @@ async function init() {
       state.wmsLayer.setParams({ time: timeParam(run) });
   });
   document.getElementById("chkHot").addEventListener("change", refreshHotspots);
+  let hotPending = false;   // setTimeout, not rAF — rAF pauses in hidden tabs
+  document.getElementById("hotTime").addEventListener("input", () => {
+    if (hotPending) return;
+    hotPending = true;
+    setTimeout(() => { hotPending = false; renderHotspots(); }, 30);
+  });
 }
 
 function renderList() {
@@ -406,9 +418,29 @@ async function togglePerim(f, p, on, latest) {
 
 // ---------------------------------------------------------------- hotspots
 
+function parseAcq(p) {
+  // acq_date "2026-08-07" + acq_time "954.0" (HHMM float, UTC) -> epoch ms
+  if (!p.acq_date) return null;
+  const [Y, M, D] = p.acq_date.split("-").map(Number);
+  let hm = parseFloat(p.acq_time);
+  if (isNaN(hm)) hm = 0;
+  return Date.UTC(Y, M - 1, D, Math.floor(hm / 100), Math.round(hm % 100));
+}
+
+function hotColor(ageH) {
+  // age relative to the playhead: <=24h solid yellow, then yellow->deep purple
+  // along the warm path (orange/red/magenta) out to 7 days; else hidden
+  if (ageH < 0 || ageH > 168) return null;
+  if (ageH <= 24) return "#ffd21f";
+  const f = (ageH - 24) / 144;
+  const h = (50 - 135 * f + 360) % 360;   // 50° (yellow) -> 275° (purple)
+  return `hsl(${h.toFixed(0)} 90% ${(55 - 22 * f).toFixed(0)}%)`;
+}
+
 async function refreshHotspots() {
   const note = document.getElementById("hotnote");
   if (state.hotLayer) { map.removeLayer(state.hotLayer); state.hotLayer = null; }
+  state.hotMarkers = [];
   const f = state.fires.find(x => x.slug === state.sel);
   if (!f || !f.centroid || !document.getElementById("chkHot").checked) {
     note.textContent = f ? "" : "select a fire";
@@ -416,27 +448,53 @@ async function refreshHotspots() {
   }
   const [lon, lat] = f.centroid;
   const d = 0.4;
-  const since = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
+  // 21d window: the playhead can sit 14d back and still needs its own 7d lookbehind
+  const since = new Date(Date.now() - 21 * 864e5).toISOString().slice(0, 10);
+  note.textContent = "loading detections…";
   try {
     // NB: this bbox is lat-first (min_lat,min_lon,max_lat,max_lon) per the API schema
-    const gj = await getJson(`${CORNEA}/hotspots?bbox=${lat - d},${lon - d},${lat + d},${lon + d}&since=${since}&limit=20000`);
-    const n = (gj.features || []).length;
-    note.textContent = `${n} detection${n === 1 ? "" : "s"} (VIIRS/MODIS, 7d)`;
-    if (n) {
-      const canvas = L.canvas({ padding: 0.2 });  // thousands of points -> canvas
-      state.hotLayer = L.geoJSON(gj, {
-        pointToLayer: (feat, ll) => L.circleMarker(ll, {
-          renderer: canvas, radius: 3, color: "#d03b3b", weight: 0.5,
-          fillColor: "#d03b3b", fillOpacity: 0.45,
-        }).bindTooltip(() => {
-          const p = feat.properties || {};
-          return `${p.source || "?"} ${p.acq_date || ""} · FRP ${p.frp ?? "?"} · conf ${p.confidence ?? "?"}`;
-        }),
-      }).addTo(map);
+    const gj = await getJson(`${CORNEA}/hotspots?bbox=${lat - d},${lon - d},${lat + d},${lon + d}&since=${since}&limit=50000`);
+    const canvas = L.canvas({ padding: 0.2 });  // thousands of points -> canvas
+    state.hotLayer = L.layerGroup().addTo(map);
+    for (const feat of gj.features || []) {
+      const t = parseAcq(feat.properties || {});
+      const c = feat.geometry && feat.geometry.coordinates;
+      if (t === null || !c) continue;
+      const p = feat.properties;
+      const m = L.circleMarker([c[1], c[0]], {
+        renderer: canvas, radius: 3, weight: 0.5, fillOpacity: 0.55, opacity: 0.9,
+      }).bindTooltip(`${p.source || "?"} ${p.acq_date || ""} ${String(p.acq_time || "").replace(".0", "")}Z · FRP ${p.frp ?? "?"} · conf ${p.confidence ?? "?"}`);
+      m._t = t;
+      m.addTo(state.hotLayer);
+      state.hotMarkers.push(m);
     }
+    renderHotspots();
   } catch (e) {
     note.textContent = "hotspots request failed: " + e.message;
   }
+}
+
+function renderHotspots() {
+  const note = document.getElementById("hotnote");
+  const backH = +document.getElementById("hotTime").value;
+  const playhead = Date.now() - backH * 3600e3;
+  document.getElementById("hotTimeLabel").textContent = backH === 0 ? "now"
+    : new Date(playhead).toISOString().slice(0, 16).replace("T", " ") + "Z";
+  let vis = 0;
+  for (const m of state.hotMarkers) {
+    const col = hotColor((playhead - m._t) / 3600e3);
+    if (col) {
+      vis++;
+      m.setStyle({ color: col, fillColor: col, opacity: 0.9, fillOpacity: 0.55 });
+      m.setRadius(3);
+    } else {
+      m.setStyle({ opacity: 0, fillOpacity: 0 });
+      m.setRadius(0);
+    }
+  }
+  note.textContent = state.hotMarkers.length
+    ? `${vis} of ${state.hotMarkers.length} detections at playhead`
+    : "no detections in the 21d window";
 }
 
 init();
