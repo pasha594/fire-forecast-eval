@@ -353,8 +353,12 @@ function redraw() {
 
 async function init() {
   let text = null;
-  // local copy first (laptop workflow), else the CI-published copy in the bucket
-  for (const [url, label] of [["data/metrics.csv", "local"], [BUCKET + "/metrics.csv", "bucket"]]) {
+  // localhost (laptop workflow): freshly-computed local file first, bucket as backup.
+  // Hosted (e.g. GitHub Pages): bucket first — the committed repo copy is stale.
+  const isLocal = ["localhost", "127.0.0.1", ""].includes(location.hostname);
+  const sources = [["data/metrics.csv", "local"], [BUCKET + "/metrics.csv", "bucket"]];
+  if (!isLocal) sources.reverse();
+  for (const [url, label] of sources) {
     try {
       const resp = await fetch(url);
       if (!resp.ok) continue;

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fire forecast evaluation</title>
+<style>
+  body { margin: 0; background: #f9f9f7; color: #0b0b0b;
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+  .card { background: #fcfcfb; border: 1px solid rgba(11,11,11,.1); border-radius: 10px;
+          padding: 28px 32px; max-width: 520px; }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p { color: #52514e; margin: 0 0 16px; font-size: 14px; }
+  a.big { display: block; padding: 12px 16px; margin: 8px 0; border-radius: 8px;
+          background: #2a78d6; color: #fff; text-decoration: none; font-weight: 600; }
+  a.big small { display: block; font-weight: 400; opacity: .85; font-size: 12.5px; }
+  a.big.alt { background: #52514e; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>ELMFIRE forecast evaluation</h1>
+  <p>Pyrecast fire-spread forecasts vs Cornea perimeters. Data collected every 3h
+  and analyzed twice daily, fully automated; pages read live from the archive.</p>
+  <a class="big" href="report.html">Skill report
+    <small>precision &amp; recall by horizon, percentile, and forecast freshness</small></a>
+  <a class="big alt" href="map.html">Forecast map
+    <small>forecast layers over perimeter history, per fire</small></a>
+</div>
+</body>
+</html>
