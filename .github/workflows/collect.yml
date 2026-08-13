@@ -1,0 +1,29 @@
+name: collect
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"   # every 6h, offset from top-of-hour congestion
+  workflow_dispatch: {}
+
+# Single writer for manifest.json in R2 — never run two collectors at once.
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet requests boto3 rasterio
+      - name: Run collector
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ vars.R2_BUCKET || 'fire-forecast-archive' }}
+        run: python collect.py

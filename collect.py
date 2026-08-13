@@ -1,0 +1,565 @@
+#!/usr/bin/env python3
+"""Archive pyrecast ELMFIRE fire-spread forecasts + Cornea perimeter snapshots.
+
+Pyrecast deletes forecast runs after ~1 day, so this must run every ~6h.
+Default mode uploads to Cloudflare R2 (GitHub Actions); --local archives to
+raw/ instead. --push uploads a local raw/ archive into R2 (do NOT run while
+the CI workflow is active — the manifest assumes a single writer).
+
+Layout mirrored into the archive:
+  forecast_archive/{slug}/{run_ts}/{pct}.tif     pct in 10,30,50,70,90
+  perimeter_archive/{slug}/index.json, {epochms}.geojson
+  manifest.json                                  collector state
+  fire_matches.json                              slug -> cornea fire match
+"""
+import argparse
+import json
+import math
+import os
+import re
+import sys
+import tempfile
+import time
+import urllib.parse
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import requests
+
+PYRECAST_BASE = "https://data.pyrecast.org/fire_spread_forecast/"
+CORNEA_BASE = "https://fire-api-prod.web.app"
+PERCENTILES = ("10", "30", "50", "70", "90")
+RUN_RE = re.compile(r"^\d{8}_\d{6}/$")
+HREF_RE = re.compile(r'href="([^"]+)"')
+TIFF_MAGIC = (b"II*\x00", b"MM\x00*")
+MATCH_NAME_DIST_KM = 50.0
+MATCH_SPATIAL_ONLY_KM = 15.0
+
+SESSION = requests.Session()
+SESSION.headers["User-Agent"] = "fire-forecast-eval/0.1 (research; contact: repo owner)"
+
+counts = {}
+
+
+def log(msg):
+    print(f"[collect] {msg}", flush=True)
+
+
+def bump(key, n=1):
+    counts[key] = counts.get(key, 0) + n
+
+
+def utcnow():
+    return datetime.now(timezone.utc)
+
+
+def iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def fetch(url, tries=2, timeout=(10, 120), sleep_s=1.0):
+    """GET with retries; returns Response or None. Retries 429 with backoff."""
+    last = None
+    for attempt in range(tries):
+        try:
+            r = SESSION.get(url, timeout=timeout)
+            if r.status_code == 429:
+                last = "HTTP 429"
+                time.sleep(max(sleep_s * (attempt + 1), 2.0))
+                continue
+            if r.status_code == 200:
+                return r
+            last = f"HTTP {r.status_code}"
+            if r.status_code == 404:
+                break  # not-yet-published; no point hammering
+        except requests.RequestException as e:
+            last = f"{type(e).__name__}: {e}"
+        time.sleep(sleep_s)
+    fetch.last_error = last
+    return None
+
+
+fetch.last_error = None
+
+
+class Archive:
+    """Local mirror at root; optionally backed by an R2 (S3-compatible) bucket.
+
+    All keys are relative POSIX paths. The manifest is the source of truth for
+    what is already archived — safe because CI serializes runs (concurrency
+    group) and --push must not run concurrently with CI.
+    """
+
+    def __init__(self, root, r2=None):
+        self.root = Path(root)
+        self.r2 = r2  # (client, bucket) or None
+
+    def local_path(self, key):
+        p = self.root / key
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+
+    def load_json(self, key):
+        if self.r2:
+            client, bucket = self.r2
+            try:
+                body = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+                return json.loads(body)
+            except client.exceptions.NoSuchKey:
+                return None
+        p = self.root / key
+        if not p.exists():
+            return None
+        return json.loads(p.read_text())
+
+    def save_json(self, key, obj):
+        data = json.dumps(obj, separators=(",", ":"))
+        p = self.local_path(key)
+        tmp = p.with_suffix(p.suffix + ".part")
+        tmp.write_text(data)
+        os.replace(tmp, p)
+        if self.r2:
+            client, bucket = self.r2
+            client.put_object(Bucket=bucket, Key=key, Body=data.encode(),
+                              ContentType="application/json")
+
+    def commit_file(self, key):
+        """Upload an already-downloaded local file when R2-backed."""
+        if self.r2:
+            client, bucket = self.r2
+            client.upload_file(str(self.root / key), bucket, key)
+
+
+def make_r2():
+    import boto3  # only needed in R2 mode; local mode stays boto3-free
+    missing = [k for k in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID",
+                           "R2_SECRET_ACCESS_KEY", "R2_BUCKET") if not os.environ.get(k)]
+    if missing:
+        log(f"FATAL missing env: {', '.join(missing)}")
+        sys.exit(1)
+    client = boto3.client(
+        "s3",
+        endpoint_url=f"https://{os.environ['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
+        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        region_name="auto",
+    )
+    return client, os.environ["R2_BUCKET"]
+
+
+# ---------------------------------------------------------------- scraping
+
+def list_hrefs(url):
+    r = fetch(url)
+    if r is None:
+        return None
+    return HREF_RE.findall(r.text)
+
+
+def scrape_runs(only=None):
+    """Return {slug: [run_ts, ...]} from the pyrecast autoindex."""
+    hrefs = list_hrefs(PYRECAST_BASE)
+    if hrefs is None:
+        log(f"FATAL root listing failed: {fetch.last_error}")
+        sys.exit(1)
+    slugs = sorted(h.rstrip("/") for h in hrefs
+                   if h.endswith("/") and not h.startswith((".", "/", "?")))
+    if not slugs:
+        # tripwire: autoindex format drift must fail loudly, not archive nothing
+        log("FATAL root listing parsed to zero fire directories — format change?")
+        sys.exit(1)
+    if only:
+        slugs = [s for s in slugs if s in only]
+    out = {}
+    for slug in slugs:
+        hrefs = list_hrefs(f"{PYRECAST_BASE}{slug}/")
+        if hrefs is None:
+            log(f"{slug}: listing failed ({fetch.last_error}) — SKIPPING")
+            bump("slug_list_errors")
+            continue
+        out[slug] = sorted(h.rstrip("/") for h in hrefs if RUN_RE.match(h))
+        time.sleep(0.05)
+    return out
+
+
+def tif_centroid_lonlat(path):
+    """(lon, lat) of the raster bounds center; None if rasterio unavailable."""
+    try:
+        import rasterio
+        from rasterio.warp import transform as warp_transform
+    except ImportError:
+        return None
+    try:
+        with rasterio.open(path) as ds:
+            cx = (ds.bounds.left + ds.bounds.right) / 2
+            cy = (ds.bounds.bottom + ds.bounds.top) / 2
+            xs, ys = warp_transform(ds.crs, "EPSG:4326", [cx], [cy])
+            return (xs[0], ys[0])
+    except Exception as e:
+        log(f"centroid failed for {path}: {e}")
+        return None
+
+
+def download_run(archive, manifest, slug, run_ts):
+    """Fetch missing percentile tifs for one run. Returns True if entry changed."""
+    run_key = f"{slug}/{run_ts}"
+    entry = manifest["runs"].setdefault(run_key, {
+        "slug": slug, "run_ts": run_ts, "first_seen": iso(utcnow()),
+        "complete": False, "expired": False, "files": {}, "errors": {},
+    })
+    if entry["complete"]:
+        return False
+    changed = False
+    for pct in PERCENTILES:
+        if entry["files"].get(pct, {}).get("ok"):
+            continue
+        url = f"{PYRECAST_BASE}{slug}/{run_ts}/elmfire/landfire/{pct}/time-of-arrival.tif"
+        key = f"forecast_archive/{slug}/{run_ts}/{pct}.tif"
+        dest = archive.local_path(key)
+        part = dest.with_suffix(".tif.part")
+        r = fetch(url)
+        if r is None:
+            entry["errors"][pct] = f"{fetch.last_error} at {iso(utcnow())}"
+            bump("tif_errors")
+            changed = True
+            continue
+        part.write_bytes(r.content)
+        clen = r.headers.get("Content-Length")
+        if not r.content[:4] in TIFF_MAGIC or (clen and int(clen) != len(r.content)):
+            part.unlink(missing_ok=True)
+            entry["errors"][pct] = f"bad content ({len(r.content)}b) at {iso(utcnow())}"
+            bump("tif_errors")
+            changed = True
+            continue
+        os.replace(part, dest)
+        archive.commit_file(key)
+        entry["files"][pct] = {"bytes": len(r.content),
+                               "etag": r.headers.get("ETag", ""), "ok": True}
+        entry["errors"].pop(pct, None)
+        bump("tif_downloaded")
+        changed = True
+        if "centroid" not in entry:
+            ll = tif_centroid_lonlat(dest)
+            if ll:
+                entry["centroid"] = [round(ll[0], 5), round(ll[1], 5)]
+        time.sleep(0.1)
+    entry["complete"] = all(entry["files"].get(p, {}).get("ok") for p in PERCENTILES)
+    if entry["complete"]:
+        bump("runs_completed")
+    elif not entry["files"]:
+        # zero successes: check the layout assumption before writing it off
+        hrefs = list_hrefs(f"{PYRECAST_BASE}{slug}/{run_ts}/elmfire/") or []
+        dirs = [h for h in hrefs if h.endswith("/") and h != "../"]
+        if dirs and "landfire/" not in dirs:
+            log(f"WARNING {run_key}: unexpected layout under elmfire/: {dirs}")
+    return changed
+
+
+def mark_expired(manifest, listed):
+    listed_keys = {f"{s}/{r}" for s, runs in listed.items() for r in runs}
+    for run_key, entry in manifest["runs"].items():
+        if run_key not in listed_keys and not entry["complete"] and not entry["expired"]:
+            entry["expired"] = True
+            missing = [p for p in PERCENTILES if not entry["files"].get(p, {}).get("ok")]
+            log(f"{run_key}: expired incomplete (missing pct {','.join(missing)})")
+            bump("runs_expired")
+
+
+# ---------------------------------------------------------------- matching
+
+def norm_name(s):
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(a))
+
+
+def parse_coords(s):
+    try:
+        lat, lon = (float(x) for x in s.split(","))
+        return lat, lon
+    except (AttributeError, ValueError):
+        return None
+
+
+def cornea_search(name):
+    q = urllib.parse.urlencode({"search": name, "fire_type": "wildfire",
+                                "active": "all", "limit": 250})
+    r = fetch(f"{CORNEA_BASE}/fires?{q}", tries=3)
+    if r is None:
+        return None
+    try:
+        return r.json().get("fires", [])
+    except ValueError:
+        return None
+
+
+def attempt_match(slug, centroid_lonlat):
+    """Return (match_dict, None) or (None, unmatched_reason_dict)."""
+    state, _, name = slug.partition("-")
+    if not name:
+        return None, {"reason": "unparseable slug"}
+    query = name.replace("-", " ")
+    tokens = name.split("-")
+    # multi-word slugs may concatenate names (complexes) or add qualifiers, so
+    # fall back to sub-token queries when the full name finds nothing in-state
+    queries = [query]
+    if len(tokens) > 1:
+        queries += [" ".join(tokens[i:]) for i in range(1, len(tokens))]
+        queries += [t for t in tokens if len(t) > 3]
+    cands, seen = [], set()
+    for q in queries:
+        fires = cornea_search(q)
+        if fires is None:
+            if not cands:
+                return None, {"reason": f"search failed: {fetch.last_error}"}
+            continue
+        for f in fires:
+            if ((f.get("state") or "").upper() == state.upper()
+                    and f.get("cornea_id") not in seen):
+                seen.add(f["cornea_id"])
+                cands.append(f)
+        if cands and q == query:
+            break  # full-name hits are enough; no need for fallback queries
+        time.sleep(0.1)
+    if not cands:
+        return None, {"reason": "no candidates in state"}
+    want = norm_name(query)
+    scored = []
+    for f in cands:
+        title = norm_name(f.get("post_title"))
+        name_ok = bool(title) and (title == want or want in title or title in want)
+        dist = None
+        coords = parse_coords(f.get("fire_coordinates"))
+        if coords and centroid_lonlat:
+            dist = haversine_km(coords[0], coords[1], centroid_lonlat[1], centroid_lonlat[0])
+        scored.append((f, name_ok, dist))
+    passing = [s for s in scored
+               if s[1] and (s[2] is None or s[2] <= MATCH_NAME_DIST_KM)]
+    # slug that concatenates >=2 distinct passing incident names is likely a
+    # multi-fire complex — one fire's perimeter is the wrong ground truth
+    titles = {norm_name(f.get("post_title")) for f, _, _ in passing}
+    proper_subs = [t for t in titles if t and t != want and t in want]
+    if len(proper_subs) >= 2:
+        return None, {"reason": f"probable multi-fire complex: {sorted(proper_subs)}; "
+                                "set overrides.json to force or skip"}
+    if passing:
+        if len(passing) > 1:
+            passing.sort(key=lambda s: s[2] if s[2] is not None else 1e9)
+            log(f"{slug}: {len(passing)} name matches, taking nearest")
+        f, _, dist = passing[0]
+        return {"cornea_id": f["cornea_id"], "post_title": f.get("post_title"),
+                "method": "name+spatial" if dist is not None else "name_only",
+                "dist_km": round(dist, 1) if dist is not None else None,
+                "matched_at": iso(utcnow())}, None
+    spatial = [s for s in scored if s[2] is not None and s[2] <= MATCH_SPATIAL_ONLY_KM]
+    if spatial:
+        spatial.sort(key=lambda s: s[2])
+        f, _, dist = spatial[0]
+        log(f"{slug}: WARNING spatial-only match -> {f.get('post_title')} ({dist:.1f}km)")
+        return {"cornea_id": f["cornea_id"], "post_title": f.get("post_title"),
+                "method": "spatial_only", "dist_km": round(dist, 1),
+                "matched_at": iso(utcnow())}, None
+    return None, {"reason": "no name or spatial pass",
+                  "candidates": [{"post_title": f.get("post_title"),
+                                  "dist_km": round(d, 1) if d is not None else None}
+                                 for f, _, d in scored[:5]]}
+
+
+def run_matching(archive, manifest, slugs, overrides):
+    matches = archive.load_json("fire_matches.json") or {"matches": {}, "unmatched": {}}
+    for slug in slugs:
+        if slug in overrides:
+            forced = overrides[slug]
+            if forced is None:
+                matches["matches"].pop(slug, None)
+                matches["unmatched"][slug] = {"reason": "override: skip"}
+            elif matches["matches"].get(slug, {}).get("cornea_id") != forced:
+                matches["matches"][slug] = {"cornea_id": forced, "method": "override",
+                                            "matched_at": iso(utcnow())}
+                matches["unmatched"].pop(slug, None)
+            continue
+        if slug in matches["matches"]:
+            continue  # sticky
+        centroid = None
+        for run_key, entry in manifest["runs"].items():
+            if entry["slug"] == slug and entry.get("centroid"):
+                centroid = entry["centroid"]
+                break
+        m, why = attempt_match(slug, centroid)
+        if m:
+            matches["matches"][slug] = m
+            matches["unmatched"].pop(slug, None)
+            log(f"{slug}: matched -> {m.get('post_title')} ({m['method']})")
+            bump("fires_matched")
+        else:
+            why["last_tried"] = iso(utcnow())
+            matches["unmatched"][slug] = why
+            bump("fires_unmatched")
+        time.sleep(0.1)
+    matches["generated"] = iso(utcnow())
+    archive.save_json("fire_matches.json", matches)
+    return matches
+
+
+# ---------------------------------------------------------------- perimeters
+
+def snapshot_perimeters(archive, manifest, matches, slugs):
+    archived = manifest.setdefault("perimeters", {})
+    for slug in slugs:
+        m = matches["matches"].get(slug)
+        if not m:
+            continue
+        cid = urllib.parse.quote(m["cornea_id"], safe="")
+        r = fetch(f"{CORNEA_BASE}/fires/{cid}/perimeters", tries=3)
+        if r is None:
+            log(f"{slug}: perimeter index failed ({fetch.last_error}) — SKIPPING")
+            bump("perim_index_errors")
+            continue
+        try:
+            idx = r.json()
+        except ValueError:
+            log(f"{slug}: perimeter index not JSON — SKIPPING")
+            bump("perim_index_errors")
+            continue
+        if not isinstance(idx, list):
+            idx = []
+        archive.save_json(f"perimeter_archive/{slug}/index.json",
+                          {"generated": iso(utcnow()), "cornea_id": m["cornea_id"],
+                           "index": idx})
+        have = set(archived.get(slug, []))
+        for item in idx:
+            path, date = item.get("path"), item.get("date")
+            if not path:
+                continue
+            epochms = path.rsplit("/", 1)[-1]
+            if epochms in have:
+                continue
+            rp = fetch(CORNEA_BASE + path, tries=3)
+            if rp is None:
+                bump("perim_errors")
+                continue
+            try:
+                gj = rp.json()
+            except ValueError:
+                bump("perim_errors")
+                continue
+            key = f"perimeter_archive/{slug}/{epochms}.geojson"
+            archive.save_json(key, gj)
+            have.add(epochms)
+            bump("perims_downloaded")
+            time.sleep(0.1)
+        archived[slug] = sorted(have)
+
+
+# ---------------------------------------------------------------- push mode
+
+def push_local_to_r2(local_root):
+    """Upload a --local archive into R2 and merge manifests. Single writer only:
+    do not run while the CI workflow is active."""
+    r2 = make_r2()
+    local = Archive(local_root)
+    remote = Archive(local_root, r2=r2)  # same paths; uploads read local files
+    lman = local.load_json("manifest.json")
+    if not lman:
+        log("FATAL no local manifest to push")
+        sys.exit(1)
+    rman = remote.load_json("manifest.json") or {"runs": {}, "perimeters": {}}
+    for run_key, lentry in lman["runs"].items():
+        rentry = rman["runs"].setdefault(run_key, dict(lentry, files={}, errors={}))
+        for pct, info in lentry["files"].items():
+            if info.get("ok") and not rentry["files"].get(pct, {}).get("ok"):
+                key = f"forecast_archive/{run_key}/{pct}.tif"
+                remote.commit_file(key)
+                rentry["files"][pct] = info
+                bump("pushed_tifs")
+        rentry["complete"] = all(rentry["files"].get(p, {}).get("ok") for p in PERCENTILES)
+        if lentry.get("centroid") and not rentry.get("centroid"):
+            rentry["centroid"] = lentry["centroid"]
+    for slug, epochs in (lman.get("perimeters") or {}).items():
+        have = set(rman["perimeters"].get(slug, []))
+        for ems in epochs:
+            if ems not in have:
+                remote.commit_file(f"perimeter_archive/{slug}/{ems}.geojson")
+                have.add(ems)
+                bump("pushed_perims")
+        rman["perimeters"][slug] = sorted(have)
+        idx = local.load_json(f"perimeter_archive/{slug}/index.json")
+        if idx:
+            remote.save_json(f"perimeter_archive/{slug}/index.json", idx)
+    lmatch = local.load_json("fire_matches.json")
+    rmatch = remote.load_json("fire_matches.json")
+    if lmatch and not rmatch:
+        remote.save_json("fire_matches.json", lmatch)
+    elif lmatch and rmatch:
+        for slug, m in lmatch["matches"].items():
+            rmatch["matches"].setdefault(slug, m)
+        remote.save_json("fire_matches.json", rmatch)
+    rman["generated"] = iso(utcnow())
+    remote.save_json("manifest.json", rman)
+    log(f"push done: {counts}")
+
+
+# ---------------------------------------------------------------- main
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--local", action="store_true",
+                    help="archive into ./raw instead of R2")
+    ap.add_argument("--push", action="store_true",
+                    help="upload an existing --local archive into R2, then exit")
+    ap.add_argument("--only", action="append",
+                    help="restrict to slug (repeatable, for debugging)")
+    ap.add_argument("--skip-perimeters", action="store_true")
+    args = ap.parse_args()
+
+    repo = Path(__file__).resolve().parent
+    if args.push:
+        push_local_to_r2(repo / "raw")
+        return
+
+    if args.local:
+        archive = Archive(repo / "raw")
+    else:
+        archive = Archive(Path(tempfile.mkdtemp(prefix="fce-")), r2=make_r2())
+
+    started = time.time()
+    manifest = archive.load_json("manifest.json") or {"runs": {}, "perimeters": {}}
+    listed = scrape_runs(only=set(args.only) if args.only else None)
+    bump("slugs_listed", len(listed))
+    bump("runs_listed", sum(len(v) for v in listed.values()))
+
+    for slug, runs in sorted(listed.items()):
+        changed = False
+        for run_ts in runs:
+            changed = download_run(archive, manifest, slug, run_ts) or changed
+        if changed:
+            manifest["generated"] = iso(utcnow())
+            archive.save_json("manifest.json", manifest)  # checkpoint per slug
+
+    if not args.only:
+        mark_expired(manifest, listed)
+
+    try:
+        overrides = json.loads((repo / "overrides.json").read_text()).get("overrides", {})
+    except (OSError, ValueError):
+        overrides = {}
+    matches = run_matching(archive, manifest, sorted(listed), overrides)
+
+    if not args.skip_perimeters:
+        snapshot_perimeters(archive, manifest, matches, sorted(listed))
+
+    manifest["generated"] = iso(utcnow())
+    archive.save_json("manifest.json", manifest)
+    n_matched = sum(1 for s in listed if s in matches["matches"])
+    log(f"done in {time.time() - started:.0f}s: {len(listed)} fires "
+        f"({n_matched} matched), {counts}")
+
+
+if __name__ == "__main__":
+    main()

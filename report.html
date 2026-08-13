@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ELMFIRE forecast skill vs actual perimeters</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb;
+    --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+    /* ordinal blue ramp, steps 250/350/450/550/650 (percentiles 10..90) */
+    --p10: #86b6ef; --p30: #5598e7; --p50: #2a78d6; --p70: #1c5cab; --p90: #104281;
+    --s1: #2a78d6; --s2: #eb6834;   /* categorical slots 1-2 */
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 60px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--ink-2); margin: 0 0 18px; }
+  .filters {
+    display: flex; flex-wrap: wrap; gap: 16px; align-items: end;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 16px; margin-bottom: 18px;
+  }
+  .filters label { display: block; color: var(--ink-2); font-size: 12px; margin-bottom: 3px; }
+  .filters input[type=number], .filters select {
+    font: inherit; padding: 4px 6px; border: 1px solid var(--axis);
+    border-radius: 6px; background: var(--surface); color: var(--ink); width: 90px;
+  }
+  .filters .chk { display: flex; gap: 6px; align-items: center; padding-bottom: 6px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .tile .v { font-size: 22px; font-weight: 600; }
+  .tile .k { color: var(--ink-2); font-size: 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 14px 6px; margin-bottom: 18px; }
+  .card h2 { font-size: 15px; margin: 0 0 2px; }
+  .card .note { color: var(--ink-2); font-size: 12.5px; margin: 0 0 8px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 900px) { .row2 { grid-template-columns: 1fr; } }
+  .plot { width: 100%; height: 340px; }
+  .empty { color: var(--muted); padding: 40px 0 46px; text-align: center; }
+  table.delta { border-collapse: collapse; margin: 6px 0 12px; }
+  table.delta th, table.delta td {
+    border-bottom: 1px solid var(--grid); padding: 5px 12px 5px 0;
+    text-align: right; font-variant-numeric: tabular-nums;
+  }
+  table.delta th { color: var(--ink-2); font-weight: 500; font-size: 12px; }
+  table.delta td:first-child, table.delta th:first-child { text-align: left; }
+  details.tableview { margin-top: 6px; }
+  details.tableview summary { cursor: pointer; color: var(--ink-2); }
+  .scrollx { overflow-x: auto; }
+  table.rows { border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+  table.rows th, table.rows td {
+    border-bottom: 1px solid var(--grid); padding: 3px 10px 3px 0;
+    text-align: right; font-variant-numeric: tabular-nums;
+  }
+  table.rows td:nth-child(-n+3), table.rows th:nth-child(-n+3) { text-align: left; }
+  #loaderr { background: #fff4ec; border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ELMFIRE forecast skill vs actual perimeters</h1>
+  <p class="sub">Growth-only precision &amp; recall of pyrecast fire-spread forecasts against Cornea
+  perimeter snapshots. One row per (fire, forecast run, weather percentile, horizon) with ground
+  truth within &plusmn;12h. Predicted area = time-of-arrival &le; horizon; both sides subtract the
+  perimeter at forecast issuance.</p>
+
+  <div id="loaderr" hidden></div>
+
+  <div class="filters" id="filters" hidden>
+    <div><label for="fMinGrowth">min actual growth (acres)</label>
+      <input type="number" id="fMinGrowth" value="10" min="0" step="10"></div>
+    <div><label for="fMaxOff">max |perimeter offset| (h)</label>
+      <input type="number" id="fMaxOff" value="6" min="0" step="1"></div>
+    <div class="chk"><input type="checkbox" id="fOffgrid" checked>
+      <label for="fOffgrid" style="margin:0">exclude &gt;10% off-grid growth</label></div>
+    <div><label for="fH">horizon for percentile view (h)</label>
+      <select id="fH"></select></div>
+    <div><label for="fMetric">update-view metric</label>
+      <select id="fMetric"><option value="precision">precision</option>
+      <option value="recall">recall</option></select></div>
+  </div>
+
+  <div class="tiles" id="tiles" hidden></div>
+
+  <div class="card">
+    <h2>Skill vs forecast horizon</h2>
+    <p class="note">Per weather percentile (darker blue = higher percentile). Pooled = area-weighted
+    (&Sigma;intersection / &Sigma;area); median = median of per-row values. Toggle:
+    <select id="fAgg"><option value="pooled">pooled</option><option value="median">median</option></select></p>
+    <div class="row2"><div id="plotPH" class="plot"></div><div id="plotRH" class="plot"></div></div>
+    <div class="empty" id="emptyH" hidden></div>
+  </div>
+
+  <div class="card">
+    <h2>Skill vs weather percentile</h2>
+    <p class="note">At the horizon selected above. Higher percentiles predict more spread:
+    precision should fall, recall should rise.</p>
+    <div id="plotPct" class="plot" style="height:320px"></div>
+    <div class="empty" id="emptyPct" hidden></div>
+  </div>
+
+  <div class="card">
+    <h2>Do fresher forecasts do better?</h2>
+    <p class="note">Rows scored against the <em>same</em> (fire, valid date, percentile) grouped;
+    within a group the horizon is the forecast's lead time, so a down-slope left-to-right means
+    fresher forecasts beat staler ones. Thin lines connect the same group; the heavy line is the
+    median across groups.</p>
+    <div id="plotUpd" class="plot"></div>
+    <div class="empty" id="emptyUpd" hidden></div>
+    <div id="deltaTbl"></div>
+  </div>
+
+  <div class="card">
+    <h2>Filtered rows</h2>
+    <details class="tableview"><summary>table view</summary>
+      <div class="scrollx"><div id="rowsTbl"></div></div>
+    </details>
+  </div>
+</div>
+
+<script>
+"use strict";
+const PCTS = ["10", "30", "50", "70", "90"];
+const PCT_COLOR = { 10: "#86b6ef", 30: "#5598e7", 50: "#2a78d6", 70: "#1c5cab", 90: "#104281" };
+const HORIZONS = [12, 24, 48, 72, 96, 120, 168, 240, 336];
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+const LAYOUT = {
+  paper_bgcolor: css("--surface"), plot_bgcolor: css("--surface"),
+  font: { family: 'system-ui, -apple-system, "Segoe UI", sans-serif', size: 12, color: css("--ink") },
+  margin: { l: 48, r: 12, t: 30, b: 42 },
+  xaxis: { gridcolor: css("--grid"), linecolor: css("--axis"), zeroline: false,
+           title: { font: { color: css("--ink-2") } }, tickfont: { color: css("--muted") } },
+  yaxis: { gridcolor: css("--grid"), linecolor: css("--axis"), zeroline: false, range: [0, 1.02],
+           title: { font: { color: css("--ink-2") } }, tickfont: { color: css("--muted") } },
+  legend: { orientation: "h", y: 1.14, font: { color: css("--ink-2") } },
+  hovermode: "closest",
+};
+const CONFIG = { displayModeBar: false, responsive: true };
+const logx = { type: "log", tickvals: HORIZONS, ticktext: HORIZONS.map(String) };
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  const head = lines[0].split(",");
+  const numeric = new Set(["horizon_h", "baseline_offset_h", "actual_offset_h", "pixel_m",
+    "baseline_acres", "pred_total_acres", "pred_new_acres", "act_new_acres", "inter_acres",
+    "precision", "recall", "iou", "act_outside_acres", "act_offgrid_frac"]);
+  return lines.slice(1).map(line => {
+    const cells = line.split(",");
+    const r = {};
+    head.forEach((h, i) => {
+      r[h] = numeric.has(h) ? (cells[i] === "" || cells[i] === undefined ? null : +cells[i]) : cells[i];
+    });
+    return r;
+  });
+}
+
+function median(xs) {
+  const a = xs.filter(x => x !== null && !Number.isNaN(x)).sort((x, y) => x - y);
+  if (!a.length) return null;
+  const m = a.length >> 1;
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+
+let DATA = [];
+
+function filtered() {
+  const minG = +document.getElementById("fMinGrowth").value || 0;
+  const maxOff = +document.getElementById("fMaxOff").value || 0;
+  const exOff = document.getElementById("fOffgrid").checked;
+  return DATA.filter(r =>
+    r.act_new_acres !== null && r.act_new_acres >= minG &&
+    Math.abs(r.actual_offset_h) <= maxOff &&
+    (!exOff || r.act_offgrid_frac <= 0.10));
+}
+
+function aggregate(rows, agg) {
+  // -> {pct: {H: {precision, recall, n}}}
+  const out = {};
+  for (const pct of PCTS) {
+    out[pct] = {};
+    for (const H of HORIZONS) {
+      const g = rows.filter(r => r.percentile === pct && r.horizon_h === H);
+      if (!g.length) continue;
+      let p, rc;
+      if (agg === "pooled") {
+        const si = g.reduce((s, r) => s + r.inter_acres, 0);
+        const sp = g.reduce((s, r) => s + r.pred_new_acres, 0);
+        const sa = g.reduce((s, r) => s + r.act_new_acres, 0);
+        p = sp > 0 ? si / sp : null; rc = sa > 0 ? si / sa : null;
+      } else {
+        p = median(g.map(r => r.precision)); rc = median(g.map(r => r.recall));
+      }
+      out[pct][H] = { precision: p, recall: rc, n: g.length };
+    }
+  }
+  return out;
+}
+
+function drawHorizon(rows) {
+  const agg = document.getElementById("fAgg").value;
+  const a = aggregate(rows, agg);
+  const any = PCTS.some(p => Object.keys(a[p]).length);
+  document.getElementById("emptyH").hidden = any;
+  if (!any) {
+    document.getElementById("emptyH").textContent =
+      "No rows pass the filters yet — scoring rows accumulate as perimeter snapshots land over the next days.";
+    Plotly.purge("plotPH"); Plotly.purge("plotRH");
+    document.getElementById("plotPH").innerHTML = ""; document.getElementById("plotRH").innerHTML = "";
+    return;
+  }
+  for (const [div, metric, name] of [["plotPH", "precision", "Precision"], ["plotRH", "recall", "Recall"]]) {
+    const traces = PCTS.map(pct => {
+      const hs = HORIZONS.filter(H => a[pct][H] && a[pct][H][metric] !== null);
+      return {
+        x: hs, y: hs.map(H => a[pct][H][metric]),
+        customdata: hs.map(H => a[pct][H].n),
+        name: pct + "th", mode: "lines+markers",
+        line: { color: PCT_COLOR[pct], width: 2 }, marker: { size: 8 },
+        hovertemplate: pct + "th pct · %{x}h: %{y:.2f} (n=%{customdata})<extra></extra>",
+      };
+    }).filter(t => t.x.length);
+    Plotly.react(div, traces, Object.assign({}, LAYOUT, {
+      xaxis: Object.assign({}, LAYOUT.xaxis, logx, { title: { text: "forecast horizon (h)" } }),
+      yaxis: Object.assign({}, LAYOUT.yaxis, { title: { text: name.toLowerCase() + " (" + agg + ")" } }),
+    }), CONFIG);
+  }
+}
+
+function drawPct(rows) {
+  const H = +document.getElementById("fH").value;
+  const g = rows.filter(r => r.horizon_h === H);
+  document.getElementById("emptyPct").hidden = !!g.length;
+  if (!g.length) {
+    document.getElementById("emptyPct").textContent = "No rows at this horizon yet.";
+    Plotly.purge("plotPct"); document.getElementById("plotPct").innerHTML = "";
+    return;
+  }
+  const a = aggregate(g, document.getElementById("fAgg").value);
+  const mk = (metric, colorVar, name) => ({
+    x: PCTS, y: PCTS.map(p => a[p][H] ? a[p][H][metric] : null),
+    name, mode: "lines+markers",
+    line: { color: css(colorVar), width: 2 }, marker: { size: 9 },
+    hovertemplate: name + " @ %{x}th pct: %{y:.2f}<extra></extra>",
+  });
+  Plotly.react("plotPct", [mk("precision", "--s1", "precision"), mk("recall", "--s2", "recall")],
+    Object.assign({}, LAYOUT, {
+      xaxis: Object.assign({}, LAYOUT.xaxis, { title: { text: "weather percentile" }, type: "category" }),
+    }), CONFIG);
+}
+
+function updateGroups(rows) {
+  // (slug | valid-date | percentile) -> [{lead, value, run_ts}]
+  const metric = document.getElementById("fMetric").value;
+  const by = new Map();
+  for (const r of rows) {
+    if (r[metric] === null) continue;
+    const key = r.slug + "|" + r.valid_dt_utc.slice(0, 10) + "|" + r.percentile;
+    if (!by.has(key)) by.set(key, []);
+    by.get(key).push({ lead: r.horizon_h, v: r[metric], run: r.run_ts });
+  }
+  return [...by.entries()].map(([k, v]) => ({ key: k, pts: v.sort((x, y) => x.lead - y.lead) }))
+    .filter(g => g.pts.length >= 2);
+}
+
+function drawUpdate(rows) {
+  const metric = document.getElementById("fMetric").value;
+  const groups = updateGroups(rows);
+  document.getElementById("emptyUpd").hidden = !!groups.length;
+  if (!groups.length) {
+    document.getElementById("emptyUpd").textContent =
+      "Needs the same valid date covered by runs at different lead times — appears after ~2 days of collection.";
+    Plotly.purge("plotUpd"); document.getElementById("plotUpd").innerHTML = "";
+    document.getElementById("deltaTbl").innerHTML = "";
+    return;
+  }
+  const traces = groups.map(g => ({
+    x: g.pts.map(p => p.lead), y: g.pts.map(p => p.v),
+    mode: "lines+markers", showlegend: false, hoverinfo: "skip",
+    line: { color: css("--axis"), width: 1 }, marker: { size: 5, color: css("--muted") },
+    opacity: 0.45,
+  }));
+  const leads = [...new Set(groups.flatMap(g => g.pts.map(p => p.lead)))].sort((a, b) => a - b);
+  traces.push({
+    x: leads, y: leads.map(L => median(groups.flatMap(g => g.pts.filter(p => p.lead === L).map(p => p.v)))),
+    name: "median across groups", mode: "lines+markers",
+    line: { color: css("--s1"), width: 3 }, marker: { size: 9 },
+    hovertemplate: "lead %{x}h: median " + metric + " %{y:.2f}<extra></extra>",
+  });
+  Plotly.react("plotUpd", traces, Object.assign({}, LAYOUT, {
+    xaxis: Object.assign({}, LAYOUT.xaxis, logx, { title: { text: "lead time (h) — right = staler forecast" } }),
+    yaxis: Object.assign({}, LAYOUT.yaxis, { title: { text: metric } }),
+  }), CONFIG);
+
+  // adjacent-lead deltas within groups (fresh minus stale)
+  const pairs = [[24, 48], [48, 72], [72, 96], [96, 120], [120, 168]];
+  const rowsHtml = pairs.map(([a, b]) => {
+    const ds = groups.map(g => {
+      const pa = g.pts.find(p => p.lead === a), pb = g.pts.find(p => p.lead === b);
+      return pa && pb ? pa.v - pb.v : null;
+    }).filter(d => d !== null);
+    if (!ds.length) return "";
+    const m = median(ds);
+    return `<tr><td>${a}h vs ${b}h lead</td><td>${ds.length}</td><td>${m >= 0 ? "+" : ""}${m.toFixed(3)}</td></tr>`;
+  }).join("");
+  document.getElementById("deltaTbl").innerHTML = rowsHtml
+    ? `<table class="delta"><thead><tr><th>comparison</th><th>groups</th>
+       <th>median &Delta;${metric} (fresh &minus; stale)</th></tr></thead><tbody>${rowsHtml}</tbody></table>`
+    : "";
+}
+
+function drawTiles(rows) {
+  const t = document.getElementById("tiles");
+  t.hidden = false;
+  const fires = new Set(rows.map(r => r.slug)).size;
+  const runs = new Set(rows.map(r => r.slug + r.run_ts)).size;
+  const dates = rows.map(r => r.run_dt_utc).sort();
+  t.innerHTML = [
+    [rows.length, "scored rows (filtered)"],
+    [fires, "fires"],
+    [runs, "forecast runs"],
+    [dates.length ? dates[0].slice(0, 10) + " → " + dates[dates.length - 1].slice(0, 10) : "—", "run dates"],
+  ].map(([v, k]) => `<div class="tile"><div class="v">${v}</div><div class="k">${k}</div></div>`).join("");
+}
+
+function drawTable(rows) {
+  const cols = ["slug", "run_ts", "percentile", "horizon_h", "actual_offset_h", "baseline_acres",
+    "pred_new_acres", "act_new_acres", "inter_acres", "precision", "recall", "iou"];
+  const top = rows.slice(0, 500);
+  document.getElementById("rowsTbl").innerHTML =
+    `<table class="rows"><thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody>` +
+    top.map(r => `<tr>${cols.map(c => `<td>${r[c] === null ? "" : r[c]}</td>`).join("")}</tr>`).join("") +
+    `</tbody></table>` + (rows.length > 500 ? `<p class="note">showing 500 of ${rows.length} rows</p>` : "");
+}
+
+function redraw() {
+  const rows = filtered();
+  drawTiles(rows);
+  drawHorizon(rows);
+  drawPct(rows);
+  drawUpdate(rows);
+  drawTable(rows);
+}
+
+async function init() {
+  let text;
+  try {
+    const resp = await fetch("data/metrics.csv");
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    text = await resp.text();
+  } catch (e) {
+    const el = document.getElementById("loaderr");
+    el.hidden = false;
+    el.innerHTML = `Couldn't load <code>data/metrics.csv</code> (${e.message}). Serve this directory ` +
+      `(e.g. <code>python3 -m http.server 8090</code>) and open <code>http://localhost:8090/report.html</code>, ` +
+      `or pick the file: <input type="file" id="fpick" accept=".csv">`;
+    document.getElementById("fpick").addEventListener("change", async ev => {
+      DATA = parseCSV(await ev.target.files[0].text());
+      el.hidden = true; start();
+    });
+    return;
+  }
+  DATA = parseCSV(text);
+  start();
+}
+
+function start() {
+  document.getElementById("filters").hidden = false;
+  const sel = document.getElementById("fH");
+  sel.innerHTML = HORIZONS.map(h => `<option value="${h}"${h === 24 ? " selected" : ""}>${h}</option>`).join("");
+  for (const id of ["fMinGrowth", "fMaxOff", "fOffgrid", "fH", "fMetric", "fAgg"])
+    document.getElementById(id).addEventListener("change", redraw);
+  redraw();
+}
+
+init();
+</script>
+</body>
+</html>

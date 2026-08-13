@@ -1,0 +1,4 @@
+{
+  "_doc": "Manual slug -> cornea_id match overrides. A string value forces the match; null deliberately skips the slug. Wins over automatic matching unconditionally.",
+  "overrides": {}
+}
