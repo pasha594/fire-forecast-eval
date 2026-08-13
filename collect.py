@@ -478,6 +478,8 @@ def push_local_to_r2(local_root):
                 remote.commit_file(key)
                 rentry["files"][pct] = info
                 bump("pushed_tifs")
+                if counts["pushed_tifs"] % 25 == 0:
+                    log(f"pushed {counts['pushed_tifs']} tifs...")
         rentry["complete"] = all(rentry["files"].get(p, {}).get("ok") for p in PERCENTILES)
         if lentry.get("centroid") and not rentry.get("centroid"):
             rentry["centroid"] = lentry["centroid"]
