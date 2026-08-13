@@ -6,15 +6,15 @@ forecast window), plus how skill improves as forecasts refresh.
 
 Pyrecast deletes forecast runs after ~1 day (verified: both
 `data.pyrecast.org/fire_spread_forecast/` and their geoserver retain only the
-latest ~2 runs per fire), so a GitHub Actions cron archives them every 6h into
-Cloudflare R2. Ground truth is Cornea's fire API (`fire-api-prod.web.app`),
+latest ~2 runs per fire), so a GitHub Actions cron archives them every 2h into
+Backblaze B2. Ground truth is Cornea's fire API (`fire-api-prod.web.app`),
 which retains dated perimeter snapshots per fire (~2–3/day for active fires).
 
 ## Pieces
 
 | file | what |
 |---|---|
-| `collect.py` | scraper/archiver + fire matcher. CI runs it against R2; `--local` archives to `raw/` |
+| `collect.py` | scraper/archiver + fire matcher. CI runs it against the bucket; `--local` archives to `raw/` |
 | `.github/workflows/collect.yml` | cron `17 */2 * * *` + manual dispatch; concurrency group = single writer |
 | `.github/workflows/analyze.yml` | cron 2x daily: syncs ToA+perimeters on the runner, recomputes and publishes `metrics.csv` to the bucket — no laptop needed; `report.html` falls back to the bucket copy |
 | `analyze.py` | local: syncs the archive, computes growth-only P/R → `data/metrics.csv` |
@@ -22,7 +22,7 @@ which retains dated perimeter snapshots per fire (~2–3/day for active fires).
 | `map.html` | interactive map: pyrecast forecast layers (live WMS, all variables/percentiles) over Cornea perimeter history + hotspots |
 | `overrides.json` | manual slug→cornea_id match overrides (string forces, null skips) |
 
-Archive layout (R2 bucket or local `raw/`):
+Archive layout (bucket or local `raw/`):
 
 ```
 forecast_archive/{slug}/{run_ts}/{pct}.tif              # ELMFIRE time-of-arrival rasters
@@ -36,11 +36,11 @@ fire_matches.json                                       # slug -> cornea fire
 ```
 
 Tarring the ~169 hourly granules per variable into one object is deliberate:
-it keeps R2 Class A (write) operations ~100x below the free-tier cap. Note two
+it keeps bucket write operations ~100x below free-tier caps. Note two
 upstream quirks: percentile tifs appear over ~2h after a run is listed, and
-pyrecast **purges the hourly granule dirs within hours** — hence the 3h cron;
-a variable tar holds whatever survived at capture time (`got`/`n` in the
-manifest records the gap).
+pyrecast **purges the hourly granule dirs within ~2–4h** — hence the 2h cron,
+whose interval bounds worst-case granule loss; a variable tar holds whatever
+survived at capture time (`got`/`n` in the manifest records the gap).
 
 ## One-time setup
 
@@ -65,7 +65,7 @@ manifest records the gap).
 ```
 python3 -m venv .venv && ./.venv/bin/pip install requests "rasterio>=1.4,<1.5" "shapely>=2,<2.1"
 ./.venv/bin/python collect.py --local        # capture now, into raw/ (no cloud needed)
-./.venv/bin/python collect.py --push         # upload a raw/ archive into R2  ⚠ see below
+./.venv/bin/python collect.py --push         # upload a raw/ archive into the bucket  ⚠ see below
 ./.venv/bin/python analyze.py --sync         # mirror the bucket + write data/metrics.csv
 ./.venv/bin/python analyze.py --inspect raw/forecast_archive/ca-bug/<run>/50.tif
 python3 serve.py                             # then http://localhost:8090/report.html
