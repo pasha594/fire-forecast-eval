@@ -364,6 +364,9 @@ def main():
     ap.add_argument("--inspect", metavar="TIF")
     ap.add_argument("--overlay", nargs=4, metavar=("SLUG", "RUN", "PCT", "H"))
     ap.add_argument("--only", help="restrict metrics to one slug")
+    ap.add_argument("--publish", action="store_true",
+                    help="after computing, upload data/metrics.csv to the bucket "
+                         "(needs S3_* env; used by the CI analyze workflow)")
     args = ap.parse_args()
 
     if args.inspect:
@@ -385,6 +388,12 @@ def main():
         overlay(slug, run_ts, pct, int(h))
         return
     compute(only_slug=args.only)
+    if args.publish:
+        import collect
+        client, bucket = collect.make_r2()
+        client.upload_file(str(REPO / "data" / "metrics.csv"), bucket, "metrics.csv",
+                           ExtraArgs={"ContentType": "text/csv"})
+        log("published metrics.csv to bucket")
 
 
 if __name__ == "__main__":

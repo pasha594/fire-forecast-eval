@@ -128,6 +128,7 @@
 
 <script>
 "use strict";
+const BUCKET = "https://f005.backblazeb2.com/file/fire-forecast-archive";
 const PCTS = ["10", "30", "50", "70", "90"];
 const PCT_COLOR = { 10: "#86b6ef", 30: "#5598e7", 50: "#2a78d6", 70: "#1c5cab", 90: "#104281" };
 const HORIZONS = [12, 24, 48, 72, 96, 120, 168, 240, 336];
@@ -351,17 +352,25 @@ function redraw() {
 }
 
 async function init() {
-  let text;
-  try {
-    const resp = await fetch("data/metrics.csv");
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    text = await resp.text();
-  } catch (e) {
+  let text = null;
+  // local copy first (laptop workflow), else the CI-published copy in the bucket
+  for (const [url, label] of [["data/metrics.csv", "local"], [BUCKET + "/metrics.csv", "bucket"]]) {
+    try {
+      const resp = await fetch(url);
+      if (!resp.ok) continue;
+      text = await resp.text();
+      const mod = resp.headers.get("Last-Modified");
+      document.querySelector(".sub").innerHTML +=
+        ` <span style="color:var(--muted)">· metrics: ${label}${mod ? ", updated " + mod : ""}</span>`;
+      break;
+    } catch (e) { /* try next source */ }
+  }
+  if (text === null) {
     const el = document.getElementById("loaderr");
     el.hidden = false;
-    el.innerHTML = `Couldn't load <code>data/metrics.csv</code> (${e.message}). Serve this directory ` +
-      `(e.g. <code>python3 -m http.server 8090</code>) and open <code>http://localhost:8090/report.html</code>, ` +
-      `or pick the file: <input type="file" id="fpick" accept=".csv">`;
+    el.innerHTML = `Couldn't load metrics.csv locally or from the bucket. Run ` +
+      `<code>analyze.py</code> (or wait for the CI analyze workflow), ` +
+      `or pick a file: <input type="file" id="fpick" accept=".csv">`;
     document.getElementById("fpick").addEventListener("change", async ev => {
       DATA = parseCSV(await ev.target.files[0].text());
       el.hidden = true; start();
