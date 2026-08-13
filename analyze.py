@@ -31,7 +31,7 @@ import numpy as np
 TOA_TO_HOURS = 1.0
 
 HORIZONS_H = (12, 24, 48, 72, 96, 120, 168, 240, 336)
-PUBLIC_BUCKET_URL = "https://pub-691b6945028a43fd9af9d984fcf17f14.r2.dev"
+PUBLIC_BUCKET_URL = "https://f005.backblazeb2.com/file/fire-forecast-archive"
 BASELINE_TOL_H = 3.0     # baseline = latest perimeter <= run + this
 ACTUAL_TOL_H = 12.0      # actual must be within +/- this of run + H
 SQM_PER_ACRE = 4046.8564224

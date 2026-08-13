@@ -141,20 +141,26 @@ class Archive:
 
 
 def make_r2():
-    import boto3  # only needed in R2 mode; local mode stays boto3-free
-    missing = [k for k in ("R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID",
-                           "R2_SECRET_ACCESS_KEY", "R2_BUCKET") if not os.environ.get(k)]
-    if missing:
-        log(f"FATAL missing env: {', '.join(missing)}")
+    """Build the S3-compatible client. Prefers the provider-agnostic S3_* env
+    (any S3-compatible store: Backblaze B2, R2, ...); falls back to the legacy
+    R2_* names so old secrets keep working during migration."""
+    import boto3  # only needed in bucket mode; local mode stays boto3-free
+    env = os.environ.get
+    endpoint = env("S3_ENDPOINT") or (
+        f"https://{env('R2_ACCOUNT_ID')}.r2.cloudflarestorage.com"
+        if env("R2_ACCOUNT_ID") else None)
+    access = env("S3_ACCESS_KEY_ID") or env("R2_ACCESS_KEY_ID")
+    secret = env("S3_SECRET_ACCESS_KEY") or env("R2_SECRET_ACCESS_KEY")
+    bucket = env("S3_BUCKET") or env("R2_BUCKET") or "fire-forecast-archive"
+    if not (endpoint and access and secret):
+        log("FATAL missing env: need S3_ENDPOINT + S3_ACCESS_KEY_ID + "
+            "S3_SECRET_ACCESS_KEY (or legacy R2_* equivalents)")
         sys.exit(1)
     client = boto3.client(
-        "s3",
-        endpoint_url=f"https://{os.environ['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
-        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
-        region_name="auto",
+        "s3", endpoint_url=endpoint, aws_access_key_id=access,
+        aws_secret_access_key=secret, region_name="auto",
     )
-    return client, os.environ["R2_BUCKET"]
+    return client, bucket
 
 
 # ---------------------------------------------------------------- scraping

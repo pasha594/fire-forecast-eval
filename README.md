@@ -44,13 +44,19 @@ manifest records the gap).
 ## One-time setup
 
 1. **GitHub**: push this repo to GitHub (`gh repo create ... --push`).
-2. **Cloudflare R2** (dashboard → R2):
-   - Create bucket `fire-forecast-archive`.
-   - R2 → Manage API tokens → Create token: *Object Read & Write*, scoped to that bucket. Note the Access Key ID, Secret Access Key, and your Account ID (shown on the R2 overview page).
-   - Bucket → Settings → Public access → enable **r2.dev subdomain** (read-only public URL; the data is public anyway). Note the `https://pub-….r2.dev` URL for `analyze.py`.
+2. **Backblaze B2** (any S3-compatible store works; B2 chosen for its **hard spending
+   caps** — set them under Account → Caps & Alerts):
+   - Create bucket `fire-forecast-archive`, files **Public** (read-only public URL;
+     the data is public anyway). Note the S3 endpoint (e.g.
+     `s3.us-east-005.backblazeb2.com`) and friendly URL
+     (`https://f005.backblazeb2.com/file/<bucket>`).
+   - App Keys → create a key scoped to the bucket, read+write.
+   - Optional: a bucket CORS rule allowing cross-origin GET lets `map.html`
+     render archived rasters straight from the bucket on non-localhost origins.
 3. **GitHub repo secrets** (repo → Settings → Secrets and variables → Actions), set these yourself:
-   - `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`
-   - Optional variable `R2_BUCKET` (defaults to `fire-forecast-archive`).
+   - `S3_ENDPOINT` (full https URL), `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
+   - Optional variable `S3_BUCKET` (defaults to `fire-forecast-archive`).
+   - Legacy `R2_*` secrets still work as a fallback (collect.py checks `S3_*` first).
 4. Trigger the workflow once manually (Actions → collect → Run workflow) and check the summary line + objects in the bucket.
 
 ## Local usage
@@ -89,12 +95,14 @@ contours, so this is a property of the source data.
 
 ## Costs (full ingestion)
 
-~10–14GB/day when all variables are captured (fire-count dependent). R2 zero
-egress; reads free-tier; writes stay free-tier thanks to the tarred layout. The
-only real line item is storage: **$0.015/GB-month ≈ $6/month per month of
-accumulated archive** (a full season ~2.5TB ≈ $38/month). Retention is the
+~10–14GB/day when all variables are captured (fire-count dependent). On B2:
+storage **$6/TB-month ≈ $2.50/month per month of accumulated archive** (a full
+season ~2.5TB ≈ $15/month); egress free up to 3× stored volume per month
+(incremental `--sync` uses ~1×); transaction ops negligible thanks to the
+tarred layout. **Hard caps in Account → Caps & Alerts make overruns
+impossible — B2 halts service instead of billing.** Retention is the other
 lever: prune old `*_​{var}.tar` objects (keep the ToA tifs — the skill metrics
-need them) to cut the bill ~10x. GitHub Actions: free (public repo).
+need them) to cut storage ~10x. GitHub Actions: free (public repo).
 
 ## Teardown after the survey
 
