@@ -137,9 +137,17 @@ async function init() {
   const [matches, manifest] = await Promise.all([
     loadLocalOrBucket("fire_matches.json"), loadLocalOrBucket("manifest.json")]);
   const bySlug = {};
+  const gen = Date.parse(manifest.generated || 0);
+  // manifests from collectors that stamp last_seen let us tell expired runs apart;
+  // in those, a missing last_seen itself means "absent from the latest scrape"
+  const stamped = Object.values(manifest.runs).some(e => e.last_seen);
   for (const [runKey, e] of Object.entries(manifest.runs)) {
-    const f = bySlug[e.slug] = bySlug[e.slug] || { slug: e.slug, runs: [], centroid: null };
+    const f = bySlug[e.slug] = bySlug[e.slug] || { slug: e.slug, runs: [], live: {}, centroid: null };
     f.runs.push(e.run_ts);
+    // live = seen in the most recent scrape (within 2h of manifest generation);
+    // anything older has aged off pyrecast's geoserver -> no WMS tiles exist
+    f.live[e.run_ts] = e.last_seen ? gen - Date.parse(e.last_seen) < 2 * 3600e3
+      : (stamped ? false : null);
     if (e.centroid) f.centroid = e.centroid;
   }
   for (const f of Object.values(bySlug)) {
@@ -201,8 +209,11 @@ async function select(slug) {
   if (f.centroid) map.setView([f.centroid[1], f.centroid[0]], 11);
 
   const selRun = document.getElementById("selRun");
-  selRun.innerHTML = f.runs.slice(0, 4).map((r, i) =>
-    `<option value="${r}"${i === 0 ? " selected" : ""}>run ${fmtRun(r)}${i === 0 ? " (latest)" : ""}</option>`).join("");
+  selRun.innerHTML = f.runs.slice(0, 4).map((r, i) => {
+    const tag = f.live[r] === false ? " — expired upstream"
+      : i === 0 ? " (latest)" : "";
+    return `<option value="${r}"${i === 0 ? " selected" : ""}>run ${fmtRun(r)}${tag}</option>`;
+  }).join("");
   refreshWms();
   await Promise.all([loadPerims(f, seq), refreshHotspots()]);
 }
@@ -253,6 +264,13 @@ function refreshWms() {
   const timed = TIMED_VARS.has(variable);
   document.getElementById("timerow").hidden = !timed;
   if (!f || !run || !variable) return;
+  if (f.live[run] === false) {
+    note.textContent = "this run has aged off pyrecast's geoserver — live forecast layers no " +
+      "longer exist for it. Only its time-of-arrival raster survives, in our R2 archive " +
+      "(used by the skill metrics).";
+    note.className = "warn";
+    return;
+  }
   const layer = `fire-spread-forecast_${f.slug}_${run}:elmfire_landfire_${pct}_${variable}`;
   const params = {
     layers: layer, format: "image/png", transparent: true, version: "1.1.1",

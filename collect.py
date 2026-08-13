@@ -207,6 +207,7 @@ def download_run(archive, manifest, slug, run_ts):
         "slug": slug, "run_ts": run_ts, "first_seen": iso(utcnow()),
         "complete": False, "expired": False, "files": {}, "errors": {},
     })
+    entry["last_seen"] = iso(utcnow())  # still listed upstream (geoserver still serves it)
     if entry["complete"]:
         return False
     changed = False
