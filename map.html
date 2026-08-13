@@ -229,7 +229,9 @@ async function select(slug) {
     return `<option value="${r}"${i === 0 ? " selected" : ""}>run ${fmtRun(r)}${tag}</option>`;
   }).join("");
   refreshWms();
-  await Promise.all([loadPerims(f, seq), refreshHotspots()]);
+  // perimeters first: the hotspot query box is sized from the perimeter bounds
+  await loadPerims(f, seq);
+  await refreshHotspots();
 }
 
 function fmtRun(ts) {
@@ -392,7 +394,7 @@ async function loadPerims(f, seq) {
       togglePerim(f, p, ev.target.checked, latest));
     el.appendChild(lab);
   });
-  togglePerim(f, state.perimIndex[n - 1], true, true);
+  await togglePerim(f, state.perimIndex[n - 1], true, true);
 }
 
 async function togglePerim(f, p, on, latest) {
@@ -447,13 +449,20 @@ async function refreshHotspots() {
     return;
   }
   const [lon, lat] = f.centroid;
-  const d = 0.4;
+  // size the query box from the latest perimeter (megafires dwarf a fixed radius —
+  // a fixed box visibly clips the dot cloud along straight lines); centroid fallback
+  let bbox = `${lat - 0.4},${lon - 0.4},${lat + 0.4},${lon + 0.4}`;
+  const latestPerim = [...state.perimLayers.values()].pop();
+  if (latestPerim) {
+    const b = latestPerim.getBounds();
+    bbox = `${b.getSouth() - 0.2},${b.getWest() - 0.2},${b.getNorth() + 0.2},${b.getEast() + 0.2}`;
+  }
   // 21d window: the playhead can sit 14d back and still needs its own 7d lookbehind
   const since = new Date(Date.now() - 21 * 864e5).toISOString().slice(0, 10);
   note.textContent = "loading detections…";
   try {
     // NB: this bbox is lat-first (min_lat,min_lon,max_lat,max_lon) per the API schema
-    const gj = await getJson(`${CORNEA}/hotspots?bbox=${lat - d},${lon - d},${lat + d},${lon + d}&since=${since}&limit=50000`);
+    const gj = await getJson(`${CORNEA}/hotspots?bbox=${bbox}&since=${since}&limit=50000`);
     const canvas = L.canvas({ padding: 0.2 });  // thousands of points -> canvas
     state.hotLayer = L.layerGroup().addTo(map);
     for (const feat of gj.features || []) {
@@ -493,7 +502,8 @@ function renderHotspots() {
     }
   }
   note.textContent = state.hotMarkers.length
-    ? `${vis} of ${state.hotMarkers.length} detections at playhead`
+    ? `${vis} of ${state.hotMarkers.length} detections at playhead` +
+      (state.hotMarkers.length >= 50000 ? " (API cap hit — oldest may be missing)" : "")
     : "no detections in the 21d window";
 }
 
