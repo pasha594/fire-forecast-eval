@@ -418,15 +418,20 @@ async function refreshHotspots() {
   const d = 0.4;
   const since = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10);
   try {
-    const gj = await getJson(`${CORNEA}/hotspots?bbox=${lon - d},${lat - d},${lon + d},${lat + d}&since=${since}&limit=2000`);
+    // NB: this bbox is lat-first (min_lat,min_lon,max_lat,max_lon) per the API schema
+    const gj = await getJson(`${CORNEA}/hotspots?bbox=${lat - d},${lon - d},${lat + d},${lon + d}&since=${since}&limit=20000`);
     const n = (gj.features || []).length;
-    note.textContent = `${n} hotspot${n === 1 ? "" : "s"} returned` +
-      (n ? "" : " (endpoint currently returns no data for any bbox)");
+    note.textContent = `${n} detection${n === 1 ? "" : "s"} (VIIRS/MODIS, 7d)`;
     if (n) {
+      const canvas = L.canvas({ padding: 0.2 });  // thousands of points -> canvas
       state.hotLayer = L.geoJSON(gj, {
         pointToLayer: (feat, ll) => L.circleMarker(ll, {
-          radius: 3.5, color: "#d03b3b", weight: 1, fillColor: "#d03b3b", fillOpacity: 0.6,
-        }).bindTooltip(Object.entries(feat.properties || {}).map(([k, v]) => `${k}: ${v}`).join("<br>")),
+          renderer: canvas, radius: 3, color: "#d03b3b", weight: 0.5,
+          fillColor: "#d03b3b", fillOpacity: 0.45,
+        }).bindTooltip(() => {
+          const p = feat.properties || {};
+          return `${p.source || "?"} ${p.acq_date || ""} · FRP ${p.frp ?? "?"} · conf ${p.confidence ?? "?"}`;
+        }),
       }).addTo(map);
     }
   } catch (e) {
