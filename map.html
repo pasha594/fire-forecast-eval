@@ -6,6 +6,8 @@
 <title>Fire forecast map</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script>
+<script src="https://unpkg.com/georaster-layer-for-leaflet@3.10.0/dist/georaster-layer-for-leaflet.min.js"></script>
 <style>
   :root {
     --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e;
@@ -265,10 +267,17 @@ function refreshWms() {
   document.getElementById("timerow").hidden = !timed;
   if (!f || !run || !variable) return;
   if (f.live[run] === false) {
-    note.textContent = "this run has aged off pyrecast's geoserver — live forecast layers no " +
-      "longer exist for it. Only its time-of-arrival raster survives, in our R2 archive " +
-      "(used by the skill metrics).";
-    note.className = "warn";
+    document.getElementById("timerow").hidden = true;
+    if (variable === "time-of-arrival") {
+      renderArchivedToa(f, run, pct, note);
+    } else {
+      note.textContent = "this run has aged off pyrecast's geoserver — live tiles no longer " +
+        "exist. This variable is archived as hourly tars " +
+        `(forecast_archive/${f.slug}/${run}/${pct}_${variable}.tar in the bucket, if it was ` +
+        "captured before pyrecast purged the granules); extract locally to view. " +
+        "Time-of-arrival renders from the archive — select it above.";
+      note.className = "warn";
+    }
     return;
   }
   const layer = `fire-spread-forecast_${f.slug}_${run}:elmfire_landfire_${pct}_${variable}`;
@@ -288,6 +297,52 @@ function refreshWms() {
   note.textContent = layer;
   legend.src = `${WMS}?REQUEST=GetLegendGraphic&VERSION=1.1.1&FORMAT=image/png&LAYER=${encodeURIComponent(layer)}&transparent=true`;
   legend.hidden = false;
+}
+
+// ------------------------------------------------- archived raster rendering
+
+// hours-to-arrival bins, blue (imminent) -> red (late), like pyrecast's styling
+const TOA_BINS = [[12, "#08306b"], [24, "#2166ac"], [48, "#4393c3"], [72, "#92c5de"],
+                  [96, "#c6dbef"], [120, "#fdd0a2"], [168, "#f4a582"],
+                  [240, "#d6604d"], [Infinity, "#b2182b"]];
+
+function toaColor(v) {
+  if (!v || v <= 0 || isNaN(v)) return null;  // nodata=0 = not forecast to burn
+  for (const [h, c] of TOA_BINS) if (v <= h) return c;
+  return null;
+}
+
+async function renderArchivedToa(f, run, pct, note) {
+  note.textContent = "expired upstream — loading archived time-of-arrival…";
+  const key = `forecast_archive/${f.slug}/${run}/${pct}.tif`;
+  let buf = null;
+  for (const url of [`raw/${key}`, `${BUCKET}/${key}`]) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) { buf = await r.arrayBuffer(); break; }
+    } catch (e) { /* local 404 or bucket CORS -> try next */ }
+  }
+  if (!buf) {
+    note.textContent = "expired upstream, and the archived tif isn't reachable — run " +
+      "`analyze.py --sync` (or add a CORS rule to the R2 bucket for this origin).";
+    note.className = "warn";
+    return;
+  }
+  const georaster = await parseGeoraster(buf);
+  // selection may have moved on while the tif downloaded
+  if (state.sel !== f.slug || document.getElementById("selRun").value !== run) return;
+  if (state.wmsLayer) { map.removeLayer(state.wmsLayer); }  // raster replaces WMS slot
+  state.wmsLayer = new GeoRasterLayer({
+    georaster, resolution: 192, pane: "overlayPane",
+    opacity: +document.getElementById("opacity").value / 100,
+    pixelValuesToColorFn: vals => toaColor(vals[0]),
+  }).addTo(map);
+  note.innerHTML = "expired upstream — showing <b>archived</b> time-of-arrival " +
+    "(hours to arrival: " +
+    TOA_BINS.slice(0, 8).map(([h, c]) =>
+      `<span style="background:${c};color:#fff;padding:0 4px;border-radius:3px">≤${h}</span>`
+    ).join(" ") + ")";
+  note.className = "note";
 }
 
 // ---------------------------------------------------------------- perimeters

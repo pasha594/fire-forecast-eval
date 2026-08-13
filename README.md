@@ -24,11 +24,22 @@ which retains dated perimeter snapshots per fire (~2–3/day for active fires).
 Archive layout (R2 bucket or local `raw/`):
 
 ```
-forecast_archive/{slug}/{run_ts}/{10,30,50,70,90}.tif   # ELMFIRE time-of-arrival rasters
+forecast_archive/{slug}/{run_ts}/{pct}.tif              # ELMFIRE time-of-arrival rasters
+forecast_archive/{slug}/{run_ts}/{pct}_{var}.tar        # hourly-mosaic granules, one tar per
+                                                        #   (run, pct, var): crown-fire,
+                                                        #   flame-length, hours-since-burned,
+                                                        #   spread-rate + {pct}_isochrones.tar
 perimeter_archive/{slug}/index.json, {epochms}.geojson  # Cornea perimeter snapshots
 manifest.json                                           # collector state (source of truth)
 fire_matches.json                                       # slug -> cornea fire
 ```
+
+Tarring the ~169 hourly granules per variable into one object is deliberate:
+it keeps R2 Class A (write) operations ~100x below the free-tier cap. Note two
+upstream quirks: percentile tifs appear over ~2h after a run is listed, and
+pyrecast **purges the hourly granule dirs within hours** — hence the 3h cron;
+a variable tar holds whatever survived at capture time (`got`/`n` in the
+manifest records the gap).
 
 ## One-time setup
 
@@ -75,6 +86,15 @@ precision near the perimeter edge; and predicted area is *not* strictly
 monotone in percentile (observed inversions in ~1/3 of groups, median 11%
 relative) — the percentile runs are independent weather draws, not nested
 contours, so this is a property of the source data.
+
+## Costs (full ingestion)
+
+~10–14GB/day when all variables are captured (fire-count dependent). R2 zero
+egress; reads free-tier; writes stay free-tier thanks to the tarred layout. The
+only real line item is storage: **$0.015/GB-month ≈ $6/month per month of
+accumulated archive** (a full season ~2.5TB ≈ $38/month). Retention is the
+lever: prune old `*_​{var}.tar` objects (keep the ToA tifs — the skill metrics
+need them) to cut the bill ~10x. GitHub Actions: free (public repo).
 
 ## Teardown after the survey
 
