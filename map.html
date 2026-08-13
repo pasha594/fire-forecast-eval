@@ -70,12 +70,17 @@
       <option value="">— none —</option>
     </select>
     <select id="selPct">
-      <option value="10">10th percentile weather</option>
+      <option value="10">10th percentile</option>
       <option value="30">30th percentile</option>
       <option value="50" selected>50th percentile</option>
       <option value="70">70th percentile</option>
-      <option value="90">90th percentile weather</option>
+      <option value="90">90th percentile</option>
     </select>
+    <div id="timerow" hidden>
+      <label class="row" style="display:block">forecast hour: <b id="timelabel"></b>
+        <input type="range" id="timeslider" min="0" max="168" value="12"></label>
+      <div class="note">this variable is an hourly snapshot — slide through the forecast</div>
+    </div>
     <label class="row">opacity <input type="range" id="opacity" min="10" max="100" value="70"></label>
     <div class="note" id="wmsnote"></div>
     <img id="legendimg" alt="" hidden>
@@ -156,6 +161,16 @@ async function init() {
     document.getElementById(id).addEventListener("change", refreshWms);
   document.getElementById("opacity").addEventListener("input", () =>
     state.wmsLayer && state.wmsLayer.setOpacity(+document.getElementById("opacity").value / 100));
+  const slider = document.getElementById("timeslider");
+  slider.addEventListener("input", () => {           // live label while dragging
+    const run = document.getElementById("selRun").value;
+    if (run) timeParam(run);
+  });
+  slider.addEventListener("change", () => {          // reload tiles on release
+    const run = document.getElementById("selRun").value;
+    if (state.wmsLayer && run && TIMED_VARS.has(document.getElementById("selVar").value))
+      state.wmsLayer.setParams({ time: timeParam(run) });
+  });
   document.getElementById("chkHot").addEventListener("change", refreshHotspots);
 }
 
@@ -198,6 +213,32 @@ function fmtRun(ts) {
 
 // ---------------------------------------------------------------- WMS layer
 
+// these variables are hourly image mosaics on a TIME dimension (one granule per
+// forecast hour, run time -> +168h); without TIME geoserver serves the last,
+// near-empty granule. time-of-arrival and isochrones are single static layers.
+const TIMED_VARS = new Set(["spread-rate", "flame-length", "crown-fire", "hours-since-burned"]);
+
+function runDate(ts) {
+  return new Date(Date.UTC(+ts.slice(0, 4), +ts.slice(4, 6) - 1, +ts.slice(6, 8),
+                           +ts.slice(9, 11), +ts.slice(11, 13), +ts.slice(13, 15)));
+}
+
+function forecastTime(run, hourIdx) {
+  // granule 0 is the exact run time; then hourly on the hour
+  const t0 = runDate(run);
+  if (hourIdx <= 0) return t0;
+  const h1 = new Date(t0); h1.setUTCMinutes(0, 0, 0); h1.setUTCHours(h1.getUTCHours() + hourIdx);
+  return h1;
+}
+
+function timeParam(run) {
+  const idx = +document.getElementById("timeslider").value;
+  const t = forecastTime(run, idx);
+  document.getElementById("timelabel").textContent =
+    `+${idx}h · ${t.toISOString().slice(0, 16).replace("T", " ")}Z`;
+  return t.toISOString().replace(".000", "");
+}
+
 function refreshWms() {
   const f = state.fires.find(x => x.slug === state.sel);
   const run = document.getElementById("selRun").value;
@@ -209,12 +250,16 @@ function refreshWms() {
   legend.hidden = true;
   note.textContent = "";
   note.className = "note";
+  const timed = TIMED_VARS.has(variable);
+  document.getElementById("timerow").hidden = !timed;
   if (!f || !run || !variable) return;
   const layer = `fire-spread-forecast_${f.slug}_${run}:elmfire_landfire_${pct}_${variable}`;
-  state.wmsLayer = L.tileLayer.wms(WMS, {
+  const params = {
     layers: layer, format: "image/png", transparent: true, version: "1.1.1",
     opacity: +document.getElementById("opacity").value / 100,
-  }).addTo(map);
+  };
+  if (timed) params.time = timeParam(run);
+  state.wmsLayer = L.tileLayer.wms(WMS, params).addTo(map);
   let errored = 0;
   state.wmsLayer.on("tileerror", () => {
     if (++errored === 3) {
