@@ -101,6 +101,13 @@
     <select id="fAgg"><option value="pooled">pooled</option><option value="median">median</option></select></p>
     <div class="row2"><div id="plotPH" class="plot"></div><div id="plotRH" class="plot"></div></div>
     <div class="empty" id="emptyH" hidden></div>
+    <div id="hsBlock" hidden>
+      <p class="note" style="margin-top:10px"><b>Hotspot capture</b> — share of satellite-detected
+      active-fire area (VIIRS 375m / MODIS 1km footprints) falling inside the prediction. Unlike
+      perimeter recall, detections carry exact timestamps, so each window (run, run+H] is matched
+      with zero temporal tolerance.</p>
+      <div id="plotHS" class="plot" style="height:300px"></div>
+    </div>
   </div>
 
   <div class="card">
@@ -140,6 +147,7 @@
       <div><label for="insPct">percentile</label><select id="insPct"></select></div>
       <div><label for="insH">horizon (h)</label><select id="insH"></select></div>
     </div>
+    <div class="note" id="insTimes" style="margin-bottom:8px"></div>
     <div id="insMap" style="height:440px;border-radius:8px;border:1px solid var(--grid)"></div>
     <div class="note" id="insLegend" style="margin-top:8px"></div>
     <div id="insStats"></div>
@@ -156,6 +164,7 @@
 <script>
 "use strict";
 const BUCKET = "https://f005.backblazeb2.com/file/fire-forecast-archive";
+const CORNEA = "https://fire-api-prod.web.app";
 const PCTS = ["10", "30", "50", "70", "90"];
 const PCT_COLOR = { 10: "#86b6ef", 30: "#5598e7", 50: "#2a78d6", 70: "#1c5cab", 90: "#104281" };
 const HORIZONS = [12, 24, 48, 72, 96, 120, 168, 240, 336];
@@ -180,7 +189,8 @@ function parseCSV(text) {
   const head = lines[0].split(",");
   const numeric = new Set(["horizon_h", "baseline_offset_h", "actual_offset_h", "pixel_m",
     "baseline_acres", "pred_total_acres", "pred_new_acres", "act_new_acres", "inter_acres",
-    "precision", "recall", "iou", "act_outside_acres", "act_offgrid_frac"]);
+    "precision", "recall", "iou", "act_outside_acres", "act_offgrid_frac",
+    "hs_n", "hs_new_acres", "hs_hit_acres", "hs_capture"]);
   return lines.slice(1).map(line => {
     const cells = line.split(",");
     const r = {};
@@ -261,6 +271,32 @@ function drawHorizon(rows) {
       yaxis: Object.assign({}, LAYOUT.yaxis, { title: { text: name.toLowerCase() + " (" + agg + ")" } }),
     }), CONFIG);
   }
+}
+
+function drawHS(rows) {
+  const has = rows.some(r => r.hs_capture !== null && r.hs_capture !== undefined);
+  document.getElementById("hsBlock").hidden = !has;
+  if (!has) return;
+  const agg = document.getElementById("fAgg").value;
+  const traces = PCTS.map(pct => {
+    const pts = [];
+    for (const H of HORIZONS) {
+      const g = rows.filter(r => r.percentile === pct && r.horizon_h === H && r.hs_new_acres > 0);
+      if (!g.length) continue;
+      const v = agg === "pooled"
+        ? g.reduce((s, r) => s + r.hs_hit_acres, 0) / g.reduce((s, r) => s + r.hs_new_acres, 0)
+        : median(g.map(r => r.hs_capture));
+      pts.push([H, v, g.length]);
+    }
+    return { x: pts.map(p => p[0]), y: pts.map(p => p[1]), customdata: pts.map(p => p[2]),
+             name: pct + "th", mode: "lines+markers",
+             line: { color: PCT_COLOR[pct], width: 2 }, marker: { size: 8 },
+             hovertemplate: pct + "th pct · %{x}h: %{y:.2f} (n=%{customdata})<extra></extra>" };
+  }).filter(t => t.x.length);
+  Plotly.react("plotHS", traces, Object.assign({}, LAYOUT, {
+    xaxis: Object.assign({}, LAYOUT.xaxis, logx, { title: { text: "forecast horizon (h)" } }),
+    yaxis: Object.assign({}, LAYOUT.yaxis, { title: { text: "hotspot capture (" + agg + ")" } }),
+  }), CONFIG);
 }
 
 function drawPct(rows) {
@@ -359,9 +395,33 @@ function drawTiles(rows) {
   ].map(([v, k]) => `<div class="tile"><div class="v">${v}</div><div class="k">${k}</div></div>`).join("");
 }
 
+function makeSortable(containerId) {
+  const container = document.getElementById(containerId);
+  container.querySelectorAll("thead th").forEach((th, ci) => {
+    th.style.cursor = "pointer";
+    th.title = "click to sort";
+    th.addEventListener("click", () => {
+      const tb = container.querySelector("tbody");
+      const dir = th.dataset.dir = th.dataset.dir === "asc" ? "desc" : "asc";
+      const val = tr => tr.cells[ci].innerText.replace(/,/g, "");
+      const rows = [...tb.rows];
+      const num = rows.every(tr => val(tr) === "" || !isNaN(parseFloat(val(tr))));
+      rows.sort((a, b) => {
+        const x = val(a), y = val(b);
+        const cmp = num
+          ? ((x === "" ? -Infinity : parseFloat(x)) - (y === "" ? -Infinity : parseFloat(y)))
+          : x.localeCompare(y);
+        return dir === "asc" ? cmp : -cmp;
+      });
+      rows.forEach(r => tb.appendChild(r));  // moving nodes keeps click handlers
+    });
+  });
+}
+
 function drawTable(rows) {
   const cols = ["slug", "run_ts", "percentile", "horizon_h", "actual_offset_h", "baseline_acres",
-    "pred_new_acres", "act_new_acres", "inter_acres", "precision", "recall", "iou"];
+    "pred_new_acres", "act_new_acres", "inter_acres", "precision", "recall", "iou",
+    "hs_n", "hs_capture"];
   const top = rows.slice(0, 500);
   document.getElementById("rowsTbl").innerHTML =
     `<table class="rows"><thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody>` +
@@ -369,6 +429,7 @@ function drawTable(rows) {
     `</tbody></table>` + (rows.length > 500 ? `<p class="note">showing 500 of ${rows.length} rows</p>` : "");
   document.querySelectorAll("#rowsTbl tbody tr").forEach(tr =>
     tr.addEventListener("click", () => inspectRow(top[+tr.dataset.i])));
+  makeSortable("rowsTbl");
 }
 
 function drawFires(rows) {
@@ -390,6 +451,7 @@ function drawFires(rows) {
       `<td>${g.p ? (g.i / g.p).toFixed(3) : ""}</td><td>${g.a ? (g.i / g.a).toFixed(3) : ""}</td>` +
       `<td>${median(g.ps)?.toFixed(3) ?? ""}</td><td>${median(g.rs)?.toFixed(3) ?? ""}</td></tr>`).join("") +
     `</tbody></table>`;
+  makeSortable("firesTbl");
 }
 
 // ------------------------------------------- calculation inspector
@@ -478,11 +540,35 @@ function buildClassifiedOverlay(meta, clsFlat, epsg) {
   return { url: c.toDataURL(), bounds: [[latMin, lonMin], [latMax, lonMax]] };
 }
 
+function acqMs(pr) {
+  if (!pr.acq_date) return null;
+  const [Y, M, D] = pr.acq_date.split("-").map(Number);
+  let hm = parseFloat(pr.acq_time);
+  if (isNaN(hm)) hm = 0;
+  return Date.UTC(Y, M - 1, D, Math.floor(hm / 100), Math.round(hm % 100));
+}
+
+function describeTimes(row) {
+  const fmt = x => (typeof x === "string" ? x : new Date(x).toISOString())
+    .replace("T", " ").slice(0, 16) + "Z";
+  const off = row.actual_offset_h;
+  let t = `forecast run <b>${fmt(row.run_dt_utc)}</b> · +${row.horizon_h}h window ends ` +
+    `<b>${fmt(row.valid_dt_utc)}</b> · scored against perimeter mapped ` +
+    `<b>${fmt(+row.actual_perim_ms)}</b> (<b>${Math.abs(off).toFixed(1)}h ` +
+    `${off < 0 ? "before" : "after"}</b> window end)`;
+  t += row.baseline_perim_ms
+    ? ` · baseline perimeter mapped ${fmt(+row.baseline_perim_ms)} ` +
+      `(${Math.abs(row.baseline_offset_h).toFixed(1)}h ${row.baseline_offset_h < 0 ? "before" : "after"} run)`
+    : " · baseline: none (no mapped perimeter existed at issuance)";
+  return t;
+}
+
 async function renderInspection(row) {
   if (INS.busy) { INS.pending = row; return; }  // queue the latest, never drop
   INS.busy = true;
   const stats = document.getElementById("insStats");
   try {
+    document.getElementById("insTimes").innerHTML = describeTimes(row);
     stats.innerHTML = `<p class="note">loading raster + perimeters for ${row.slug} ${row.run_ts} pct${row.percentile} H${row.horizon_h}…</p>`;
     const toaKey = BUCKET_KEYS.toa(row);
     let georaster = INS.cacheToa.get(toaKey);
@@ -535,9 +621,45 @@ async function renderInspection(row) {
     INS.layers.push(actLayer);
     INS.map.fitBounds(actLayer.getBounds(), { padding: [16, 16] });
 
+    // satellite detections inside the exact forecast window, marked by whether
+    // they fall inside the predicted area (count-based companion to hs_capture)
+    let hsLine = "";
+    try {
+      const b = actLayer.getBounds();
+      const hs = await (await fetch(`${CORNEA}/hotspots?bbox=${b.getSouth() - 0.15},${b.getWest() - 0.15},${b.getNorth() + 0.15},${b.getEast() + 0.15}&since=${row.run_dt_utc.slice(0, 10)}&limit=50000`)).json();
+      const t0 = Date.parse(row.run_dt_utc), t1 = Date.parse(row.valid_dt_utc);
+      let nIn = 0, nCap = 0;
+      const grp = L.layerGroup();
+      for (const feat of hs.features || []) {
+        const tms = acqMs(feat.properties || {});
+        if (tms === null || tms <= t0 || tms > t1) continue;
+        nIn++;
+        const [lon, lat] = feat.geometry.coordinates;
+        const [X, Y] = fwd([lon, lat]);
+        const rc = Math.floor((meta.ymax - Y) / meta.ph), cc = Math.floor((X - meta.xmin) / meta.pw);
+        const k = (rc >= 0 && rc < meta.height && cc >= 0 && cc < meta.width)
+          ? clsFlat[rc * meta.width + cc] : 0;
+        const captured = k === CLS.TP || k === CLS.FP;
+        if (captured) nCap++;
+        L.circleMarker([lat, lon], {
+          radius: 3.5, weight: 1.5, fillColor: "#fff", fillOpacity: 0.9,
+          color: captured ? "#0a5c36" : "#7a1010",
+        }).bindTooltip(`${(feat.properties || {}).source || "?"} ` +
+          `${new Date(tms).toISOString().slice(0, 16).replace("T", " ")}Z · ` +
+          `${captured ? "inside" : "outside"} prediction`).addTo(grp);
+      }
+      grp.addTo(INS.map);
+      INS.layers.push(grp);
+      if (nIn) hsLine = ` · <b>${nIn}</b> detections in window, <b>${nCap}</b> inside prediction`;
+    } catch (e) { /* dots are optional */ }
+    if (hsLine) document.getElementById("insTimes").innerHTML = describeTimes(row) + hsLine;
+
     document.getElementById("insLegend").innerHTML = Object.entries(CLS_STYLE)
       .map(([k, [c, label]]) => `<span style="background:${c};color:#fff;padding:0 6px;border-radius:3px">&nbsp;</span> ${label}`)
-      .join(" &nbsp; ");
+      .join(" &nbsp; ") +
+      ` &nbsp; <span style="border:2px solid #0a5c36;border-radius:50%;padding:0 4px">&nbsp;</span>` +
+      ` / <span style="border:2px solid #7a1010;border-radius:50%;padding:0 4px">&nbsp;</span>` +
+      ` satellite detections in the window (green ring = inside prediction)`;
     const pxAc = meta.pw * meta.ph / 4046.8564224;
     const ac = k => (counts[k] * pxAc);
     const P = counts[2] + counts[3] ? counts[2] / (counts[2] + counts[3]) : null;
@@ -610,6 +732,7 @@ function redraw() {
   const rows = filtered();
   drawTiles(rows);
   drawHorizon(rows);
+  drawHS(rows);
   drawPct(rows);
   drawUpdate(rows);
   drawFires(rows);
@@ -625,7 +748,7 @@ async function init() {
   if (!isLocal) sources.reverse();
   for (const [url, label] of sources) {
     try {
-      const resp = await fetch(url);
+      const resp = await fetch(url, { cache: "no-cache" });  // revalidate: metrics update twice daily
       if (!resp.ok) continue;
       text = await resp.text();
       const mod = resp.headers.get("Last-Modified");

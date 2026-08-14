@@ -31,6 +31,7 @@ forecast_archive/{slug}/{run_ts}/{pct}_{var}.tar        # hourly-mosaic granules
                                                         #   flame-length, hours-since-burned,
                                                         #   spread-rate + {pct}_isochrones.tar
 perimeter_archive/{slug}/index.json, {epochms}.geojson  # Cornea perimeter snapshots
+hotspot_archive/{slug}/{YYYY-MM-DD}.geojson             # VIIRS/MODIS detections by acq day
 manifest.json                                           # collector state (source of truth)
 fire_matches.json                                       # slug -> cornea fire
 ```
@@ -83,6 +84,17 @@ For a forecast issued at `run_ts`, percentile `p`, window `H` hours:
 - **baseline B** = latest Cornea perimeter at/before `run_ts`(+3h), rasterized onto the forecast's own UTM grid
 - **actual A** = Cornea perimeter nearest `run_ts + H` (required within ±12h; signed offset recorded)
 - **precision** = area(pred_new ∩ act_new) / area(pred_new), **recall** = area(pred_new ∩ act_new) / area(act_new), where act_new = A − B
+
+**Hotspot capture** (`hs_*` columns) is the deliberately *separate* satellite
+companion metric: detections within exactly `(run, run+H]` (their timestamps
+are precise, so no tolerance is needed), footprint-rasterized at instrument
+resolution (VIIRS 375m px → r=187.5m, MODIS 1km px → r=500m), baseline
+subtracted; `hs_capture` = predicted ∩ hotspot area / hotspot area. It is
+recall-flavored only — hotspots undersample burned area (clouds, smoke,
+overpass gaps), so a hotspot-based "precision" would punish correct
+predictions; perimeters remain the precision source. The two truths are kept
+separate rather than merged: merging 375m–1km footprints into perimeter truth
+would inflate areas and destroy error attribution.
 
 Growth-only by design: comparing full footprints would be dominated by
 already-burned area. All raw areas are in `metrics.csv` so other metrics can

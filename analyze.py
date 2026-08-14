@@ -45,7 +45,12 @@ CSV_COLUMNS = ["slug", "cornea_id", "run_ts", "run_dt_utc", "percentile",
                "actual_perim_ms", "actual_offset_h", "pixel_m", "baseline_acres",
                "pred_total_acres", "pred_new_acres", "act_new_acres", "inter_acres",
                "precision", "recall", "iou", "act_outside_acres", "act_offgrid_frac",
+               "hs_n", "hs_new_acres", "hs_hit_acres", "hs_capture",
                "expired_run", "notes"]
+
+# satellite active-fire footprint radii (m): VIIRS 375m px, MODIS 1km px
+HS_RADIUS_VIIRS = 187.5
+HS_RADIUS_MODIS = 500.0
 
 
 def log(msg):
@@ -94,6 +99,14 @@ def sync_bucket(url):
     for slug, epochs in (manifest.get("perimeters") or {}).items():
         wanted.append(f"perimeter_archive/{slug}/index.json")
         wanted += [f"perimeter_archive/{slug}/{e}.geojson" for e in epochs]
+    for slug, days in (manifest.get("hotspots") or {}).items():
+        # recent day files are rewritten upstream; re-fetch the last 3 always
+        recent = set(days[-3:])
+        for d in days:
+            p = RAW / "hotspot_archive" / slug / f"{d}.geojson"
+            if d in recent and p.exists():
+                p.unlink()
+            wanted.append(f"hotspot_archive/{slug}/{d}.geojson")
     for key in wanted:
         p = RAW / key
         if p.exists():
@@ -192,6 +205,57 @@ class PerimeterSet:
         return self._mask[key]
 
 
+class HotspotSet:
+    """Timestamped VIIRS/MODIS detections for one fire. Unlike perimeters these
+    carry exact acquisition times, so windows need no tolerance: a detection
+    either falls inside (run, run+H] or it doesn't. Footprints are rasterized
+    at instrument resolution (VIIRS 375m px -> r=187.5m, MODIS 1km -> r=500m)."""
+
+    def __init__(self, slug):
+        self.pts = []  # (dt, lon, lat, radius_m)
+        for p in sorted((RAW / "hotspot_archive" / slug).glob("*.geojson")):
+            try:
+                gj = json.loads(p.read_text())
+            except ValueError:
+                continue
+            for f in gj.get("features", []):
+                pr = f.get("properties") or {}
+                d, c = pr.get("acq_date"), (f.get("geometry") or {}).get("coordinates")
+                if not d or not c:
+                    continue
+                try:
+                    hm = int(float(pr.get("acq_time") or 0))
+                except ValueError:
+                    hm = 0
+                dt = datetime.strptime(d, "%Y-%m-%d").replace(
+                    hour=hm // 100 % 24, minute=hm % 100 % 60, tzinfo=timezone.utc)
+                src = (pr.get("source") or "").lower()
+                r = (HS_RADIUS_MODIS if ("terra" in src or "aqua" in src or "modis" in src)
+                     else HS_RADIUS_VIIRS)
+                self.pts.append((dt, c[0], c[1], r))
+        self.pts.sort(key=lambda x: x[0])
+        self._mask = {}
+
+    def mask(self, t0, t1, crs, transform, shape_):
+        from rasterio import features
+        from rasterio.warp import transform as warp_transform
+        from shapely.geometry import Point, mapping
+        key = (t0, t1, str(crs), tuple(transform)[:6], shape_)
+        if key not in self._mask:
+            sel = [p for p in self.pts if t0 < p[0] <= t1]
+            if not sel:
+                self._mask[key] = (np.zeros(shape_, dtype=bool), 0)
+            else:
+                xs, ys = warp_transform("EPSG:4326", crs,
+                                        [p[1] for p in sel], [p[2] for p in sel])
+                geoms = [(mapping(Point(x, y).buffer(p[3], resolution=8)), 1)
+                         for x, y, p in zip(xs, ys, sel)]
+                m = features.rasterize(geoms, out_shape=shape_, transform=transform,
+                                       fill=0, dtype="uint8").astype(bool)
+                self._mask[key] = (m, len(sel))
+        return self._mask[key]
+
+
 # ---------------------------------------------------------------- metrics
 
 def acres(npix, px_area_sqm):
@@ -209,6 +273,7 @@ def compute(only_slug=None):
         sys.exit(1)
 
     perimsets = {}
+    hssets = {}
     rows = []
     skipped = {"no_match": 0, "no_perims": 0, "no_horizon": 0, "missing_tif": 0}
 
@@ -227,6 +292,10 @@ def compute(only_slug=None):
         if not ps.timeline:
             skipped["no_perims"] += 1
             continue
+        if slug not in hssets:
+            hssets[slug] = HotspotSet(slug)
+        hs = hssets[slug]
+        hs._mask.clear()  # keyed per grid+window; new run = new grid, drop old
 
         run_dt = datetime.strptime(entry["run_ts"], "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
         baseline = ps.latest_at_or_before(run_dt + timedelta(hours=BASELINE_TOL_H))
@@ -268,6 +337,10 @@ def compute(only_slug=None):
                 inter = pred_new & act_new
                 n_pred, n_act, n_int = int(pred_new.sum()), int(act_new.sum()), int(inter.sum())
                 n_union = n_pred + n_act - n_int
+                hs_mask, hs_n = hs.mask(run_dt, run_dt + timedelta(hours=H), crs, tfm, arr.shape)
+                hs_new = hs_mask & ~B
+                n_hs_new = int(hs_new.sum())
+                n_hs_hit = int((pred_new & hs_new).sum())
 
                 a_geom = ps.geom_utm(a_ems, crs)
                 act_new_geom = a_geom.difference(b_geom) if b_geom else a_geom
@@ -298,6 +371,10 @@ def compute(only_slug=None):
                     "iou": round(n_int / n_union, 4) if n_union else "",
                     "act_outside_acres": round(outside.area / SQM_PER_ACRE, 1),
                     "act_offgrid_frac": round(offgrid_frac, 4),
+                    "hs_n": hs_n,
+                    "hs_new_acres": acres(n_hs_new, px_area),
+                    "hs_hit_acres": acres(n_hs_hit, px_area),
+                    "hs_capture": round(n_hs_hit / n_hs_new, 4) if n_hs_new else "",
                     "expired_run": entry.get("expired", False),
                     "notes": ";".join(notes),
                 })

@@ -583,6 +583,75 @@ def snapshot_perimeters(archive, manifest, matches, slugs):
         archived[slug] = sorted(have)
 
 
+# ---------------------------------------------------------------- hotspots
+
+def _geom_bounds(gj):
+    xs, ys = [], []
+
+    def walk(c):
+        if isinstance(c[0], (int, float)):
+            xs.append(c[0])
+            ys.append(c[1])
+        else:
+            for cc in c:
+                walk(cc)
+    geom = gj.get("geometry", gj)
+    if geom.get("type") == "FeatureCollection":
+        for f in geom["features"]:
+            walk(f["geometry"]["coordinates"])
+    else:
+        walk(geom["coordinates"])
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def snapshot_hotspots(archive, manifest, matches, slugs):
+    """Archive VIIRS/MODIS detections per (fire, acq_date). Detections are
+    immutable once a day is past; we rewrite the last ~3 day files each run to
+    catch late-arriving detections."""
+    hs_state = manifest.setdefault("hotspots", {})
+    since = (utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
+    for slug in slugs:
+        if slug not in matches["matches"]:
+            continue
+        bounds = None
+        idx = archive.load_json(f"perimeter_archive/{slug}/index.json")
+        if idx and idx.get("index"):
+            latest = max(idx["index"], key=lambda p: p.get("date", ""))
+            ems = latest["path"].rsplit("/", 1)[-1]
+            gj = archive.load_json(f"perimeter_archive/{slug}/{ems}.geojson")
+            if gj:
+                w, s, e, n = _geom_bounds(gj)
+                bounds = (s - 0.2, w - 0.2, n + 0.2, e + 0.2)  # lat-first for the API
+        if bounds is None:
+            cent = next((en.get("centroid") for en in manifest["runs"].values()
+                         if en["slug"] == slug and en.get("centroid")), None)
+            if not cent:
+                continue
+            bounds = (cent[1] - 0.4, cent[0] - 0.4, cent[1] + 0.4, cent[0] + 0.4)
+        r = fetch(f"{CORNEA_BASE}/hotspots?bbox={bounds[0]},{bounds[1]},{bounds[2]},{bounds[3]}"
+                  f"&since={since}&limit=50000", tries=3)
+        if r is None:
+            bump("hs_errors")
+            continue
+        try:
+            gj = r.json()
+        except ValueError:
+            bump("hs_errors")
+            continue
+        byday = {}
+        for f in gj.get("features", []):
+            d = (f.get("properties") or {}).get("acq_date")
+            if d:
+                byday.setdefault(d, []).append(f)
+        for d, feats in byday.items():
+            archive.save_json(f"hotspot_archive/{slug}/{d}.geojson",
+                              {"type": "FeatureCollection", "features": feats})
+            bump("hs_day_files")
+        bump("hs_detections", sum(len(v) for v in byday.values()))
+        hs_state[slug] = sorted(set(hs_state.get(slug, [])) | set(byday))
+        time.sleep(0.1)
+
+
 # ---------------------------------------------------------------- push mode
 
 def push_local_to_r2(local_root):
@@ -632,6 +701,15 @@ def push_local_to_r2(local_root):
         idx = local.load_json(f"perimeter_archive/{slug}/index.json")
         if idx:
             remote.save_json(f"perimeter_archive/{slug}/index.json", idx)
+    for slug, days in (lman.get("hotspots") or {}).items():
+        have = set(rman.setdefault("hotspots", {}).get(slug, []))
+        for d in days:
+            key = f"hotspot_archive/{slug}/{d}.geojson"
+            if (local.root / key).exists():
+                remote.commit_file(key)
+                have.add(d)
+                bump("pushed_hs_days")
+        rman["hotspots"][slug] = sorted(have)
     lmatch = local.load_json("fire_matches.json")
     rmatch = remote.load_json("fire_matches.json")
     if lmatch and not rmatch:
@@ -697,6 +775,7 @@ def main():
 
     if not args.skip_perimeters:
         snapshot_perimeters(archive, manifest, matches, sorted(listed))
+        snapshot_hotspots(archive, manifest, matches, sorted(listed))
 
     manifest["generated"] = iso(utcnow())
     archive.save_json("manifest.json", manifest)
