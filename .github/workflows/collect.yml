@@ -7,9 +7,11 @@ on:
     - cron: "17 */2 * * *"
   workflow_dispatch: {}
 
-# Single writer for manifest.json in R2 — never run two collectors at once.
+# Single writer for manifest.json in the bucket — never run two collectors at
+# once. Group renamed from "collect": a run wedged in GitHub's queue (cancel
+# APIs 500'd) poisoned the old group and starved every scheduled run.
 concurrency:
-  group: collect
+  group: collect-v2
   cancel-in-progress: false
 
 jobs:
