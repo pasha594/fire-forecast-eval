@@ -240,7 +240,7 @@ async function select(slug) {
   if (f.centroid) map.setView([f.centroid[1], f.centroid[0]], 11);
 
   const selRun = document.getElementById("selRun");
-  selRun.innerHTML = f.runs.slice(0, 4).map((r, i) => {
+  selRun.innerHTML = f.runs.map((r, i) => {
     const tag = f.live[r] === false ? " — expired upstream"
       : i === 0 ? " (latest)" : "";
     return `<option value="${r}"${i === 0 ? " selected" : ""}>run ${fmtRun(r)}${tag}</option>`;
