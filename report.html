@@ -425,7 +425,7 @@ function drawTable(rows) {
   const top = rows.slice(0, 500);
   document.getElementById("rowsTbl").innerHTML =
     `<table class="rows"><thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody>` +
-    top.map((r, i) => `<tr data-i="${i}" style="cursor:pointer">${cols.map(c => `<td>${r[c] === null ? "" : r[c]}</td>`).join("")}</tr>`).join("") +
+    top.map((r, i) => `<tr data-i="${i}" style="cursor:pointer">${cols.map(c => `<td>${r[c] == null ? "" : r[c]}</td>`).join("")}</tr>`).join("") +
     `</tbody></table>` + (rows.length > 500 ? `<p class="note">showing 500 of ${rows.length} rows</p>` : "");
   document.querySelectorAll("#rowsTbl tbody tr").forEach(tr =>
     tr.addEventListener("click", () => inspectRow(top[+tr.dataset.i])));
