@@ -176,6 +176,8 @@ async function init() {
       .addTo(map).bindTooltip(`${f.title || f.slug}`).on("click", () => select(f.slug));
   }
   renderList();
+  const want = new URLSearchParams(location.search).get("fire");
+  if (want && state.fires.some(x => x.slug === want)) select(want);
   document.getElementById("search").addEventListener("input", renderList);
   for (const id of ["selRun", "selVar", "selPct"])
     document.getElementById(id).addEventListener("change", refreshWms);

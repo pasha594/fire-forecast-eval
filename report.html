@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ELMFIRE forecast skill vs actual perimeters</title>
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/proj4@2.11.0/dist/proj4.js"></script>
+<script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script>
 <style>
   :root {
     color-scheme: light;
@@ -119,8 +123,31 @@
   </div>
 
   <div class="card">
+    <h2>Fires in this report</h2>
+    <p class="note">Fires contributing rows under the current filters. Click a name to open it on
+    the forecast map.</p>
+    <div class="scrollx"><div id="firesTbl"></div></div>
+  </div>
+
+  <div class="card">
+    <h2>Inspect a calculation</h2>
+    <p class="note">Pick any scored row (or click one in the table below) to see the exact areas
+    behind its precision &amp; recall — recomputed in your browser from the same archived
+    time-of-arrival raster and Cornea perimeters the pipeline used.</p>
+    <div class="filters" style="margin-bottom:10px">
+      <div><label for="insFire">fire</label><select id="insFire" style="width:170px"></select></div>
+      <div><label for="insRun">run</label><select id="insRun" style="width:150px"></select></div>
+      <div><label for="insPct">percentile</label><select id="insPct"></select></div>
+      <div><label for="insH">horizon (h)</label><select id="insH"></select></div>
+    </div>
+    <div id="insMap" style="height:440px;border-radius:8px;border:1px solid var(--grid)"></div>
+    <div class="note" id="insLegend" style="margin-top:8px"></div>
+    <div id="insStats"></div>
+  </div>
+
+  <div class="card">
     <h2>Filtered rows</h2>
-    <details class="tableview"><summary>table view</summary>
+    <details class="tableview" open><summary>table view — click a row to inspect it</summary>
       <div class="scrollx"><div id="rowsTbl"></div></div>
     </details>
   </div>
@@ -338,8 +365,245 @@ function drawTable(rows) {
   const top = rows.slice(0, 500);
   document.getElementById("rowsTbl").innerHTML =
     `<table class="rows"><thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody>` +
-    top.map(r => `<tr>${cols.map(c => `<td>${r[c] === null ? "" : r[c]}</td>`).join("")}</tr>`).join("") +
+    top.map((r, i) => `<tr data-i="${i}" style="cursor:pointer">${cols.map(c => `<td>${r[c] === null ? "" : r[c]}</td>`).join("")}</tr>`).join("") +
     `</tbody></table>` + (rows.length > 500 ? `<p class="note">showing 500 of ${rows.length} rows</p>` : "");
+  document.querySelectorAll("#rowsTbl tbody tr").forEach(tr =>
+    tr.addEventListener("click", () => inspectRow(top[+tr.dataset.i])));
+}
+
+function drawFires(rows) {
+  const by = new Map();
+  for (const r of rows) {
+    const g = by.get(r.slug) || { slug: r.slug, n: 0, runs: new Set(), ps: [], rs: [], i: 0, p: 0, a: 0 };
+    g.n++; g.runs.add(r.run_ts);
+    if (r.precision !== null) g.ps.push(r.precision);
+    if (r.recall !== null) g.rs.push(r.recall);
+    g.i += r.inter_acres; g.p += r.pred_new_acres; g.a += r.act_new_acres;
+    by.set(r.slug, g);
+  }
+  const fires = [...by.values()].sort((x, y) => y.n - x.n);
+  document.getElementById("firesTbl").innerHTML =
+    `<table class="rows"><thead><tr><th>fire</th><th>rows</th><th>runs</th>` +
+    `<th>pooled precision</th><th>pooled recall</th><th>median P</th><th>median R</th></tr></thead><tbody>` +
+    fires.map(g => `<tr><td><a href="map.html?fire=${g.slug}" target="_blank">${g.slug}</a></td>` +
+      `<td>${g.n}</td><td>${g.runs.size}</td>` +
+      `<td>${g.p ? (g.i / g.p).toFixed(3) : ""}</td><td>${g.a ? (g.i / g.a).toFixed(3) : ""}</td>` +
+      `<td>${median(g.ps)?.toFixed(3) ?? ""}</td><td>${median(g.rs)?.toFixed(3) ?? ""}</td></tr>`).join("") +
+    `</tbody></table>`;
+}
+
+// ------------------------------------------- calculation inspector
+
+const BUCKET_KEYS = { toa: (r) => `forecast_archive/${r.slug}/${r.run_ts}/${r.percentile}.tif`,
+                      perim: (r, ms) => `perimeter_archive/${r.slug}/${ms}.geojson` };
+const CLS = { BASE: 1, TP: 2, FP: 3, FN: 4 };
+const CLS_STYLE = {
+  1: ["#898781", "baseline (perimeter at issuance — subtracted from both sides)"],
+  2: ["#1baf7a", "hit: predicted &amp; burned (counts toward precision and recall)"],
+  3: ["#2a78d6", "false alarm: predicted, didn't burn (hurts precision)"],
+  4: ["#e34948", "miss: burned, not predicted (hurts recall)"],
+};
+const INS = { map: null, layers: [], cacheToa: new Map(), cacheGj: new Map(), busy: false };
+
+async function fetchArchive(key, asJson) {
+  for (const url of [`raw/${key}`, `${BUCKET}/${key}`]) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) return asJson ? r.json() : r.arrayBuffer();
+    } catch (e) { /* next source */ }
+  }
+  throw new Error(`unreachable: ${key}`);
+}
+
+function projectRings(geom, fwd) {
+  const g = geom.geometry || geom;
+  const polys = g.type === "Polygon" ? [g.coordinates] : g.coordinates;
+  return polys.map(rings => rings.map(ring => ring.map(pt => fwd(pt))));
+}
+
+function rasterizeMask(polysUtm, meta) {
+  // canvas fill IS rasterization: draw rings in pixel space, read back alpha
+  const c = document.createElement("canvas");
+  c.width = meta.width; c.height = meta.height;
+  const ctx = c.getContext("2d", { willReadFrequently: true });
+  const path = new Path2D();
+  for (const rings of polysUtm) for (const ring of rings) {
+    ring.forEach(([X, Y], i) => {
+      const px = (X - meta.xmin) / meta.pw, py = (meta.ymax - Y) / meta.ph;
+      i ? path.lineTo(px, py) : path.moveTo(px, py);
+    });
+    path.closePath();
+  }
+  ctx.fillStyle = "#fff";
+  ctx.fill(path, "evenodd");
+  const a = ctx.getImageData(0, 0, meta.width, meta.height).data;
+  const mask = new Uint8Array(meta.width * meta.height);
+  for (let i = 0; i < mask.length; i++) mask[i] = a[i * 4 + 3] > 127 ? 1 : 0;
+  return mask;
+}
+
+const CLS_RGB = { 1: [137, 135, 129], 2: [27, 175, 122], 3: [42, 120, 214], 4: [227, 73, 72] };
+
+function buildClassifiedOverlay(meta, clsFlat, epsg) {
+  // render the class grid as a 4326 image: every display pixel is individually
+  // forward-projected into the UTM grid, so registration is pixel-accurate
+  const def = `+proj=utm +zone=${epsg - 32600} +datum=WGS84 +units=m +no_defs`;
+  const p = proj4("EPSG:4326", def);
+  const corners = [[meta.xmin, meta.ymax], [meta.xmin + meta.width * meta.pw, meta.ymax],
+                   [meta.xmin, meta.ymax - meta.height * meta.ph],
+                   [meta.xmin + meta.width * meta.pw, meta.ymax - meta.height * meta.ph]]
+    .map(xy => p.inverse(xy));
+  const lons = corners.map(c => c[0]), lats = corners.map(c => c[1]);
+  const w = Math.min(1400, meta.width), h = Math.round(w * meta.height / meta.width);
+  const [lonMin, lonMax] = [Math.min(...lons), Math.max(...lons)];
+  const [latMin, latMax] = [Math.min(...lats), Math.max(...lats)];
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const ctx = c.getContext("2d");
+  const img = ctx.createImageData(w, h);
+  for (let py = 0; py < h; py++) {
+    const lat = latMax - (py + 0.5) / h * (latMax - latMin);
+    for (let px = 0; px < w; px++) {
+      const lon = lonMin + (px + 0.5) / w * (lonMax - lonMin);
+      const [X, Y] = p.forward([lon, lat]);
+      const rc = Math.floor((meta.ymax - Y) / meta.ph), cc = Math.floor((X - meta.xmin) / meta.pw);
+      if (rc < 0 || rc >= meta.height || cc < 0 || cc >= meta.width) continue;
+      const k = clsFlat[rc * meta.width + cc];
+      if (!k) continue;
+      const o = (py * w + px) * 4, rgb = CLS_RGB[k];
+      img.data[o] = rgb[0]; img.data[o + 1] = rgb[1]; img.data[o + 2] = rgb[2]; img.data[o + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return { url: c.toDataURL(), bounds: [[latMin, lonMin], [latMax, lonMax]] };
+}
+
+async function renderInspection(row) {
+  if (INS.busy) { INS.pending = row; return; }  // queue the latest, never drop
+  INS.busy = true;
+  const stats = document.getElementById("insStats");
+  try {
+    stats.innerHTML = `<p class="note">loading raster + perimeters for ${row.slug} ${row.run_ts} pct${row.percentile} H${row.horizon_h}…</p>`;
+    const toaKey = BUCKET_KEYS.toa(row);
+    let georaster = INS.cacheToa.get(toaKey);
+    if (!georaster) {
+      georaster = await parseGeoraster(await fetchArchive(toaKey, false));
+      INS.cacheToa.set(toaKey, georaster);
+      if (INS.cacheToa.size > 6) INS.cacheToa.delete(INS.cacheToa.keys().next().value);
+    }
+    const epsg = georaster.projection;
+    if (epsg < 32600 || epsg > 32799) throw new Error(`unexpected raster CRS EPSG:${epsg}`);
+    const fwd = proj4("EPSG:4326", `+proj=utm +zone=${epsg - 32600} +datum=WGS84 +units=m +no_defs`).forward;
+    const meta = { width: georaster.width, height: georaster.height, xmin: georaster.xmin,
+                   ymax: georaster.ymax, pw: georaster.pixelWidth, ph: georaster.pixelHeight };
+    const getGj = async ms => {
+      if (!ms) return null;
+      if (!INS.cacheGj.has(ms)) INS.cacheGj.set(ms, await fetchArchive(BUCKET_KEYS.perim(row, ms), true));
+      return INS.cacheGj.get(ms);
+    };
+    const [baseGj, actGj] = await Promise.all([getGj(row.baseline_perim_ms), getGj(row.actual_perim_ms)]);
+    const baseMask = baseGj ? rasterizeMask(projectRings(baseGj, fwd), meta) : new Uint8Array(meta.width * meta.height);
+    const actMask = rasterizeMask(projectRings(actGj, fwd), meta);
+
+    const H = row.horizon_h, toa = georaster.values[0];
+    const clsFlat = new Uint8Array(meta.width * meta.height);
+    const counts = { 1: 0, 2: 0, 3: 0, 4: 0 };
+    for (let r = 0; r < meta.height; r++) {
+      const src = toa[r], off = r * meta.width;
+      for (let ccol = 0; ccol < meta.width; ccol++) {
+        const v = src[ccol];
+        const p = v > 0 && v <= H, b = baseMask[off + ccol], a = actMask[off + ccol];
+        let k = 0;
+        if (b) k = CLS.BASE;
+        else if (p && a) k = CLS.TP;
+        else if (p) k = CLS.FP;
+        else if (a) k = CLS.FN;
+        if (k) { clsFlat[off + ccol] = k; counts[k]++; }
+      }
+    }
+    const overlay = buildClassifiedOverlay(meta, clsFlat, epsg);
+
+    if (!INS.map) {
+      INS.map = L.map("insMap");
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        { maxZoom: 15, attribution: "OSM" }).addTo(INS.map);
+    }
+    for (const l of INS.layers) INS.map.removeLayer(l);
+    INS.layers = [L.imageOverlay(overlay.url, overlay.bounds, { opacity: 0.7 }).addTo(INS.map)];
+    if (baseGj) INS.layers.push(L.geoJSON(baseGj, { style: { color: "#52514e", weight: 1.5, dashArray: "4 3", fillOpacity: 0 } }).addTo(INS.map));
+    const actLayer = L.geoJSON(actGj, { style: { color: "#eb6834", weight: 2, fillOpacity: 0 } }).addTo(INS.map);
+    INS.layers.push(actLayer);
+    INS.map.fitBounds(actLayer.getBounds(), { padding: [16, 16] });
+
+    document.getElementById("insLegend").innerHTML = Object.entries(CLS_STYLE)
+      .map(([k, [c, label]]) => `<span style="background:${c};color:#fff;padding:0 6px;border-radius:3px">&nbsp;</span> ${label}`)
+      .join(" &nbsp; ");
+    const pxAc = meta.pw * meta.ph / 4046.8564224;
+    const ac = k => (counts[k] * pxAc);
+    const P = counts[2] + counts[3] ? counts[2] / (counts[2] + counts[3]) : null;
+    const R = counts[2] + counts[4] ? counts[2] / (counts[2] + counts[4]) : null;
+    const fmtA = x => x.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    stats.innerHTML = `<table class="delta"><thead><tr><th></th><th>hit</th><th>false alarm</th>` +
+      `<th>miss</th><th>baseline</th><th>precision</th><th>recall</th></tr></thead><tbody>` +
+      `<tr><td>in-browser</td><td>${fmtA(ac(2))} ac</td><td>${fmtA(ac(3))} ac</td>` +
+      `<td>${fmtA(ac(4))} ac</td><td>${fmtA(ac(1))} ac</td>` +
+      `<td>${P === null ? "" : P.toFixed(4)}</td><td>${R === null ? "" : R.toFixed(4)}</td></tr>` +
+      `<tr><td>pipeline (metrics.csv)</td><td>${fmtA(row.inter_acres)} ac</td>` +
+      `<td>${fmtA(row.pred_new_acres - row.inter_acres)} ac</td>` +
+      `<td>${fmtA(row.act_new_acres - row.inter_acres)} ac</td><td>${fmtA(row.baseline_acres)} ac</td>` +
+      `<td>${row.precision ?? ""}</td><td>${row.recall ?? ""}</td></tr></tbody></table>` +
+      `<p class="note">precision = hit / (hit + false&nbsp;alarm) · recall = hit / (hit + miss). Small ` +
+      `differences vs the pipeline come from canvas vs GDAL polygon rasterization at the pixel edge.</p>`;
+  } catch (e) {
+    stats.innerHTML = `<p class="note" style="color:#b3591f">couldn't render: ${e && (e.message || e)}</p>`;
+  } finally {
+    INS.busy = false;
+    if (INS.pending) {
+      const next = INS.pending;
+      INS.pending = null;
+      renderInspection(next);
+    }
+  }
+}
+
+function insSelected() {
+  const [f, run, pct, h] = ["insFire", "insRun", "insPct", "insH"].map(id => document.getElementById(id).value);
+  return DATA.find(r => r.slug === f && r.run_ts === run && r.percentile === pct &&
+                        String(r.horizon_h) === h && r.actual_perim_ms);
+}
+
+function populateInspector(level, render = true) {
+  const rows = DATA.filter(r => r.actual_perim_ms);
+  const sel = id => document.getElementById(id);
+  const fill = (id, vals, keep) => {
+    const el = sel(id), prev = el.value;
+    el.innerHTML = vals.map(v => `<option>${v}</option>`).join("");
+    if (keep && vals.map(String).includes(prev)) el.value = prev;
+  };
+  if (level <= 0) fill("insFire", [...new Set(rows.map(r => r.slug))].sort(), true);
+  const f = sel("insFire").value;
+  if (level <= 1) fill("insRun", [...new Set(rows.filter(r => r.slug === f).map(r => r.run_ts))].sort().reverse(), true);
+  const run = sel("insRun").value;
+  if (level <= 2) fill("insPct", [...new Set(rows.filter(r => r.slug === f && r.run_ts === run).map(r => r.percentile))].sort((a, b) => a - b), true);
+  const pct = sel("insPct").value;
+  if (level <= 3) fill("insH", [...new Set(rows.filter(r => r.slug === f && r.run_ts === run && r.percentile === pct).map(r => r.horizon_h))].sort((a, b) => a - b), true);
+  if (render) {
+    const row = insSelected();
+    if (row) renderInspection(row);
+  }
+}
+
+function inspectRow(r) {
+  document.getElementById("insFire").value = r.slug;
+  populateInspector(1, false);
+  document.getElementById("insRun").value = r.run_ts;
+  populateInspector(2, false);
+  document.getElementById("insPct").value = r.percentile;
+  populateInspector(3, false);
+  document.getElementById("insH").value = String(r.horizon_h);
+  const row = insSelected();
+  if (row) renderInspection(row);
+  document.getElementById("insMap").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
 function redraw() {
@@ -348,6 +612,7 @@ function redraw() {
   drawHorizon(rows);
   drawPct(rows);
   drawUpdate(rows);
+  drawFires(rows);
   drawTable(rows);
 }
 
@@ -391,7 +656,10 @@ function start() {
   sel.innerHTML = HORIZONS.map(h => `<option value="${h}"${h === 24 ? " selected" : ""}>${h}</option>`).join("");
   for (const id of ["fMinGrowth", "fMaxOff", "fOffgrid", "fH", "fMetric", "fAgg"])
     document.getElementById(id).addEventListener("change", redraw);
+  [["insFire", 1], ["insRun", 2], ["insPct", 3], ["insH", 4]].forEach(([id, lvl]) =>
+    document.getElementById(id).addEventListener("change", () => populateInspector(lvl)));
   redraw();
+  populateInspector(0);
 }
 
 init();
