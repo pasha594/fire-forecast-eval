@@ -79,9 +79,10 @@
       <option value="90">90th percentile</option>
     </select>
     <div id="timerow" hidden>
-      <label class="row" style="display:block">forecast hour: <b id="timelabel"></b>
+      <label class="row" style="display:block"><span id="timePrefix">forecast hour:</span>
+        <b id="timelabel"></b>
         <input type="range" id="timeslider" min="0" max="168" value="12"></label>
-      <div class="note">this variable is an hourly snapshot — slide through the forecast</div>
+      <div class="note" id="timenote">this variable is an hourly snapshot — slide through the forecast</div>
     </div>
     <label class="row">opacity <input type="range" id="opacity" min="10" max="100" value="70"></label>
     <div class="note" id="wmsnote"></div>
@@ -125,6 +126,9 @@ const state = {
   perimIndex: [],           // [{ems, date}]
   hotLayer: null,
   hotMarkers: [],
+  toaMaxH: 336,        // time-of-arrival threshold slider (show arrival <= this)
+  granIdx: 12,         // hourly-mosaic forecast-hour slider
+  georasterCache: new Map(),
   seq: 0,
 };
 
@@ -179,13 +183,26 @@ async function init() {
     state.wmsLayer && state.wmsLayer.setOpacity(+document.getElementById("opacity").value / 100));
   const slider = document.getElementById("timeslider");
   slider.addEventListener("input", () => {           // live label while dragging
+    const variable = document.getElementById("selVar").value;
     const run = document.getElementById("selRun").value;
-    if (run) timeParam(run);
+    if (TIMED_VARS.has(variable)) {
+      state.granIdx = +slider.value;
+      if (run) timeParam(run);
+    } else if (variable === "time-of-arrival") {
+      state.toaMaxH = +slider.value;
+      document.getElementById("timelabel").textContent = `+${slider.value}h`;
+    }
   });
-  slider.addEventListener("change", () => {          // reload tiles on release
+  slider.addEventListener("change", () => {          // apply on release
+    const variable = document.getElementById("selVar").value;
     const run = document.getElementById("selRun").value;
-    if (state.wmsLayer && run && TIMED_VARS.has(document.getElementById("selVar").value))
-      state.wmsLayer.setParams({ time: timeParam(run) });
+    if (!run) return;
+    if (TIMED_VARS.has(variable)) {
+      if (state.wmsLayer && state.wmsLayer.setParams)
+        state.wmsLayer.setParams({ time: timeParam(run) });
+    } else if (variable === "time-of-arrival") {
+      refreshWms();  // rebuilds live SLD filter or re-renders the archived raster
+    }
   });
   document.getElementById("chkHot").addEventListener("change", refreshHotspots);
   let hotPending = false;   // setTimeout, not rAF — rAF pauses in hidden tabs
@@ -278,20 +295,22 @@ function refreshWms() {
   note.textContent = "";
   note.className = "note";
   const timed = TIMED_VARS.has(variable);
-  document.getElementById("timerow").hidden = !timed;
+  configureTimeSlider(variable);
   if (!f || !run || !variable) return;
+  if (variable === "time-of-arrival") {
+    // always client-rendered from our archive: the threshold slider needs pixel
+    // access, and pyrecast's geoserver rejects SLD_BODY restyling
+    renderArchivedToa(f, run, pct, note, f.live[run] === false);
+    return;
+  }
   if (f.live[run] === false) {
     document.getElementById("timerow").hidden = true;
-    if (variable === "time-of-arrival") {
-      renderArchivedToa(f, run, pct, note);
-    } else {
-      note.textContent = "this run has aged off pyrecast's geoserver — live tiles no longer " +
-        "exist. This variable is archived as hourly tars " +
-        `(forecast_archive/${f.slug}/${run}/${pct}_${variable}.tar in the bucket, if it was ` +
-        "captured before pyrecast purged the granules); extract locally to view. " +
-        "Time-of-arrival renders from the archive — select it above.";
-      note.className = "warn";
-    }
+    note.textContent = "this run has aged off pyrecast's geoserver — live tiles no longer " +
+      "exist. This variable is archived as hourly tars " +
+      `(forecast_archive/${f.slug}/${run}/${pct}_${variable}.tar in the bucket, if it was ` +
+      "captured before pyrecast purged the granules); extract locally to view. " +
+      "Time-of-arrival renders from the archive — select it above.";
+    note.className = "warn";
     return;
   }
   const layer = `fire-spread-forecast_${f.slug}_${run}:elmfire_landfire_${pct}_${variable}`;
@@ -313,6 +332,26 @@ function refreshWms() {
   legend.hidden = false;
 }
 
+function configureTimeSlider(variable) {
+  const row = document.getElementById("timerow");
+  const s = document.getElementById("timeslider");
+  const prefix = document.getElementById("timePrefix");
+  const tnote = document.getElementById("timenote");
+  if (TIMED_VARS.has(variable)) {
+    row.hidden = false;
+    s.min = 0; s.max = 168; s.value = state.granIdx;
+    prefix.textContent = "forecast hour:";
+    tnote.textContent = "this variable is an hourly snapshot — slide through the forecast";
+  } else if (variable === "time-of-arrival") {
+    row.hidden = false;
+    s.min = 1; s.max = 336; s.value = state.toaMaxH;
+    prefix.textContent = "show arrival within:";
+    tnote.textContent = "hides areas the model reaches later than the slider";
+  } else {
+    row.hidden = true;
+  }
+}
+
 // ------------------------------------------------- archived raster rendering
 
 // hours-to-arrival bins, blue (imminent) -> red (late), like pyrecast's styling
@@ -320,42 +359,72 @@ const TOA_BINS = [[12, "#08306b"], [24, "#2166ac"], [48, "#4393c3"], [72, "#92c5
                   [96, "#c6dbef"], [120, "#fdd0a2"], [168, "#f4a582"],
                   [240, "#d6604d"], [Infinity, "#b2182b"]];
 
-function toaColor(v) {
+function toaColor(v, maxH) {
   if (!v || v <= 0 || isNaN(v)) return null;  // nodata=0 = not forecast to burn
+  if (maxH && v > maxH) return null;          // beyond the arrival-time slider
   for (const [h, c] of TOA_BINS) if (v <= h) return c;
   return null;
 }
 
-async function renderArchivedToa(f, run, pct, note) {
-  note.textContent = "expired upstream — loading archived time-of-arrival…";
+function toaLegendHtml(maxH) {
+  return "hours to arrival: " + TOA_BINS
+    .filter(([h]) => h !== Infinity && h <= Math.max(maxH, 12))
+    .map(([h, c]) => `<span style="background:${c};color:#fff;padding:0 4px;border-radius:3px">&le;${h}</span>`)
+    .join(" ");
+}
+
+async function renderArchivedToa(f, run, pct, note, expired) {
+  note.textContent = "loading time-of-arrival raster…";
   const key = `forecast_archive/${f.slug}/${run}/${pct}.tif`;
-  let buf = null;
-  for (const url of [`raw/${key}`, `${BUCKET}/${key}`]) {
-    try {
-      const r = await fetch(url);
-      if (r.ok) { buf = await r.arrayBuffer(); break; }
-    } catch (e) { /* local 404 or bucket CORS -> try next */ }
+  let georaster = state.georasterCache.get(key);
+  if (!georaster) {
+    let buf = null;
+    for (const url of [`raw/${key}`, `${BUCKET}/${key}`]) {
+      try {
+        const r = await fetch(url);
+        if (r.ok) { buf = await r.arrayBuffer(); break; }
+      } catch (e) { /* local 404 or bucket CORS -> try next */ }
+    }
+    if (!buf) {
+      if (!expired) {
+        // too fresh to be archived yet (collector runs every 2h) — fall back to
+        // pyrecast's live tiles; the arrival slider needs pixel access, so hide it
+        document.getElementById("timerow").hidden = true;
+        const layer = `fire-spread-forecast_${f.slug}_${run}:elmfire_landfire_${pct}_time-of-arrival`;
+        state.wmsLayer = L.tileLayer.wms(WMS, {
+          layers: layer, format: "image/png", transparent: true, version: "1.1.1",
+          opacity: +document.getElementById("opacity").value / 100,
+        }).addTo(map);
+        note.textContent = layer + " (live tiles — not yet archived, arrival slider unavailable)";
+        const legend = document.getElementById("legendimg");
+        legend.src = `${WMS}?REQUEST=GetLegendGraphic&VERSION=1.1.1&FORMAT=image/png&LAYER=${encodeURIComponent(layer)}&transparent=true`;
+        legend.hidden = false;
+        return;
+      }
+      note.textContent = "expired upstream, and the archived tif isn't reachable — run " +
+        "`analyze.py --sync` (or add a CORS rule to the bucket for this origin).";
+      note.className = "warn";
+      return;
+    }
+    georaster = await parseGeoraster(buf);
+    state.georasterCache.set(key, georaster);
+    if (state.georasterCache.size > 12) {  // ~2MB each; drop the oldest
+      state.georasterCache.delete(state.georasterCache.keys().next().value);
+    }
   }
-  if (!buf) {
-    note.textContent = "expired upstream, and the archived tif isn't reachable — run " +
-      "`analyze.py --sync` (or add a CORS rule to the R2 bucket for this origin).";
-    note.className = "warn";
-    return;
-  }
-  const georaster = await parseGeoraster(buf);
   // selection may have moved on while the tif downloaded
   if (state.sel !== f.slug || document.getElementById("selRun").value !== run) return;
+  const maxH = state.toaMaxH;
   if (state.wmsLayer) { map.removeLayer(state.wmsLayer); }  // raster replaces WMS slot
   state.wmsLayer = new GeoRasterLayer({
     georaster, resolution: 192, pane: "overlayPane",
     opacity: +document.getElementById("opacity").value / 100,
-    pixelValuesToColorFn: vals => toaColor(vals[0]),
+    pixelValuesToColorFn: vals => toaColor(vals[0], maxH),
   }).addTo(map);
-  note.innerHTML = "expired upstream — showing <b>archived</b> time-of-arrival " +
-    "(hours to arrival: " +
-    TOA_BINS.slice(0, 8).map(([h, c]) =>
-      `<span style="background:${c};color:#fff;padding:0 4px;border-radius:3px">≤${h}</span>`
-    ).join(" ") + ")";
+  document.getElementById("timelabel").textContent = `+${maxH}h`;
+  note.innerHTML = (expired ? "expired upstream — showing <b>archived</b> time-of-arrival"
+                            : "time-of-arrival, client-rendered from the archive") +
+    "<br>" + toaLegendHtml(maxH);
   note.className = "note";
 }
 
