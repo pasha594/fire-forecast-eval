@@ -771,11 +771,23 @@ def main():
         overrides = json.loads((repo / "overrides.json").read_text()).get("overrides", {})
     except (OSError, ValueError):
         overrides = {}
-    matches = run_matching(archive, manifest, sorted(listed), overrides)
+    # ground truth must keep accumulating for up to 14 days AFTER a fire's last
+    # run (long scoring horizons), even once pyrecast delists it
+    cutoff = utcnow() - timedelta(days=15)
+    scoring = set(listed)
+    for e in manifest["runs"].values():
+        try:
+            if datetime.strptime(e["run_ts"], "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc) >= cutoff:
+                scoring.add(e["slug"])
+        except ValueError:
+            pass
+    if args.only:
+        scoring &= set(args.only)
+    matches = run_matching(archive, manifest, sorted(scoring), overrides)
 
     if not args.skip_perimeters:
-        snapshot_perimeters(archive, manifest, matches, sorted(listed))
-        snapshot_hotspots(archive, manifest, matches, sorted(listed))
+        snapshot_perimeters(archive, manifest, matches, sorted(scoring))
+        snapshot_hotspots(archive, manifest, matches, sorted(scoring))
 
     manifest["generated"] = iso(utcnow())
     archive.save_json("manifest.json", manifest)
