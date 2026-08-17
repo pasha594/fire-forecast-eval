@@ -97,6 +97,11 @@ def sync_bucket(url):
             if info.get("ok"):
                 wanted.append(f"forecast_archive/{run_key}/{pct}.tif")
     for slug, epochs in (manifest.get("perimeters") or {}).items():
+        # index.json is MUTABLE (the perimeter timeline grows) — always refresh,
+        # or a cached copy hides newer snapshots from PerimeterSet
+        idx = RAW / "perimeter_archive" / slug / "index.json"
+        if idx.exists():
+            idx.unlink()
         wanted.append(f"perimeter_archive/{slug}/index.json")
         wanted += [f"perimeter_archive/{slug}/{e}.geojson" for e in epochs]
     for slug, days in (manifest.get("hotspots") or {}).items():
