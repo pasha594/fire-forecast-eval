@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ELMFIRE forecast skill vs actual perimeters</title>
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/proj4@2.11.0/dist/proj4.js"></script>
@@ -85,49 +84,9 @@
       <input type="number" id="fMaxOff" value="6" min="0" step="1"></div>
     <div class="chk"><input type="checkbox" id="fOffgrid" checked>
       <label for="fOffgrid" style="margin:0">exclude &gt;10% off-grid growth</label></div>
-    <div><label for="fH">horizon for percentile view (h)</label>
-      <select id="fH"></select></div>
-    <div><label for="fMetric">update-view metric</label>
-      <select id="fMetric"><option value="precision">precision</option>
-      <option value="recall">recall</option></select></div>
   </div>
 
   <div class="tiles" id="tiles" hidden></div>
-
-  <div class="card">
-    <h2>Skill vs forecast horizon</h2>
-    <p class="note">Per weather percentile (darker blue = higher percentile). Pooled = area-weighted
-    (&Sigma;intersection / &Sigma;area); median = median of per-row values. Toggle:
-    <select id="fAgg"><option value="pooled">pooled</option><option value="median">median</option></select></p>
-    <div class="row2"><div id="plotPH" class="plot"></div><div id="plotRH" class="plot"></div></div>
-    <div class="empty" id="emptyH" hidden></div>
-    <div id="hsBlock" hidden>
-      <p class="note" style="margin-top:10px"><b>Hotspot capture</b> — share of satellite-detected
-      active-fire area (VIIRS 375m / MODIS 1km footprints) falling inside the prediction. Unlike
-      perimeter recall, detections carry exact timestamps, so each window (run, run+H] is matched
-      with zero temporal tolerance.</p>
-      <div id="plotHS" class="plot" style="height:300px"></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Skill vs weather percentile</h2>
-    <p class="note">At the horizon selected above. Higher percentiles predict more spread:
-    precision should fall, recall should rise.</p>
-    <div id="plotPct" class="plot" style="height:320px"></div>
-    <div class="empty" id="emptyPct" hidden></div>
-  </div>
-
-  <div class="card">
-    <h2>Do fresher forecasts do better?</h2>
-    <p class="note">Rows scored against the <em>same</em> (fire, valid date, percentile) grouped;
-    within a group the horizon is the forecast's lead time, so a down-slope left-to-right means
-    fresher forecasts beat staler ones. Thin lines connect the same group; the heavy line is the
-    median across groups.</p>
-    <div id="plotUpd" class="plot"></div>
-    <div class="empty" id="emptyUpd" hidden></div>
-    <div id="deltaTbl"></div>
-  </div>
 
   <div class="card">
     <h2>Fires in this report</h2>
@@ -165,24 +124,7 @@
 "use strict";
 const BUCKET = "https://f005.backblazeb2.com/file/fire-forecast-archive";
 const CORNEA = "https://fire-api-prod.web.app";
-const PCTS = ["10", "30", "50", "70", "90"];
-const PCT_COLOR = { 10: "#86b6ef", 30: "#5598e7", 50: "#2a78d6", 70: "#1c5cab", 90: "#104281" };
-const HORIZONS = [12, 24, 48, 72, 96, 120, 168, 240, 336];
-const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
-const LAYOUT = {
-  paper_bgcolor: css("--surface"), plot_bgcolor: css("--surface"),
-  font: { family: 'system-ui, -apple-system, "Segoe UI", sans-serif', size: 12, color: css("--ink") },
-  margin: { l: 48, r: 12, t: 30, b: 42 },
-  xaxis: { gridcolor: css("--grid"), linecolor: css("--axis"), zeroline: false,
-           title: { font: { color: css("--ink-2") } }, tickfont: { color: css("--muted") } },
-  yaxis: { gridcolor: css("--grid"), linecolor: css("--axis"), zeroline: false, range: [0, 1.02],
-           title: { font: { color: css("--ink-2") } }, tickfont: { color: css("--muted") } },
-  legend: { orientation: "h", y: 1.14, font: { color: css("--ink-2") } },
-  hovermode: "closest",
-};
-const CONFIG = { displayModeBar: false, responsive: true };
-const logx = { type: "log", tickvals: HORIZONS, ticktext: HORIZONS.map(String) };
 
 function parseCSV(text) {
   const lines = text.trim().split(/\r?\n/);
@@ -220,166 +162,6 @@ function filtered() {
     (!exOff || r.act_offgrid_frac <= 0.10));
 }
 
-function aggregate(rows, agg) {
-  // -> {pct: {H: {precision, recall, n}}}
-  const out = {};
-  for (const pct of PCTS) {
-    out[pct] = {};
-    for (const H of HORIZONS) {
-      const g = rows.filter(r => r.percentile === pct && r.horizon_h === H);
-      if (!g.length) continue;
-      let p, rc;
-      if (agg === "pooled") {
-        const si = g.reduce((s, r) => s + r.inter_acres, 0);
-        const sp = g.reduce((s, r) => s + r.pred_new_acres, 0);
-        const sa = g.reduce((s, r) => s + r.act_new_acres, 0);
-        p = sp > 0 ? si / sp : null; rc = sa > 0 ? si / sa : null;
-      } else {
-        p = median(g.map(r => r.precision)); rc = median(g.map(r => r.recall));
-      }
-      out[pct][H] = { precision: p, recall: rc, n: g.length };
-    }
-  }
-  return out;
-}
-
-function drawHorizon(rows) {
-  const agg = document.getElementById("fAgg").value;
-  const a = aggregate(rows, agg);
-  const any = PCTS.some(p => Object.keys(a[p]).length);
-  document.getElementById("emptyH").hidden = any;
-  if (!any) {
-    document.getElementById("emptyH").textContent =
-      "No rows pass the filters yet — scoring rows accumulate as perimeter snapshots land over the next days.";
-    Plotly.purge("plotPH"); Plotly.purge("plotRH");
-    document.getElementById("plotPH").innerHTML = ""; document.getElementById("plotRH").innerHTML = "";
-    return;
-  }
-  for (const [div, metric, name] of [["plotPH", "precision", "Precision"], ["plotRH", "recall", "Recall"]]) {
-    const traces = PCTS.map(pct => {
-      const hs = HORIZONS.filter(H => a[pct][H] && a[pct][H][metric] !== null);
-      return {
-        x: hs, y: hs.map(H => a[pct][H][metric]),
-        customdata: hs.map(H => a[pct][H].n),
-        name: pct + "th", mode: "lines+markers",
-        line: { color: PCT_COLOR[pct], width: 2 }, marker: { size: 8 },
-        hovertemplate: pct + "th pct · %{x}h: %{y:.2f} (n=%{customdata})<extra></extra>",
-      };
-    }).filter(t => t.x.length);
-    Plotly.react(div, traces, Object.assign({}, LAYOUT, {
-      xaxis: Object.assign({}, LAYOUT.xaxis, logx, { title: { text: "forecast horizon (h)" } }),
-      yaxis: Object.assign({}, LAYOUT.yaxis, { title: { text: name.toLowerCase() + " (" + agg + ")" } }),
-    }), CONFIG);
-  }
-}
-
-function drawHS(rows) {
-  const has = rows.some(r => r.hs_capture !== null && r.hs_capture !== undefined);
-  document.getElementById("hsBlock").hidden = !has;
-  if (!has) return;
-  const agg = document.getElementById("fAgg").value;
-  const traces = PCTS.map(pct => {
-    const pts = [];
-    for (const H of HORIZONS) {
-      const g = rows.filter(r => r.percentile === pct && r.horizon_h === H && r.hs_new_acres > 0);
-      if (!g.length) continue;
-      const v = agg === "pooled"
-        ? g.reduce((s, r) => s + r.hs_hit_acres, 0) / g.reduce((s, r) => s + r.hs_new_acres, 0)
-        : median(g.map(r => r.hs_capture));
-      pts.push([H, v, g.length]);
-    }
-    return { x: pts.map(p => p[0]), y: pts.map(p => p[1]), customdata: pts.map(p => p[2]),
-             name: pct + "th", mode: "lines+markers",
-             line: { color: PCT_COLOR[pct], width: 2 }, marker: { size: 8 },
-             hovertemplate: pct + "th pct · %{x}h: %{y:.2f} (n=%{customdata})<extra></extra>" };
-  }).filter(t => t.x.length);
-  Plotly.react("plotHS", traces, Object.assign({}, LAYOUT, {
-    xaxis: Object.assign({}, LAYOUT.xaxis, logx, { title: { text: "forecast horizon (h)" } }),
-    yaxis: Object.assign({}, LAYOUT.yaxis, { title: { text: "hotspot capture (" + agg + ")" } }),
-  }), CONFIG);
-}
-
-function drawPct(rows) {
-  const H = +document.getElementById("fH").value;
-  const g = rows.filter(r => r.horizon_h === H);
-  document.getElementById("emptyPct").hidden = !!g.length;
-  if (!g.length) {
-    document.getElementById("emptyPct").textContent = "No rows at this horizon yet.";
-    Plotly.purge("plotPct"); document.getElementById("plotPct").innerHTML = "";
-    return;
-  }
-  const a = aggregate(g, document.getElementById("fAgg").value);
-  const mk = (metric, colorVar, name) => ({
-    x: PCTS, y: PCTS.map(p => a[p][H] ? a[p][H][metric] : null),
-    name, mode: "lines+markers",
-    line: { color: css(colorVar), width: 2 }, marker: { size: 9 },
-    hovertemplate: name + " @ %{x}th pct: %{y:.2f}<extra></extra>",
-  });
-  Plotly.react("plotPct", [mk("precision", "--s1", "precision"), mk("recall", "--s2", "recall")],
-    Object.assign({}, LAYOUT, {
-      xaxis: Object.assign({}, LAYOUT.xaxis, { title: { text: "weather percentile" }, type: "category" }),
-    }), CONFIG);
-}
-
-function updateGroups(rows) {
-  // (slug | valid-date | percentile) -> [{lead, value, run_ts}]
-  const metric = document.getElementById("fMetric").value;
-  const by = new Map();
-  for (const r of rows) {
-    if (r[metric] === null) continue;
-    const key = r.slug + "|" + r.valid_dt_utc.slice(0, 10) + "|" + r.percentile;
-    if (!by.has(key)) by.set(key, []);
-    by.get(key).push({ lead: r.horizon_h, v: r[metric], run: r.run_ts });
-  }
-  return [...by.entries()].map(([k, v]) => ({ key: k, pts: v.sort((x, y) => x.lead - y.lead) }))
-    .filter(g => g.pts.length >= 2);
-}
-
-function drawUpdate(rows) {
-  const metric = document.getElementById("fMetric").value;
-  const groups = updateGroups(rows);
-  document.getElementById("emptyUpd").hidden = !!groups.length;
-  if (!groups.length) {
-    document.getElementById("emptyUpd").textContent =
-      "Needs the same valid date covered by runs at different lead times — appears after ~2 days of collection.";
-    Plotly.purge("plotUpd"); document.getElementById("plotUpd").innerHTML = "";
-    document.getElementById("deltaTbl").innerHTML = "";
-    return;
-  }
-  const traces = groups.map(g => ({
-    x: g.pts.map(p => p.lead), y: g.pts.map(p => p.v),
-    mode: "lines+markers", showlegend: false, hoverinfo: "skip",
-    line: { color: css("--axis"), width: 1 }, marker: { size: 5, color: css("--muted") },
-    opacity: 0.45,
-  }));
-  const leads = [...new Set(groups.flatMap(g => g.pts.map(p => p.lead)))].sort((a, b) => a - b);
-  traces.push({
-    x: leads, y: leads.map(L => median(groups.flatMap(g => g.pts.filter(p => p.lead === L).map(p => p.v)))),
-    name: "median across groups", mode: "lines+markers",
-    line: { color: css("--s1"), width: 3 }, marker: { size: 9 },
-    hovertemplate: "lead %{x}h: median " + metric + " %{y:.2f}<extra></extra>",
-  });
-  Plotly.react("plotUpd", traces, Object.assign({}, LAYOUT, {
-    xaxis: Object.assign({}, LAYOUT.xaxis, logx, { title: { text: "lead time (h) — right = staler forecast" } }),
-    yaxis: Object.assign({}, LAYOUT.yaxis, { title: { text: metric } }),
-  }), CONFIG);
-
-  // adjacent-lead deltas within groups (fresh minus stale)
-  const pairs = [[24, 48], [48, 72], [72, 96], [96, 120], [120, 168]];
-  const rowsHtml = pairs.map(([a, b]) => {
-    const ds = groups.map(g => {
-      const pa = g.pts.find(p => p.lead === a), pb = g.pts.find(p => p.lead === b);
-      return pa && pb ? pa.v - pb.v : null;
-    }).filter(d => d !== null);
-    if (!ds.length) return "";
-    const m = median(ds);
-    return `<tr><td>${a}h vs ${b}h lead</td><td>${ds.length}</td><td>${m >= 0 ? "+" : ""}${m.toFixed(3)}</td></tr>`;
-  }).join("");
-  document.getElementById("deltaTbl").innerHTML = rowsHtml
-    ? `<table class="delta"><thead><tr><th>comparison</th><th>groups</th>
-       <th>median &Delta;${metric} (fresh &minus; stale)</th></tr></thead><tbody>${rowsHtml}</tbody></table>`
-    : "";
-}
 
 function drawTiles(rows) {
   const t = document.getElementById("tiles");
@@ -731,10 +513,6 @@ function inspectRow(r) {
 function redraw() {
   const rows = filtered();
   drawTiles(rows);
-  drawHorizon(rows);
-  drawHS(rows);
-  drawPct(rows);
-  drawUpdate(rows);
   drawFires(rows);
   drawTable(rows);
 }
@@ -775,9 +553,7 @@ async function init() {
 
 function start() {
   document.getElementById("filters").hidden = false;
-  const sel = document.getElementById("fH");
-  sel.innerHTML = HORIZONS.map(h => `<option value="${h}"${h === 24 ? " selected" : ""}>${h}</option>`).join("");
-  for (const id of ["fMinGrowth", "fMaxOff", "fOffgrid", "fH", "fMetric", "fAgg"])
+  for (const id of ["fMinGrowth", "fMaxOff", "fOffgrid"])
     document.getElementById(id).addEventListener("change", redraw);
   [["insFire", 1], ["insRun", 2], ["insPct", 3], ["insH", 4]].forEach(([id, lvl]) =>
     document.getElementById(id).addEventListener("change", () => populateInspector(lvl)));
