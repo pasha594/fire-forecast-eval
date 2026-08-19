@@ -15,7 +15,7 @@ which retains dated perimeter snapshots per fire (~2–3/day for active fires).
 | file | what |
 |---|---|
 | `collect.py` | scraper/archiver + fire matcher. CI runs it against the bucket; `--local` archives to `raw/` |
-| `.github/workflows/collect.yml` | cron `17 */2 * * *` + manual dispatch; concurrency group = single writer |
+| `.github/workflows/collect.yml` | cron `17 * * * *` + manual dispatch; concurrency group = single writer |
 | `.github/workflows/analyze.yml` | cron 2x daily: syncs ToA+perimeters on the runner, recomputes and publishes `metrics.csv` to the bucket — no laptop needed; `report.html` falls back to the bucket copy |
 | `analyze.py` | local: syncs the archive, computes growth-only P/R → `data/metrics.csv` |
 | `report.html` | static Plotly report over `data/metrics.csv` |

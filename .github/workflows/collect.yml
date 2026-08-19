@@ -2,9 +2,10 @@ name: collect
 
 on:
   schedule:
-    # every 2h: pyrecast purges the hourly variable granules within ~2-4h of
-    # publishing, so the poll interval bounds worst-case granule loss
-    - cron: "17 */2 * * *"
+    # hourly: pyrecast's publish lag grew to ~5-6h (files 403 while staging) and
+    # retention shrank, so more attempts inside the narrow public window matter;
+    # the poll interval also bounds worst-case granule loss
+    - cron: "17 * * * *"
   workflow_dispatch: {}
 
 # Single writer for manifest.json in the bucket — never run two collectors at
