@@ -36,6 +36,13 @@ manifest.json                                           # collector state (sourc
 fire_matches.json                                       # slug -> cornea fire
 ```
 
+Since ~Aug 15 the static host 403s ToA tifs during a ~5-6h staging window
+(occasionally forever); the collector falls back to a WCS `GetCoverage` from
+their geoserver (verified bit-identical, recompressed before archiving,
+`via: wcs` in the manifest). The fallback is ToA-only by design — GetCoverage
+is server-side work for them, and the hourly granules would need thousands of
+calls per run.
+
 Tarring the ~169 hourly granules per variable into one object is deliberate:
 it keeps bucket write operations ~100x below free-tier caps. Note two
 upstream quirks: percentile tifs appear over ~2h after a run is listed, and

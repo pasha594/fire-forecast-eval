@@ -31,6 +31,7 @@ from pathlib import Path
 import requests
 
 PYRECAST_BASE = "https://data.pyrecast.org/fire_spread_forecast/"
+GEOSERVER_OWS = "https://geoserver-usw1.pyrecast.org/geoserver02/ows"
 CORNEA_BASE = "https://fire-api-prod.web.app"
 PERCENTILES = ("10", "30", "50", "70", "90")
 # hourly-mosaic variables; each granule dir is tarred into ONE archive object per
@@ -218,6 +219,39 @@ def tif_centroid_lonlat(path):
         return None
 
 
+def fetch_wcs_toa(slug, run_ts, pct, dest):
+    """Fallback for ToA tifs that 403 on the static host: pyrecast's files stage
+    behind a public-ACL window (~5-6h, sometimes never opening), but their
+    geoserver reads the same store internally. WCS output verified bit-identical
+    to the static tif (2026-08-19). ToA only — every GetCoverage is server-side
+    work for them, so this must never be used for the hourly granules."""
+    layer = f"fire-spread-forecast_{slug}_{run_ts}__elmfire_landfire_{pct}_time-of-arrival"
+    r = fetch(f"{GEOSERVER_OWS}?service=WCS&version=2.0.1&request=GetCoverage"
+              f"&coverageId={layer}&format=image/geotiff", tries=1, timeout=(10, 180))
+    if r is None or r.content[:4] not in TIFF_MAGIC:
+        return None
+    raw = dest.with_suffix(".wcs.part")
+    raw.write_bytes(r.content)
+    tmp = dest.with_suffix(".tif.part")
+    try:
+        # geoserver emits uncompressed (~25MB vs ~2MB) — recompress for the archive
+        import rasterio
+        with rasterio.open(raw) as ds:
+            profile = ds.profile
+            data = ds.read()
+        profile.update(compress="deflate")
+        with rasterio.open(tmp, "w", **profile) as out:
+            out.write(data)
+        os.replace(tmp, dest)
+    except Exception as e:
+        log(f"{slug}/{run_ts} pct{pct}: WCS recompress failed ({e}); archiving raw")
+        os.replace(raw, dest)
+    finally:
+        raw.unlink(missing_ok=True)
+        tmp.unlink(missing_ok=True)
+    return dest.stat().st_size
+
+
 def download_run(archive, manifest, slug, run_ts):
     """Fetch missing percentile tifs for one run. Returns True if entry changed."""
     run_key = f"{slug}/{run_ts}"
@@ -238,7 +272,22 @@ def download_run(archive, manifest, slug, run_ts):
         part = dest.with_suffix(".tif.part")
         r = fetch(url)
         if r is None:
-            entry["errors"][pct] = f"{fetch.last_error} at {iso(utcnow())}"
+            err = fetch.last_error or ""
+            if "403" in err:  # staging-ACL window: same data is servable via WCS
+                size = fetch_wcs_toa(slug, run_ts, pct, dest)
+                if size:
+                    archive.commit_file(key)
+                    entry["files"][pct] = {"bytes": size, "etag": "", "ok": True, "via": "wcs"}
+                    entry["errors"].pop(pct, None)
+                    bump("tif_wcs_rescued")
+                    changed = True
+                    if "centroid" not in entry:
+                        ll = tif_centroid_lonlat(dest)
+                        if ll:
+                            entry["centroid"] = [round(ll[0], 5), round(ll[1], 5)]
+                    time.sleep(0.5)  # GetCoverage is server-side work; be gentle
+                    continue
+            entry["errors"][pct] = f"{err} at {iso(utcnow())}"
             bump("tif_errors")
             changed = True
             continue
