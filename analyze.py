@@ -292,6 +292,11 @@ def compute(only_slug=None):
             skipped["no_match"] += 1
             continue
         if slug not in perimsets:
+            # sorted run_keys iterate grouped by slug and no cache is reused
+            # across fires, so evicting here caps peak memory at one fire's
+            # masks instead of the whole fleet's (OOM-killed CI runners Sep 7+)
+            perimsets.clear()
+            hssets.clear()
             perimsets[slug] = PerimeterSet(slug)
         ps = perimsets[slug]
         if not ps.timeline:
