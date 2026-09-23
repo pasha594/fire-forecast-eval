@@ -5,22 +5,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="favicon.png">
 <title>Fire forecast evaluation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600..800&family=Public+Sans:wght@400..800&display=swap">
+<link rel="stylesheet" href="brand.css">
 <style>
-  body { margin: 0; background: #f9f9f7; color: #0b0b0b;
-         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  body { margin: 0; background: var(--page); color: var(--ink);
+         font: 16px/1.5 var(--font-sans);
          display: flex; min-height: 100vh; align-items: center; justify-content: center; }
-  .card { background: #fcfcfb; border: 1px solid rgba(11,11,11,.1); border-radius: 10px;
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
           padding: 28px 32px; max-width: 520px; }
-  h1 { font-size: 20px; margin: 0 0 6px; }
-  p { color: #52514e; margin: 0 0 16px; font-size: 14px; }
+  .brand { margin-bottom: 18px; }
+  .brand img { height: 26px; }
+  h1 { font-size: 24px; font-weight: 800; margin: 0 0 6px; }
+  p { color: var(--ink-2); margin: 0 0 16px; font-size: 14px; }
   a.big { display: block; padding: 12px 16px; margin: 8px 0; border-radius: 8px;
-          background: #2a78d6; color: #fff; text-decoration: none; font-weight: 600; }
+          background: var(--accent); color: var(--on-accent); text-decoration: none; font-weight: 600; }
   a.big small { display: block; font-weight: 400; opacity: .85; font-size: 12.5px; }
-  a.big.alt { background: #52514e; }
+  a.big.alt { background: var(--tan); }
 </style>
 </head>
 <body>
 <div class="card">
+  <a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><picture>
+    <source srcset="cornea-logo-on-dark.webp" media="(prefers-color-scheme: dark)">
+    <img src="cornea-logo-on-light.webp" alt="Cornea"></picture></a>
   <h1>ELMFIRE forecast evaluation</h1>
   <p>Pyrecast fire-spread forecasts vs Cornea perimeters. Data collected every 3h
   and analyzed twice daily, fully automated; pages read live from the archive.</p>

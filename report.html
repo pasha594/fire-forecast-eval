@@ -9,12 +9,12 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/proj4@2.11.0/dist/proj4.js"></script>
 <script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600..800&family=Public+Sans:wght@400..800&display=swap">
+<link rel="stylesheet" href="brand.css">
 <style>
   :root {
-    color-scheme: light;
-    --page: #f9f9f7; --surface: #fcfcfb;
-    --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
-    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
     /* ordinal blue ramp, steps 250/350/450/550/650 (percentiles 10..90) */
     --p10: #86b6ef; --p30: #5598e7; --p50: #2a78d6; --p70: #1c5cab; --p90: #104281;
     --s1: #2a78d6; --s2: #eb6834;   /* categorical slots 1-2 */
@@ -22,10 +22,12 @@
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--page); color: var(--ink);
-    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 14px/1.45 var(--font-sans);
   }
   .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 60px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
+  .brand { margin-bottom: 14px; }
+  .brand img { height: 26px; }
+  h1 { font-size: 26px; font-weight: 800; margin: 0 0 4px; }
   .sub { color: var(--ink-2); margin: 0 0 18px; }
   .filters {
     display: flex; flex-wrap: wrap; gap: 16px; align-items: end;
@@ -40,10 +42,10 @@
   .filters .chk { display: flex; gap: 6px; align-items: center; padding-bottom: 6px; }
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
   .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
-  .tile .v { font-size: 22px; font-weight: 600; }
+  .tile .v { font: 800 26px/1.2 var(--font-serif); color: var(--stat); }
   .tile .k { color: var(--ink-2); font-size: 12px; }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 14px 6px; margin-bottom: 18px; }
-  .card h2 { font-size: 15px; margin: 0 0 2px; }
+  .card h2 { font-size: 19px; font-weight: 700; margin: 0 0 2px; }
   .card .note { color: var(--ink-2); font-size: 12.5px; margin: 0 0 8px; }
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
   @media (max-width: 900px) { .row2 { grid-template-columns: 1fr; } }
@@ -65,11 +67,14 @@
     text-align: right; font-variant-numeric: tabular-nums;
   }
   table.rows td:nth-child(-n+3), table.rows th:nth-child(-n+3) { text-align: left; }
-  #loaderr { background: #fff4ec; border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  #loaderr { background: var(--warn-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><picture>
+    <source srcset="cornea-logo-on-dark.webp" media="(prefers-color-scheme: dark)">
+    <img src="cornea-logo-on-light.webp" alt="Cornea"></picture></a>
   <h1>ELMFIRE forecast skill vs actual perimeters</h1>
   <p class="sub">Growth-only precision &amp; recall of pyrecast fire-spread forecasts against Cornea
   perimeter snapshots. One row per (fire, forecast run, weather percentile, horizon) with ground
@@ -460,7 +465,7 @@ async function renderInspection(row) {
       `<p class="note">precision = hit / (hit + false&nbsp;alarm) · recall = hit / (hit + miss). Small ` +
       `differences vs the pipeline come from canvas vs GDAL polygon rasterization at the pixel edge.</p>`;
   } catch (e) {
-    stats.innerHTML = `<p class="note" style="color:#b3591f">couldn't render: ${e && (e.message || e)}</p>`;
+    stats.innerHTML = `<p class="note" style="color:var(--warn)">couldn't render: ${e && (e.message || e)}</p>`;
   } finally {
     INS.busy = false;
     if (INS.pending) {

@@ -9,50 +9,55 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script>
 <script src="https://unpkg.com/georaster-layer-for-leaflet@3.10.0/dist/georaster-layer-for-leaflet.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600..800&family=Public+Sans:wght@400..800&display=swap">
+<link rel="stylesheet" href="brand.css">
 <style>
-  :root {
-    --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e;
-    --muted: #898781; --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
-    --accent: #2a78d6; --actual: #eb6834;
-  }
+  :root { --actual: #eb6834; }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body {
     display: flex; background: var(--page); color: var(--ink);
-    font: 13.5px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 13.5px/1.4 var(--font-sans);
   }
   #side {
     width: 320px; min-width: 320px; overflow-y: auto; padding: 14px;
     background: var(--surface); border-right: 1px solid var(--grid);
   }
   #map { flex: 1; }
-  h1 { font-size: 15px; margin: 0 0 2px; }
+  .brand { margin-bottom: 10px; }
+  .brand img { height: 22px; }
+  h1 { font-size: 19px; font-weight: 800; margin: 0 0 2px; }
   .sub { color: var(--ink-2); font-size: 12px; margin: 0 0 10px; }
   .sec { border-top: 1px solid var(--grid); margin-top: 12px; padding-top: 10px; }
-  .sec h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
-            color: var(--ink-2); margin: 0 0 6px; }
+  .sec h2 { font: 700 11.5px/1.4 var(--font-sans); text-transform: uppercase;
+            letter-spacing: .08em; color: var(--label); margin: 0 0 6px; }
   select, input[type=text] {
     font: inherit; width: 100%; padding: 5px 6px; margin-bottom: 6px;
     border: 1px solid var(--axis); border-radius: 6px; background: var(--surface);
+    color: var(--ink);
   }
   label.row { display: flex; gap: 6px; align-items: center; margin: 3px 0; cursor: pointer; }
   label.row .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
   #firelist { max-height: 200px; overflow-y: auto; border: 1px solid var(--grid);
               border-radius: 6px; }
   #firelist div { padding: 4px 8px; cursor: pointer; border-bottom: 1px solid var(--grid); }
-  #firelist div:hover { background: var(--page); }
-  #firelist div.sel { background: #e8f0fb; font-weight: 600; }
+  #firelist div:hover { background: var(--hover); }
+  #firelist div.sel { background: var(--selected); font-weight: 600; }
   #firelist .meta { color: var(--muted); font-size: 11px; font-weight: 400; }
   .note { color: var(--muted); font-size: 11.5px; margin: 4px 0; }
-  .warn { color: #b3591f; font-size: 11.5px; margin: 4px 0; }
+  .warn { color: var(--warn); font-size: 11.5px; margin: 4px 0; }
   #legendimg { max-width: 100%; margin-top: 6px; background: #fff;
                border: 1px solid var(--grid); border-radius: 4px; }
   input[type=range] { width: 100%; }
-  a { color: var(--accent); }
 </style>
 </head>
 <body>
 <div id="side">
+  <a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><picture>
+    <source srcset="cornea-logo-on-dark.webp" media="(prefers-color-scheme: dark)">
+    <img src="cornea-logo-on-light.webp" alt="Cornea"></picture></a>
   <h1>Fire forecast map</h1>
   <p class="sub">pyrecast ELMFIRE layers (live WMS) over Cornea perimeters &amp; hotspots ·
   <a href="report.html">skill report</a></p>

@@ -1,0 +1,36 @@
+/* Cornea brand layer: palette and type from fires.cornea.is. Light by default,
+   dark when the viewer's system is (the same rule that site follows). Only UI
+   chrome lives here; data encodings (ToA ramp, TP/FP/FN, perimeters, hotspots)
+   stay in each page so they read the same in both themes. */
+:root {
+  color-scheme: light;
+  --font-sans: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: "Newsreader", Georgia, "Times New Roman", serif;
+  --page: #fdfcf9; --surface: #ffffff;
+  --ink: #3b1d29; --ink-2: #6b555d; --muted: #806c74;
+  --grid: rgba(59, 29, 41, 0.10); --axis: rgba(59, 29, 41, 0.28);
+  --border: rgba(59, 29, 41, 0.12);
+  --accent: #ffbd5a; --on-accent: #3b1d29; --tan: #baab8e;
+  --link: #3b1d29; --label: #6b555d; --stat: #451025;
+  --hover: #f7f1e8; --selected: #ffecc9;
+  --warn: #b3591f; --warn-bg: #fff4ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #1a1218; --surface: #241c21;
+    --ink: #e8e2e5; --ink-2: #c2b7bd; --muted: #998e94;
+    --grid: rgba(255, 255, 255, 0.08); --axis: rgba(255, 255, 255, 0.22);
+    --border: #332a2f;
+    --link: #ffbd5a; --label: #ffbd5a; --stat: #ffbd5a;
+    --hover: #2e252a; --selected: rgba(255, 189, 90, 0.16);
+    --warn: #f0925e; --warn-bg: #2b2023;
+  }
+}
+
+body { box-sizing: border-box; border-top: 3px solid var(--accent); accent-color: var(--accent); }
+h1, h2 { font-family: var(--font-serif); }
+a { color: var(--link); text-decoration-color: var(--accent); text-underline-offset: 2px; }
+
+.brand { display: inline-block; line-height: 0; }
+.brand img { display: block; width: auto; }
