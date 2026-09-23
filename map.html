@@ -45,8 +45,23 @@
   }
   label.row { display: flex; gap: 6px; align-items: center; margin: 3px 0; cursor: pointer; }
   label.row .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-  #firelist { max-height: 200px; overflow-y: auto; border: 1px solid var(--grid);
-              border-radius: 6px; }
+  /* collapsed-by-default pickers: each list opens as an overlay under its field,
+     so only the list scrolls, never the side panel */
+  .picker { position: relative; margin-bottom: 6px; }
+  .picker > input[type=text] { margin-bottom: 0; padding-right: 22px; }
+  .picker::after { content: "▾"; position: absolute; right: 8px; top: 50%;
+                   transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+  .picker:has(.dropbtn:disabled)::after { content: none; }
+  .dropbtn { font: inherit; width: 100%; padding: 5px 22px 5px 6px; text-align: left;
+             border: 1px solid var(--axis); border-radius: 6px; background: var(--surface);
+             color: var(--ink); cursor: pointer; white-space: nowrap; overflow: hidden;
+             text-overflow: ellipsis; }
+  .dropbtn:disabled { color: var(--muted); cursor: default; }
+  .dropdown { position: absolute; left: 0; right: 0; top: calc(100% + 3px); z-index: 1000;
+              max-height: 280px; overflow-y: auto; background: var(--surface);
+              border: 1px solid var(--axis); border-radius: 6px;
+              box-shadow: 0 6px 18px rgba(59, 29, 41, 0.16); }
+  #perimlist { padding: 3px 8px; }
   #firelist div { padding: 4px 8px; cursor: pointer; border-bottom: 1px solid var(--grid); }
   #firelist div:hover { background: var(--hover); }
   #firelist div.sel { background: var(--selected); font-weight: 600; }
@@ -90,8 +105,10 @@
   <p class="sub">Pyrecast ELMFIRE layers (live WMS) over Cornea perimeters &amp; hotspots ·
   <a href="report.html">skill report</a></p>
 
-  <input type="text" id="search" placeholder="filter fires…">
-  <div id="firelist"></div>
+  <div class="picker">
+    <input type="text" id="search" placeholder="search fires" autocomplete="off" spellcheck="false">
+    <div id="firelist" class="dropdown" hidden></div>
+  </div>
 
   <div class="sec">
     <h2>Forecast layer <a class="src-logo" href="https://www.pyregence.org/" target="_blank"
@@ -126,7 +143,10 @@
 
   <div class="sec">
     <h2>Perimeters (NIFC)</h2>
-    <div id="perimlist" class="note">select a fire</div>
+    <div class="picker" id="perimPicker">
+      <button type="button" id="perimBtn" class="dropbtn" disabled>select a fire</button>
+      <div id="perimlist" class="dropdown" hidden></div>
+    </div>
   </div>
 
   <div class="sec">
@@ -162,6 +182,7 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
 const state = {
   fires: [],            // [{slug, title, cornea_id, centroid:[lon,lat], runs:[ts...]}]
   sel: null,
+  searchDirty: false,   // true once the user types; until then the fire list is unfiltered
   wmsLayer: null,
   perimLayers: new Map(),   // epochms -> L.geoJSON
   perimIndex: [],           // [{ems, date}]
@@ -223,7 +244,7 @@ async function init() {
   renderList();
   const want = new URLSearchParams(location.search).get("fire");
   if (want && state.fires.some(x => x.slug === want)) select(want);
-  document.getElementById("search").addEventListener("input", renderList);
+  wirePickers();
   for (const id of ["selRun", "selVar", "selPct"])
     document.getElementById(id).addEventListener("change", refreshWms);
   document.getElementById("opacity").addEventListener("input", () =>
@@ -261,8 +282,48 @@ async function init() {
   });
 }
 
+function openDropdown(list) {
+  // cap the overlay at the room left in the viewport so it never scrolls the side panel
+  list.hidden = false;
+  const room = window.innerHeight - list.getBoundingClientRect().top - 12;
+  list.style.maxHeight = `${Math.max(120, Math.min(280, room))}px`;
+}
+
+function showSelectedName() {
+  const f = state.fires.find(x => x.slug === state.sel);
+  document.getElementById("search").value = f ? f.title || f.slug : "";
+}
+
+function wirePickers() {
+  // the search box doubles as the fire dropdown: it shows the selected fire, and
+  // focusing it opens the full list; typing filters it
+  const search = document.getElementById("search"), list = document.getElementById("firelist");
+  search.addEventListener("focus", () => {
+    state.searchDirty = false;
+    search.select();
+    renderList();
+    openDropdown(list);
+    const sel = list.querySelector(".sel");
+    if (sel) list.scrollTop = sel.offsetTop - list.clientHeight / 3;
+  });
+  search.addEventListener("input", () => { state.searchDirty = true; renderList(); openDropdown(list); });
+  search.addEventListener("keydown", ev => {
+    if (ev.key === "Escape") search.blur();
+    if (ev.key === "Enter" && state.searchDirty) list.querySelector("div")?.click();
+  });
+  search.addEventListener("blur", () => { list.hidden = true; showSelectedName(); });
+  list.addEventListener("mousedown", ev => ev.preventDefault());   // keep focus until the click lands
+
+  const btn = document.getElementById("perimBtn"), perims = document.getElementById("perimlist");
+  btn.addEventListener("click", () => { if (perims.hidden) openDropdown(perims); else perims.hidden = true; });
+  document.addEventListener("mousedown", ev => {
+    if (!perims.hidden && !ev.target.closest("#perimPicker")) perims.hidden = true;
+  });
+  document.addEventListener("keydown", ev => { if (ev.key === "Escape") perims.hidden = true; });
+}
+
 function renderList() {
-  const q = document.getElementById("search").value.toLowerCase();
+  const q = state.searchDirty ? document.getElementById("search").value.toLowerCase() : "";
   const el = document.getElementById("firelist");
   el.innerHTML = "";
   for (const f of state.fires) {
@@ -272,7 +333,7 @@ function renderList() {
     d.className = f.slug === state.sel ? "sel" : "";
     d.innerHTML = `${label} <span class="meta">${f.slug} · ${f.runs.length} runs` +
       `${f.cornea_id ? "" : " · no Cornea match"}</span>`;
-    d.onclick = () => select(f.slug);
+    d.onclick = () => { select(f.slug); document.getElementById("search").blur(); };
     el.appendChild(d);
   }
 }
@@ -285,6 +346,7 @@ async function select(slug) {
   state.sel = slug;
   const seq = ++state.seq;   // guard stale async responses after reselect
   renderList();
+  showSelectedName();
   if (f.centroid) map.setView([f.centroid[1], f.centroid[0]], 11);
 
   const selRun = document.getElementById("selRun");
@@ -484,41 +546,59 @@ async function renderArchivedToa(f, run, pct, note, expired) {
 // ---------------------------------------------------------------- perimeters
 
 async function loadPerims(f, seq) {
-  const el = document.getElementById("perimlist");
+  const btn = document.getElementById("perimBtn"), el = document.getElementById("perimlist");
+  el.hidden = true;
+  el.innerHTML = "";
+  btn.disabled = true;
   for (const l of state.perimLayers.values()) map.removeLayer(l);
   state.perimLayers.clear();
   state.perimIndex = [];
-  if (!f.cornea_id) { el.textContent = "no Cornea match for this fire"; return; }
-  el.textContent = "loading…";
+  if (!f.cornea_id) { btn.textContent = "no Cornea match for this fire"; return; }
+  btn.textContent = "loading…";
   let idx;
   try {
     idx = await getJson(`${CORNEA}/fires/${encodeURIComponent(f.cornea_id)}/perimeters`);
   } catch (e) {
     try { idx = (await loadLocalOrBucket(`perimeter_archive/${f.slug}/index.json`)).index; }
-    catch (e2) { el.textContent = "no perimeters available"; return; }
+    catch (e2) { btn.textContent = "no perimeters available"; return; }
   }
   if (state.seq !== seq) return;
   state.perimIndex = idx.map(p => ({
     ems: p.path.split("/").pop(), path: p.path, date: p.date,
   })).sort((a, b) => a.date < b.date ? -1 : 1);
-  if (!state.perimIndex.length) { el.textContent = "no perimeters recorded"; return; }
-  el.innerHTML = "";
+  if (!state.perimIndex.length) { btn.textContent = "no perimeters recorded"; return; }
+  btn.disabled = false;
   const n = state.perimIndex.length;
-  state.perimIndex.forEach((p, i) => {
-    const latest = i === n - 1;
+  for (let i = n - 1; i >= 0; i--) {   // newest first: the list opens on the current perimeter
+    const p = state.perimIndex[i], latest = i === n - 1;
     const lab = document.createElement("label");
     lab.className = "row";
     const color = latest ? "#eb6834" : "#52514e";
     lab.innerHTML = `<input type="checkbox" data-ems="${p.ems}" ${latest ? "checked" : ""}>
       <span class="dot" style="background:${color}"></span>
-      ${p.date.slice(0, 16).replace("T", " ")}Z${latest ? " (current)" : ""}`;
+      ${fmtPerim(p)}${latest ? " (current)" : ""}`;
     lab.querySelector("input").addEventListener("change", ev => {
       togglePerim(f, p, ev.target.checked, latest);
       renderHotMarks();
+      perimSummary();
     });
     el.appendChild(lab);
-  });
+  }
+  perimSummary();
   await togglePerim(f, state.perimIndex[n - 1], true, true);
+}
+
+const fmtPerim = p => `${p.date.slice(0, 16).replace("T", " ")}Z`;
+
+function perimSummary() {
+  // the collapsed button names what's on the map
+  const shown = [...document.querySelectorAll("#perimlist input:checked")]
+    .map(i => state.perimIndex.find(p => p.ems === i.dataset.ems)).filter(Boolean)
+    .sort((a, b) => (a.date < b.date ? 1 : -1));
+  const current = state.perimIndex[state.perimIndex.length - 1];
+  document.getElementById("perimBtn").textContent = !shown.length ? "none shown"
+    : shown.length > 1 ? `${shown.length} shown · newest ${fmtPerim(shown[0])}`
+    : fmtPerim(shown[0]) + (shown[0] === current ? " (current)" : "");
 }
 
 async function togglePerim(f, p, on, latest) {
