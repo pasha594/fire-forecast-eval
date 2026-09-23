@@ -35,7 +35,9 @@
             letter-spacing: .08em; color: var(--label); margin: 0 0 6px;
             display: flex; align-items: center; gap: 8px; }
   .sec h2 .src-logo { line-height: 0; }
-  .sec h2 .src-logo img { height: 22px; width: auto; }
+  /* the flame fills the logo's full height but the wordmark only its lower
+     59%, so centering the box leaves the lettering low; lift it to the caps */
+  .sec h2 .src-logo img { height: 17px; width: auto; transform: translateY(-3.7px); }
   select, input[type=text] {
     font: inherit; width: 100%; padding: 5px 6px; margin-bottom: 6px;
     border: 1px solid var(--axis); border-radius: 6px; background: var(--surface);
@@ -60,7 +62,7 @@
 <div id="side">
   <a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><img src="cornea-logo-on-light.webp" alt="Cornea"></a>
   <h1>Fire forecast map</h1>
-  <p class="sub">pyrecast ELMFIRE layers (live WMS) over Cornea perimeters &amp; hotspots ·
+  <p class="sub">Pyrecast ELMFIRE layers (live WMS) over Cornea perimeters &amp; hotspots ·
   <a href="report.html">skill report</a></p>
 
   <input type="text" id="search" placeholder="filter fires…">
@@ -315,10 +317,10 @@ function refreshWms() {
   }
   if (f.live[run] === false) {
     document.getElementById("timerow").hidden = true;
-    note.textContent = "this run has aged off pyrecast's geoserver — live tiles no longer " +
+    note.textContent = "this run has aged off Pyrecast's geoserver — live tiles no longer " +
       "exist. This variable is archived as hourly tars " +
       `(forecast_archive/${f.slug}/${run}/${pct}_${variable}.tar in the bucket, if it was ` +
-      "captured before pyrecast purged the granules); extract locally to view. " +
+      "captured before Pyrecast purged the granules); extract locally to view. " +
       "Time-of-arrival renders from the archive — select it above.";
     note.className = "warn";
     return;
@@ -333,7 +335,7 @@ function refreshWms() {
   let errored = 0;
   state.wmsLayer.on("tileerror", () => {
     if (++errored === 3) {
-      note.textContent = "tiles failing — this run may have expired off pyrecast's geoserver; try the other run";
+      note.textContent = "tiles failing — this run may have expired off Pyrecast's geoserver; try the other run";
       note.className = "warn";
     }
   });
