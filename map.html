@@ -124,10 +124,10 @@
     <h2>Hotspots (NASA VIIRS)</h2>
     <label class="row"><input type="checkbox" id="chkHot" checked>show detections</label>
     <label class="row" style="display:block">playhead: <b id="hotTimeLabel">now</b>
-      <input type="range" id="hotTime" min="-336" max="0" value="0"></label>
+      <input type="range" id="hotTime" min="0" max="336" value="336"></label>
     <div id="hotTicks" aria-hidden="true"></div>
     <div class="note" style="display:flex;justify-content:space-between;margin-bottom:8px">
-      <span>14d ago</span><span>now</span></div>
+      <span id="hotStartLabel"></span><span id="hotEndLabel">now</span></div>
     <div style="height:10px;border-radius:5px;margin:2px 0;
       background:linear-gradient(to left,#ffd21f,hsl(20,90%,50%),hsl(340,90%,43%),hsl(275,90%,33%))"></div>
     <div class="note" style="display:flex;justify-content:space-between">
@@ -154,7 +154,8 @@ const state = {
   perimLayers: new Map(),   // epochms -> L.geoJSON
   perimIndex: [],           // [{ems, date}]
   hotLayer: null,
-  hotMarkers: [],
+  hot: null,           // hotspot timeline for the selected fire (see refreshHotspots)
+  hotSeq: 0,
   toaMaxH: 336,        // time-of-arrival threshold slider (show arrival <= this)
   granIdx: 12,         // hourly-mosaic forecast-hour slider
   georasterCache: new Map(),
@@ -238,16 +239,9 @@ async function init() {
     }
   });
   document.getElementById("chkHot").addEventListener("change", refreshHotspots);
-  const hotTime = document.getElementById("hotTime");
-  const spanH = hotTime.max - hotTime.min;
-  for (let h = 0; h <= spanH; h += 12) {   // minor tick every 12h, major every 24h
-    const tick = document.createElement("span");
-    if (h % 24 === 0) tick.className = "major";
-    tick.style.left = `${100 * h / spanH}%`;
-    document.getElementById("hotTicks").appendChild(tick);
-  }
+  layoutHotTimeline({ start: dayOf(Date.now() - 14 * DAY) * DAY, end: Date.now(), contained: false });
   let hotPending = false;   // setTimeout, not rAF — rAF pauses in hidden tabs
-  hotTime.addEventListener("input", () => {
+  document.getElementById("hotTime").addEventListener("input", () => {
     if (hotPending) return;
     hotPending = true;
     setTimeout(() => { hotPending = false; renderHotspots(); }, 30);
@@ -553,10 +547,64 @@ function hotColor(ageH) {
   return `hsl(${h.toFixed(0)} 90% ${(55 - 22 * f).toFixed(0)}%)`;
 }
 
+// The playhead spans the fire's whole life, and a big fire can hold 100k+
+// detections. The API returns rows oldest-first from `since`, capped at `limit`,
+// with no end-date filter, so one whole-fire query silently drops the newest
+// weeks. Instead, load the 7-day window behind the playhead on demand, in
+// day-aligned chunks, and keep only that window's markers on the map.
+const HOUR = 3600e3, DAY = 864e5;
+const HOT_LOOKBACK_H = 168;   // matches hotColor's 7-day fade
+const HOT_LIMIT = 20000;      // rows per request (~5 MB at most)
+const MONDAY0 = 4 * DAY;      // 1970-01-05, the first Monday after the epoch
+const dayOf = ms => Math.floor(ms / DAY);
+const fmtDay = ms => new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+const fmtTs = ms => new Date(ms).toISOString().slice(0, 16).replace("T", " ") + "Z";
+
+async function fireSpan(f) {
+  // Cornea's record creation (~discovery) to its containment timestamp, else
+  // now; without a usable record, the last 14 days
+  const now = Date.now();
+  let start = now - 14 * DAY, end = now, contained = false;
+  if (f.cornea_id) {
+    try {
+      const rec = await getJson(`${CORNEA}/fires/${encodeURIComponent(f.cornea_id)}`);
+      const s = Date.parse(rec.created_on), c = Date.parse(rec.contained_at);
+      if (s < now) start = s;
+      if (c > start && c < now) { end = c; contained = true; }
+    } catch (e) { /* keep the 14-day fallback */ }
+  }
+  return { start: dayOf(start) * DAY, end, contained };
+}
+
+function layoutHotTimeline(span) {
+  const el = document.getElementById("hotTime");
+  el.max = Math.max(1, Math.ceil((span.end - span.start) / HOUR));
+  el.value = el.max;
+  document.getElementById("hotStartLabel").textContent = fmtDay(span.start);
+  document.getElementById("hotEndLabel").textContent =
+    span.contained ? `contained ${fmtDay(span.end)}` : "now";
+  // ticks on calendar boundaries (UTC midnights; Mondays for weekly steps),
+  // coarsening from 12h/24h until minor ticks stay at least 3.5px apart
+  const ticks = document.getElementById("hotTicks");
+  const [minorH, majorH] = [[12, 24], [24, 168], [168, 672]]
+    .find(([m]) => (ticks.clientWidth || 260) * m / +el.max >= 3.5) || [168, 672];
+  const offset = h => (h >= 168 ? MONDAY0 : 0);
+  const step = minorH * HOUR;
+  ticks.innerHTML = "";
+  for (let t = Math.ceil((span.start - offset(minorH)) / step) * step + offset(minorH);
+       t <= span.end; t += step) {
+    const tick = document.createElement("span");
+    if ((t - offset(majorH)) % (majorH * HOUR) === 0) tick.className = "major";
+    tick.style.left = `${100 * (t - span.start) / (el.max * HOUR)}%`;
+    ticks.appendChild(tick);
+  }
+}
+
 async function refreshHotspots() {
   const note = document.getElementById("hotnote");
+  const token = ++state.hotSeq;
   if (state.hotLayer) { map.removeLayer(state.hotLayer); state.hotLayer = null; }
-  state.hotMarkers = [];
+  state.hot = null;
   const f = state.fires.find(x => x.slug === state.sel);
   if (!f || !f.centroid || !document.getElementById("chkHot").checked) {
     note.textContent = f ? "" : "select a fire";
@@ -565,60 +613,115 @@ async function refreshHotspots() {
   const [lon, lat] = f.centroid;
   // size the query box from the latest perimeter (megafires dwarf a fixed radius —
   // a fixed box visibly clips the dot cloud along straight lines); centroid fallback
+  // NB: the API's bbox is lat-first (min_lat,min_lon,max_lat,max_lon)
   let bbox = `${lat - 0.4},${lon - 0.4},${lat + 0.4},${lon + 0.4}`;
   const latestPerim = [...state.perimLayers.values()].pop();
   if (latestPerim) {
     const b = latestPerim.getBounds();
     bbox = `${b.getSouth() - 0.2},${b.getWest() - 0.2},${b.getNorth() + 0.2},${b.getEast() + 0.2}`;
   }
-  // 21d window: the playhead can sit 14d back and still needs its own 7d lookbehind
-  const since = new Date(Date.now() - 21 * 864e5).toISOString().slice(0, 10);
   note.textContent = "loading detections…";
+  const span = await fireSpan(f);
+  if (token !== state.hotSeq) return;   // another fire or toggle superseded this one
+  layoutHotTimeline(span);
+  state.hotLayer = L.layerGroup().addTo(map);
+  state.hot = { bbox, span, days: new Map(), keys: new Set(), covered: new Set(),
+                shown: new Set(), capped: false, loading: false,
+                renderer: L.canvas({ padding: 0.2 }) };   // thousands of points -> canvas
+  renderHotspots();
+  ensureHotCoverage();
+}
+
+async function ensureHotCoverage() {
+  const H = state.hot;
+  if (!H || H.loading) return;
+  const p = hotPlayhead(H);
+  let d = dayOf(p - HOT_LOOKBACK_H * HOUR);
+  while (d <= dayOf(p) && H.covered.has(d)) d++;
+  if (d > dayOf(p)) return;
+  H.loading = true;
+  let gj;
   try {
-    // NB: this bbox is lat-first (min_lat,min_lon,max_lat,max_lon) per the API schema
-    const gj = await getJson(`${CORNEA}/hotspots?bbox=${bbox}&since=${since}&limit=50000`);
-    const canvas = L.canvas({ padding: 0.2 });  // thousands of points -> canvas
-    state.hotLayer = L.layerGroup().addTo(map);
-    for (const feat of gj.features || []) {
-      const t = parseAcq(feat.properties || {});
-      const c = feat.geometry && feat.geometry.coordinates;
-      if (t === null || !c) continue;
-      const p = feat.properties;
-      const m = L.circleMarker([c[1], c[0]], {
-        renderer: canvas, radius: 3, weight: 0.5, fillOpacity: 0.55, opacity: 0.9,
-      }).bindTooltip(`${p.source || "?"} ${p.acq_date || ""} ${String(p.acq_time || "").replace(".0", "")}Z · FRP ${p.frp ?? "?"} · conf ${p.confidence ?? "?"}`);
-      m._t = t;
-      m.addTo(state.hotLayer);
-      state.hotMarkers.push(m);
-    }
-    renderHotspots();
+    gj = await getJson(`${CORNEA}/hotspots?bbox=${H.bbox}` +
+      `&since=${new Date(d * DAY).toISOString().slice(0, 10)}&limit=${HOT_LIMIT}`);
   } catch (e) {
-    note.textContent = "hotspots request failed: " + e.message;
+    H.loading = false;
+    if (state.hot === H) document.getElementById("hotnote").textContent = "hotspots request failed: " + e.message;
+    return;
   }
+  H.loading = false;
+  if (state.hot !== H) return;
+  const feats = gj.features || [];
+  let last = d;
+  for (const feat of feats) {
+    const props = feat.properties || {}, c = feat.geometry && feat.geometry.coordinates;
+    const t = parseAcq(props);
+    if (t === null || !c) continue;
+    last = Math.max(last, dayOf(t));
+    const key = `${props.acq_date}|${props.acq_time}|${c[0]}|${c[1]}|${props.source}`;
+    if (H.keys.has(key)) continue;
+    H.keys.add(key);
+    const m = L.circleMarker([c[1], c[0]], { renderer: H.renderer, radius: 3, weight: 0.5 });
+    m._t = t;
+    m._p = props;
+    if (!H.days.has(dayOf(t))) H.days.set(dayOf(t), []);
+    H.days.get(dayOf(t)).push(m);
+  }
+  // rows come oldest-first: an uncapped reply is complete through today; a capped
+  // one only up to its last day, which may be partial (and is refetched next)
+  const full = feats.length < HOT_LIMIT;
+  if (!full && last === d) H.capped = true;   // a single day alone exceeds the cap
+  for (let k = d, through = full ? dayOf(Date.now()) : Math.max(d, last - 1); k <= through; k++) {
+    H.covered.add(k);
+  }
+  renderHotspots();
+}
+
+let hotFetchTimer = 0;
+function scheduleHotCoverage() {   // wait for the scrubber to settle before fetching
+  clearTimeout(hotFetchTimer);
+  hotFetchTimer = setTimeout(ensureHotCoverage, 250);
+}
+
+function hotPlayhead(H) {
+  return Math.min(H.span.start + document.getElementById("hotTime").value * HOUR, H.span.end);
 }
 
 function renderHotspots() {
-  const note = document.getElementById("hotnote");
-  const offH = +document.getElementById("hotTime").value;   // <= 0: hours relative to now
-  const playhead = Date.now() + offH * 3600e3;
-  document.getElementById("hotTimeLabel").textContent = offH === 0 ? "now"
-    : new Date(playhead).toISOString().slice(0, 16).replace("T", " ") + "Z";
-  let vis = 0;
-  for (const m of state.hotMarkers) {
-    const col = hotColor((playhead - m._t) / 3600e3);
-    if (col) {
+  const H = state.hot;
+  if (!H) return;
+  const el = document.getElementById("hotTime");
+  const p = hotPlayhead(H);
+  document.getElementById("hotTimeLabel").textContent = +el.value < +el.max ? fmtTs(p)
+    : H.span.contained ? `${fmtTs(p)} (containment)` : "now";
+  const d0 = dayOf(p - HOT_LOOKBACK_H * HOUR), d1 = dayOf(p);
+  for (const d of H.shown) {   // days that slid out of the window leave the map
+    if (d >= d0 && d <= d1) continue;
+    for (const m of H.days.get(d) || []) state.hotLayer.removeLayer(m);
+    H.shown.delete(d);
+  }
+  let vis = 0, pending = false;
+  for (let d = d0; d <= d1; d++) {
+    if (!H.covered.has(d)) pending = true;
+    const ms = H.days.get(d);
+    if (!ms) continue;
+    H.shown.add(d);
+    for (const m of ms) {
+      const col = hotColor((p - m._t) / HOUR);
+      if (!col) { state.hotLayer.removeLayer(m); continue; }
       vis++;
       m.setStyle({ color: col, fillColor: col, opacity: 0.9, fillOpacity: 0.55 });
-      m.setRadius(3);
-    } else {
-      m.setStyle({ opacity: 0, fillOpacity: 0 });
-      m.setRadius(0);
+      if (!m.getTooltip()) {
+        const q = m._p;
+        m.bindTooltip(`${q.source || "?"} ${q.acq_date || ""} ${String(q.acq_time || "").replace(".0", "")}Z · FRP ${q.frp ?? "?"} · conf ${q.confidence ?? "?"}`);
+      }
+      if (!state.hotLayer.hasLayer(m)) state.hotLayer.addLayer(m);
     }
   }
-  note.textContent = state.hotMarkers.length
-    ? `${vis} of ${state.hotMarkers.length} detections at playhead` +
-      (state.hotMarkers.length >= 50000 ? " (API cap hit — oldest may be missing)" : "")
-    : "no detections in the 21d window";
+  document.getElementById("hotnote").textContent = pending ? "loading detections…"
+    : `${vis} detections in the 7 days before the playhead` +
+      (H.capped ? " (a single day exceeded the API cap — some are missing)" : "");
+  if (pending) scheduleHotCoverage();
 }
 
 init();
