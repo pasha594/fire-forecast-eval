@@ -56,6 +56,22 @@
   #legendimg { max-width: 100%; margin-top: 6px; background: #fff;
                border: 1px solid var(--grid); border-radius: 4px; }
   input[type=range] { width: 100%; }
+  /* hotspot playhead: own track and thumb so the 12h ticks under it line up with
+     the thumb's travel (native thumbs differ in width between browsers); the tick
+     row is inset by half the 14px thumb on each side */
+  #hotTime { -webkit-appearance: none; appearance: none; display: block; height: 14px;
+             margin: 4px 0 0; padding: 0; border: 0; background: transparent; }
+  #hotTime::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--axis); }
+  #hotTime::-moz-range-track { height: 4px; border-radius: 2px; background: var(--axis); }
+  #hotTime::-webkit-slider-thumb { -webkit-appearance: none; box-sizing: border-box; width: 14px;
+             height: 14px; margin-top: -5px; border-radius: 50%; background: var(--accent);
+             border: 1.5px solid var(--ink); }
+  #hotTime::-moz-range-thumb { box-sizing: border-box; width: 14px; height: 14px; border-radius: 50%;
+             background: var(--accent); border: 1.5px solid var(--ink); }
+  #hotTicks { position: relative; height: 8px; margin: 3px 7px 0; }
+  #hotTicks span { position: absolute; top: 0; width: 1px; height: 4px; margin-left: -0.5px;
+                   background: var(--axis); }
+  #hotTicks span.major { height: 8px; background: var(--muted); }
 </style>
 </head>
 <body>
@@ -108,11 +124,14 @@
     <h2>Hotspots (NASA VIIRS)</h2>
     <label class="row"><input type="checkbox" id="chkHot" checked>show detections</label>
     <label class="row" style="display:block">playhead: <b id="hotTimeLabel">now</b>
-      <input type="range" id="hotTime" min="0" max="336" value="0"></label>
+      <input type="range" id="hotTime" min="-336" max="0" value="0"></label>
+    <div id="hotTicks" aria-hidden="true"></div>
+    <div class="note" style="display:flex;justify-content:space-between;margin-bottom:8px">
+      <span>14d ago</span><span>now</span></div>
     <div style="height:10px;border-radius:5px;margin:2px 0;
-      background:linear-gradient(to right,#ffd21f,hsl(20,90%,50%),hsl(340,90%,43%),hsl(275,90%,33%))"></div>
+      background:linear-gradient(to left,#ffd21f,hsl(20,90%,50%),hsl(340,90%,43%),hsl(275,90%,33%))"></div>
     <div class="note" style="display:flex;justify-content:space-between">
-      <span>&le;24h before playhead</span><span>7d before</span></div>
+      <span>7d before</span><span>&le;24h before playhead</span></div>
     <div class="note" id="hotnote"></div>
   </div>
 </div>
@@ -217,8 +236,16 @@ async function init() {
     }
   });
   document.getElementById("chkHot").addEventListener("change", refreshHotspots);
+  const hotTime = document.getElementById("hotTime");
+  const spanH = hotTime.max - hotTime.min;
+  for (let h = 0; h <= spanH; h += 12) {   // minor tick every 12h, major every 24h
+    const tick = document.createElement("span");
+    if (h % 24 === 0) tick.className = "major";
+    tick.style.left = `${100 * h / spanH}%`;
+    document.getElementById("hotTicks").appendChild(tick);
+  }
   let hotPending = false;   // setTimeout, not rAF — rAF pauses in hidden tabs
-  document.getElementById("hotTime").addEventListener("input", () => {
+  hotTime.addEventListener("input", () => {
     if (hotPending) return;
     hotPending = true;
     setTimeout(() => { hotPending = false; renderHotspots(); }, 30);
@@ -566,9 +593,9 @@ async function refreshHotspots() {
 
 function renderHotspots() {
   const note = document.getElementById("hotnote");
-  const backH = +document.getElementById("hotTime").value;
-  const playhead = Date.now() - backH * 3600e3;
-  document.getElementById("hotTimeLabel").textContent = backH === 0 ? "now"
+  const offH = +document.getElementById("hotTime").value;   // <= 0: hours relative to now
+  const playhead = Date.now() + offH * 3600e3;
+  document.getElementById("hotTimeLabel").textContent = offH === 0 ? "now"
     : new Date(playhead).toISOString().slice(0, 16).replace("T", " ") + "Z";
   let vis = 0;
   for (const m of state.hotMarkers) {
