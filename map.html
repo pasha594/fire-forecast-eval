@@ -60,7 +60,7 @@
      the thumb's travel (native thumbs differ in width between browsers); the tick
      row is inset by half the 14px thumb on each side */
   #hotTime { -webkit-appearance: none; appearance: none; display: block; height: 14px;
-             margin: 4px 0 0; padding: 0; border: 0; background: transparent; }
+             margin: 1px 0 0; padding: 0; border: 0; background: transparent; }
   #hotTime::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--axis); }
   #hotTime::-moz-range-track { height: 4px; border-radius: 2px; background: var(--axis); }
   #hotTime::-webkit-slider-thumb { -webkit-appearance: none; box-sizing: border-box; width: 14px;
@@ -72,6 +72,15 @@
   #hotTicks span { position: absolute; top: 0; width: 1px; height: 4px; margin-left: -0.5px;
                    background: var(--axis); }
   #hotTicks span.major { height: 8px; background: var(--muted); }
+  /* timeline markers: downward triangles above the track, same inset as the ticks */
+  .hot-head { margin: 3px 0 0; }
+  .hot-key { color: var(--muted); font-size: 11px; margin: 0 0 8px; }
+  .mk { display: inline-block; width: 0; height: 0; margin: 0 3px 0 8px;
+        border: solid transparent; border-width: 7px 4px 0; border-top-color: var(--c); }
+  .hot-key .mk:first-child { margin-left: 0; }
+  #hotMarks { position: relative; height: 7px; margin: 4px 7px 0; }
+  #hotMarks .mk { position: absolute; top: 0; margin: 0 0 0 -4px; cursor: pointer; }
+  #hotMarks .mk.clamped { opacity: .45; }
 </style>
 </head>
 <body>
@@ -123,11 +132,14 @@
   <div class="sec">
     <h2>Hotspots (NASA VIIRS)</h2>
     <label class="row"><input type="checkbox" id="chkHot" checked>show detections</label>
-    <label class="row" style="display:block">playhead: <b id="hotTimeLabel">now</b>
-      <input type="range" id="hotTime" min="0" max="336" value="336"></label>
+    <div class="hot-head">playhead: <b id="hotTimeLabel">now</b></div>
+    <div id="hotMarks"></div>
+    <input type="range" id="hotTime" min="0" max="336" value="336" aria-label="hotspot playhead">
     <div id="hotTicks" aria-hidden="true"></div>
-    <div class="note" style="display:flex;justify-content:space-between;margin-bottom:8px">
+    <div class="note" style="display:flex;justify-content:space-between;margin-bottom:2px">
       <span id="hotStartLabel"></span><span id="hotEndLabel">now</span></div>
+    <div class="hot-key"><i class="mk" style="--c:#eb6834"></i>perimeter<i class="mk"
+      style="--c:#2166ac"></i>forecast run · click to jump</div>
     <div style="height:10px;border-radius:5px;margin:2px 0;
       background:linear-gradient(to left,#ffd21f,hsl(20,90%,50%),hsl(340,90%,43%),hsl(275,90%,33%))"></div>
     <div class="note" style="display:flex;justify-content:space-between">
@@ -156,6 +168,7 @@ const state = {
   hotLayer: null,
   hot: null,           // hotspot timeline for the selected fire (see refreshHotspots)
   hotSeq: 0,
+  hotSpan: null,       // {start, end, contained} the playhead slider spans
   toaMaxH: 336,        // time-of-arrival threshold slider (show arrival <= this)
   granIdx: 12,         // hourly-mosaic forecast-hour slider
   georasterCache: new Map(),
@@ -328,6 +341,7 @@ function refreshWms() {
   const pct = document.getElementById("selPct").value;
   const note = document.getElementById("wmsnote");
   const legend = document.getElementById("legendimg");
+  renderHotMarks();   // the forecast-run marker follows the selected run and layer
   if (state.wmsLayer) { map.removeLayer(state.wmsLayer); state.wmsLayer = null; }
   legend.hidden = true;
   note.textContent = "";
@@ -498,8 +512,10 @@ async function loadPerims(f, seq) {
     lab.innerHTML = `<input type="checkbox" data-ems="${p.ems}" ${latest ? "checked" : ""}>
       <span class="dot" style="background:${color}"></span>
       ${p.date.slice(0, 16).replace("T", " ")}Z${latest ? " (current)" : ""}`;
-    lab.querySelector("input").addEventListener("change", ev =>
-      togglePerim(f, p, ev.target.checked, latest));
+    lab.querySelector("input").addEventListener("change", ev => {
+      togglePerim(f, p, ev.target.checked, latest);
+      renderHotMarks();
+    });
     el.appendChild(lab);
   });
   await togglePerim(f, state.perimIndex[n - 1], true, true);
@@ -577,6 +593,7 @@ async function fireSpan(f) {
 }
 
 function layoutHotTimeline(span) {
+  state.hotSpan = span;
   const el = document.getElementById("hotTime");
   el.max = Math.max(1, Math.ceil((span.end - span.start) / HOUR));
   el.value = el.max;
@@ -598,6 +615,41 @@ function layoutHotTimeline(span) {
     tick.style.left = `${100 * (t - span.start) / (el.max * HOUR)}%`;
     ticks.appendChild(tick);
   }
+  renderHotMarks();
+}
+
+function renderHotMarks() {
+  // markers for the newest perimeter toggled on and the forecast run on the map;
+  // times outside the timeline pin to its edge, faded. Click to seek there.
+  const el = document.getElementById("hotMarks"), span = state.hotSpan;
+  el.innerHTML = "";
+  if (!span) return;
+  const marks = [];
+  const shown = [...document.querySelectorAll("#perimlist input:checked")]
+    .map(i => state.perimIndex.find(p => p.ems === i.dataset.ems)).filter(Boolean);
+  if (shown.length) {
+    const t = Math.max(...shown.map(p => Date.parse(p.date)));
+    marks.push(["#eb6834", t, "perimeter"]);
+  }
+  const run = document.getElementById("selRun").value;
+  if (run && document.getElementById("selVar").value) marks.push(["#2166ac", runDate(run).getTime(), "forecast run"]);
+  const total = +document.getElementById("hotTime").max * HOUR;
+  for (const [color, t, what] of marks) {
+    const outside = t < span.start ? " (before the timeline starts)" : t > span.end ? " (after the timeline ends)" : "";
+    const mk = document.createElement("i");
+    mk.className = "mk" + (outside ? " clamped" : "");
+    mk.style.setProperty("--c", color);
+    mk.style.left = `${100 * Math.min(Math.max((t - span.start) / total, 0), 1)}%`;
+    mk.title = `${what} ${fmtTs(t)}${outside} — click to move the playhead here`;
+    mk.addEventListener("click", () => seekHot(t));
+    el.appendChild(mk);
+  }
+}
+
+function seekHot(t) {
+  const span = state.hotSpan, el = document.getElementById("hotTime");
+  el.value = t >= span.end ? el.max : Math.round((Math.max(t, span.start) - span.start) / HOUR);
+  el.dispatchEvent(new Event("input"));
 }
 
 async function refreshHotspots() {
@@ -606,10 +658,13 @@ async function refreshHotspots() {
   if (state.hotLayer) { map.removeLayer(state.hotLayer); state.hotLayer = null; }
   state.hot = null;
   const f = state.fires.find(x => x.slug === state.sel);
-  if (!f || !f.centroid || !document.getElementById("chkHot").checked) {
-    note.textContent = f ? "" : "select a fire";
-    return;
-  }
+  if (!f) { note.textContent = "select a fire"; return; }
+  // the timeline (and its perimeter/run markers) follows the fire even when
+  // detections are switched off
+  const span = await fireSpan(f);
+  if (token !== state.hotSeq) return;   // another fire or toggle superseded this one
+  layoutHotTimeline(span);
+  if (!f.centroid || !document.getElementById("chkHot").checked) { note.textContent = ""; return; }
   const [lon, lat] = f.centroid;
   // size the query box from the latest perimeter (megafires dwarf a fixed radius —
   // a fixed box visibly clips the dot cloud along straight lines); centroid fallback
@@ -620,10 +675,6 @@ async function refreshHotspots() {
     const b = latestPerim.getBounds();
     bbox = `${b.getSouth() - 0.2},${b.getWest() - 0.2},${b.getNorth() + 0.2},${b.getEast() + 0.2}`;
   }
-  note.textContent = "loading detections…";
-  const span = await fireSpan(f);
-  if (token !== state.hotSeq) return;   // another fire or toggle superseded this one
-  layoutHotTimeline(span);
   state.hotLayer = L.layerGroup().addTo(map);
   state.hot = { bbox, span, days: new Map(), keys: new Set(), covered: new Set(),
                 shown: new Set(), capped: false, loading: false,
@@ -635,7 +686,7 @@ async function refreshHotspots() {
 async function ensureHotCoverage() {
   const H = state.hot;
   if (!H || H.loading) return;
-  const p = hotPlayhead(H);
+  const p = hotPlayhead();
   let d = dayOf(p - HOT_LOOKBACK_H * HOUR);
   while (d <= dayOf(p) && H.covered.has(d)) d++;
   if (d > dayOf(p)) return;
@@ -683,17 +734,18 @@ function scheduleHotCoverage() {   // wait for the scrubber to settle before fet
   hotFetchTimer = setTimeout(ensureHotCoverage, 250);
 }
 
-function hotPlayhead(H) {
-  return Math.min(H.span.start + document.getElementById("hotTime").value * HOUR, H.span.end);
+function hotPlayhead() {
+  const span = state.hotSpan;
+  return Math.min(span.start + document.getElementById("hotTime").value * HOUR, span.end);
 }
 
 function renderHotspots() {
+  const el = document.getElementById("hotTime");
+  const p = hotPlayhead();
+  document.getElementById("hotTimeLabel").textContent =
+    +el.value < +el.max || state.hotSpan.contained ? fmtTs(p) : "now";
   const H = state.hot;
   if (!H) return;
-  const el = document.getElementById("hotTime");
-  const p = hotPlayhead(H);
-  document.getElementById("hotTimeLabel").textContent = +el.value < +el.max ? fmtTs(p)
-    : H.span.contained ? `${fmtTs(p)} (containment)` : "now";
   const d0 = dayOf(p - HOT_LOOKBACK_H * HOUR), d1 = dayOf(p);
   for (const d of H.shown) {   // days that slid out of the window leave the map
     if (d >= d0 && d <= d1) continue;
