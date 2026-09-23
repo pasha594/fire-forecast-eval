@@ -32,7 +32,10 @@
   .sub { color: var(--ink-2); font-size: 12px; margin: 0 0 10px; }
   .sec { border-top: 1px solid var(--grid); margin-top: 12px; padding-top: 10px; }
   .sec h2 { font: 700 11.5px/1.4 var(--font-sans); text-transform: uppercase;
-            letter-spacing: .08em; color: var(--label); margin: 0 0 6px; }
+            letter-spacing: .08em; color: var(--label); margin: 0 0 6px;
+            display: flex; align-items: center; gap: 8px; }
+  .sec h2 .src-logo { line-height: 0; }
+  .sec h2 .src-logo img { height: 22px; width: auto; }
   select, input[type=text] {
     font: inherit; width: 100%; padding: 5px 6px; margin-bottom: 6px;
     border: 1px solid var(--axis); border-radius: 6px; background: var(--surface);
@@ -64,7 +67,8 @@
   <div id="firelist"></div>
 
   <div class="sec">
-    <h2>Forecast layer</h2>
+    <h2>Forecast layer <a class="src-logo" href="https://www.pyregence.org/" target="_blank"
+      rel="noopener" title="Forecasts by Pyregence"><img src="pyregence-logo.svg" alt="by Pyregence"></a></h2>
     <select id="selRun"></select>
     <select id="selVar">
       <option value="time-of-arrival" selected>time of arrival</option>
@@ -94,12 +98,12 @@
   </div>
 
   <div class="sec">
-    <h2>Perimeters (Cornea)</h2>
+    <h2>Perimeters (NIFC)</h2>
     <div id="perimlist" class="note">select a fire</div>
   </div>
 
   <div class="sec">
-    <h2>Hotspots (Cornea)</h2>
+    <h2>Hotspots (NASA VIIRS)</h2>
     <label class="row"><input type="checkbox" id="chkHot" checked>show detections</label>
     <label class="row" style="display:block">playhead: <b id="hotTimeLabel">now</b>
       <input type="range" id="hotTime" min="0" max="336" value="0"></label>
@@ -120,7 +124,7 @@ const BUCKET = "https://f005.backblazeb2.com/file/fire-forecast-archive";
 
 const map = L.map("map").setView([41, -114], 5);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-  { maxZoom: 16, attribution: "OSM · forecasts: pyrecast.org · perimeters: Cornea" }).addTo(map);
+  { maxZoom: 16, attribution: "OSM · forecasts: Pyregence · perimeters: NIFC · hotspots: NASA VIIRS" }).addTo(map);
 
 const state = {
   fires: [],            // [{slug, title, cornea_id, centroid:[lon,lat], runs:[ts...]}]
