@@ -183,8 +183,10 @@ async function init() {
   // in those, a missing last_seen itself means "absent from the latest scrape"
   const stamped = Object.values(manifest.runs).some(e => e.last_seen);
   for (const [runKey, e] of Object.entries(manifest.runs)) {
-    const f = bySlug[e.slug] = bySlug[e.slug] || { slug: e.slug, runs: [], live: {}, centroid: null };
+    const f = bySlug[e.slug] = bySlug[e.slug] || { slug: e.slug, runs: [], live: {}, pcts: {}, centroid: null };
     f.runs.push(e.run_ts);
+    // percentiles whose time-of-arrival tif made it into the archive
+    f.pcts[e.run_ts] = new Set(Object.entries(e.files || {}).filter(([, x]) => x.ok).map(([p]) => p));
     // live = seen in the most recent scrape (within 2h of manifest generation);
     // anything older has aged off pyrecast's geoserver -> no WMS tiles exist
     f.live[e.run_ts] = e.last_seen ? gen - Date.parse(e.last_seen) < 2 * 3600e3
@@ -279,10 +281,13 @@ async function select(slug) {
   if (f.centroid) map.setView([f.centroid[1], f.centroid[0]], 11);
 
   const selRun = document.getElementById("selRun");
+  // runs that expired upstream before any file was archived can't draw anything;
+  // open on the newest run that can (archived files, or still live on Pyrecast)
+  const noData = r => !f.pcts[r].size && f.live[r] === false;
+  const shown = f.runs.find(r => !noData(r)) || f.runs[0];
   selRun.innerHTML = f.runs.map((r, i) => {
-    const tag = f.live[r] === false ? " — expired upstream"
-      : i === 0 ? " (latest)" : "";
-    return `<option value="${r}"${i === 0 ? " selected" : ""}>run ${fmtRun(r)}${tag}</option>`;
+    const tag = noData(r) ? " — no data" : i === 0 ? " (latest)" : "";
+    return `<option value="${r}"${r === shown ? " selected" : ""}>run ${fmtRun(r)}${tag}</option>`;
   }).join("");
   refreshWms();
   // perimeters first: the hotspot query box is sized from the perimeter bounds
@@ -440,8 +445,11 @@ async function renderArchivedToa(f, run, pct, note, expired) {
         legend.hidden = false;
         return;
       }
-      note.textContent = "expired upstream, and the archived tif isn't reachable — run " +
-        "`analyze.py --sync` (or add a CORS rule to the bucket for this origin).";
+      const got = f.pcts[run];
+      note.textContent = !got.size
+        ? "no forecast files were captured for this run before Pyrecast removed it — pick another run"
+        : !got.has(pct) ? `the ${pct}th percentile wasn't captured for this run — try another percentile`
+        : "couldn't load the archived time-of-arrival raster — try reloading the page";
       note.className = "warn";
       return;
     }
@@ -461,9 +469,7 @@ async function renderArchivedToa(f, run, pct, note, expired) {
     pixelValuesToColorFn: vals => toaColor(vals[0], maxH),
   }).addTo(map);
   document.getElementById("timelabel").textContent = `+${maxH}h`;
-  note.innerHTML = (expired ? "expired upstream — showing <b>archived</b> time-of-arrival"
-                            : "time-of-arrival, client-rendered from the archive") +
-    "<br>" + toaLegendHtml(maxH);
+  note.innerHTML = "time-of-arrival, rendered from the archive<br>" + toaLegendHtml(maxH);
   note.className = "note";
 }
 
