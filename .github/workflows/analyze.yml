@@ -3,7 +3,12 @@ name: analyze
 on:
   schedule:
     - cron: "37 5,17 * * *"   # 2x daily, offset from the collect crons
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      skill_only:
+        description: Only rebuild per-fire skill files from the published metrics.csv
+        type: boolean
+        default: false
 
 concurrency:
   group: analyze
@@ -24,14 +29,25 @@ jobs:
       # raw/ holds the synced ToA tifs + perimeters (~1GB/day of archive age);
       # the cache means most runs only download the delta from B2
       - uses: actions/cache@v4
+        # inputs is empty on schedule events, so scheduled runs take this path
+        if: ${{ !inputs.skill_only }}
         with:
           path: raw
           key: raw-analyze-${{ github.run_id }}
           restore-keys: raw-analyze-
-      - name: Sync, analyze, publish metrics.csv to the bucket
+      - name: Sync, analyze, publish metrics.csv + skill files to the bucket
+        if: ${{ !inputs.skill_only }}
         env:
           S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
           S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
           S3_BUCKET: ${{ vars.S3_BUCKET || 'fire-forecast-archive' }}
         run: python analyze.py --sync --publish
+      - name: Rebuild skill files from the published metrics.csv
+        if: ${{ inputs.skill_only }}
+        env:
+          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_BUCKET: ${{ vars.S3_BUCKET || 'fire-forecast-archive' }}
+        run: python analyze.py --skill-only

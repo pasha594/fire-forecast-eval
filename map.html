@@ -9,12 +9,12 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script>
 <script src="https://unpkg.com/georaster-layer-for-leaflet@3.10.0/dist/georaster-layer-for-leaflet.min.js"></script>
+<script src="palette.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600..800&family=Public+Sans:wght@400..800&display=swap">
 <link rel="stylesheet" href="brand.css">
 <style>
-  :root { --actual: #eb6834; }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
   body {
@@ -22,37 +22,53 @@
     font: 13.5px/1.4 var(--font-sans);
   }
   #side {
-    width: 320px; min-width: 320px; overflow-y: auto; padding: 14px;
+    width: 320px; min-width: 320px; overflow-y: auto; padding: 10px 14px;
     background: var(--surface); border-right: 1px solid var(--grid);
   }
   #map { flex: 1; }
-  .brand { margin-bottom: 10px; }
+  /* no fire selected: the overview replaces the per-fire sections */
+  #side.nosel .fire-only, #side:not(.nosel) #overview { display: none; }
+  .brandrow { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
   .brand img { height: 22px; }
+  /* the 28px gear must not grow the 22px logo row (side panel height budget) */
+  .brandrow .palette-gear { margin: -3px 0; }
   h1 { font-size: 19px; font-weight: 800; margin: 0 0 2px; }
-  .sub { color: var(--ink-2); font-size: 12px; margin: 0 0 10px; }
-  .sec { border-top: 1px solid var(--grid); margin-top: 12px; padding-top: 10px; }
+  .sub { color: var(--ink-2); font-size: 12px; margin: 0 0 8px; }
+  .linkbtn { display: block; padding: 0; margin: -2px 0 3px; border: 0; background: none; cursor: pointer;
+             font: 12px/16px var(--font-sans); color: var(--link); text-decoration: underline;
+             text-decoration-color: var(--accent); text-underline-offset: 2px; }
+  .sec { border-top: 1px solid var(--grid); margin-top: 7px; padding-top: 6px; }
   .sec h2 { font: 700 11.5px/1.4 var(--font-sans); text-transform: uppercase;
-            letter-spacing: .08em; color: var(--label); margin: 0 0 6px;
+            letter-spacing: .08em; color: var(--label); margin: 0 0 5px;
             display: flex; align-items: center; gap: 8px; }
+  /* a section's toggle shares its heading row (side panel height budget) */
+  .sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 5px; }
+  .sec-head h2 { margin: 0; white-space: nowrap; }
+  .sec-head label.row { margin: 0; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+  .sec-head > a { font-size: 11.5px; }
+  .help { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px;
+          margin-left: -3px; border: 1px solid var(--axis); border-radius: 50%; color: var(--muted);
+          font: 600 9.5px/1 var(--font-sans); letter-spacing: 0; cursor: help; }
   .sec h2 .src-logo { line-height: 0; }
   /* the flame fills the logo's full height but the wordmark only its lower
      59%, so centering the box leaves the lettering low; lift it to the caps */
   .sec h2 .src-logo img { height: 17px; width: auto; transform: translateY(-3.7px); }
   select, input[type=text] {
-    font: inherit; width: 100%; padding: 5px 6px; margin-bottom: 6px;
+    font: inherit; width: 100%; padding: 4px 6px; margin-bottom: 5px;
     border: 1px solid var(--axis); border-radius: 6px; background: var(--surface);
     color: var(--ink);
   }
+  .pair { display: grid; grid-template-columns: minmax(0, 1fr) 130px; column-gap: 6px; }
   label.row { display: flex; gap: 6px; align-items: center; margin: 3px 0; cursor: pointer; }
   label.row .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
   /* collapsed-by-default pickers: each list opens as an overlay under its field,
      so only the list scrolls, never the side panel */
-  .picker { position: relative; margin-bottom: 6px; }
+  .picker { position: relative; margin-bottom: 5px; }
   .picker > input[type=text] { margin-bottom: 0; padding-right: 22px; }
   .picker::after { content: "▾"; position: absolute; right: 8px; top: 50%;
                    transform: translateY(-50%); color: var(--muted); pointer-events: none; }
   .picker:has(.dropbtn:disabled)::after { content: none; }
-  .dropbtn { font: inherit; width: 100%; padding: 5px 22px 5px 6px; text-align: left;
+  .dropbtn { font: inherit; width: 100%; padding: 4px 22px 4px 6px; text-align: left;
              border: 1px solid var(--axis); border-radius: 6px; background: var(--surface);
              color: var(--ink); cursor: pointer; white-space: nowrap; overflow: hidden;
              text-overflow: ellipsis; }
@@ -66,11 +82,19 @@
   #firelist div:hover { background: var(--hover); }
   #firelist div.sel { background: var(--selected); font-weight: 600; }
   #firelist .meta { color: var(--muted); font-size: 11px; font-weight: 400; }
-  .note { color: var(--muted); font-size: 11.5px; margin: 4px 0; }
-  .warn { color: var(--warn); font-size: 11.5px; margin: 4px 0; }
+  .note { color: var(--muted); font-size: 11.5px; margin: 3px 0; }
+  .warn { color: var(--warn); font-size: 11.5px; margin: 3px 0; }
   #legendimg { max-width: 100%; margin-top: 6px; background: #fff;
                border: 1px solid var(--grid); border-radius: 4px; }
+  .toa-key { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; align-items: center;
+             margin-top: 3px; }
+  .toa-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; }
+  .toa-bar i.dim { opacity: .25; }
+  .toa-ticks { grid-column: 2; position: relative; height: 13px; font-size: 10px; line-height: 13px; }
+  .toa-ticks span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
+  .toa-ticks span.last { right: 0; transform: none; }
   input[type=range] { width: 100%; }
+  #timeslider { display: block; margin: 0; }
   /* hotspot playhead: own track and thumb so the 12h ticks under it line up with
      the thumb's travel (native thumbs differ in width between browsers); the tick
      row is inset by half the 14px thumb on each side */
@@ -89,47 +113,112 @@
   #hotTicks span.major { height: 8px; background: var(--muted); }
   /* timeline markers: downward triangles above the track, same inset as the ticks */
   .hot-head { margin: 3px 0 0; }
-  .hot-key { color: var(--muted); font-size: 11px; margin: 0 0 8px; }
+  .hot-key { color: var(--muted); font-size: 11px; margin: 0 0 5px; white-space: nowrap; }
   .mk { display: inline-block; width: 0; height: 0; margin: 0 3px 0 8px;
         border: solid transparent; border-width: 7px 4px 0; border-top-color: var(--c); }
   .hot-key .mk:first-child { margin-left: 0; }
   #hotMarks { position: relative; height: 7px; margin: 4px 7px 0; }
   #hotMarks .mk { position: absolute; top: 0; margin: 0 0 0 -4px; cursor: pointer; }
   #hotMarks .mk.clamped { opacity: .45; }
+  .hot-legend { display: grid; grid-template-columns: 56px 1fr; gap: 3px 2px; margin: 2px 0 4px;
+                color: var(--muted); font-size: 11.5px; }
+  .hot-legend .bar { height: 10px; }
+  #scarSwatch { border-radius: 5px 0 0 5px; }
+  #hotRamp { border-radius: 0 5px 5px 0; }
+  .hot-legend .ends { display: flex; justify-content: space-between; }
+  /* forecast skill: 9 horizon columns have to fit the 292px content width */
+  .skill { border-collapse: collapse; font-size: 11px; line-height: 13px;
+           font-variant-numeric: tabular-nums; }
+  .skill th, .skill td { width: 25.5px; padding: 0; text-align: center; font-weight: 400; }
+  .skill tr > :first-child { width: 61px; text-align: left; white-space: nowrap; color: var(--ink-2); }
+  .skill thead th { color: var(--muted); font-size: 10.5px; font-variant-numeric: normal; }
+  .skill tbody th span { color: var(--muted); }
+  .skill td { border: 1px solid var(--surface);
+              background: color-mix(in srgb, var(--accent) calc(var(--v, 0) * 60%), transparent); }
+  /* no-selection overview */
+  .ov-head { display: flex; align-items: center; gap: 10px; min-height: 36px; }
+  .ov-num { font: 800 36px/1 var(--font-serif); color: var(--stat); font-variant-numeric: lining-nums; }
+  .ov-lab { color: var(--ink-2); font-size: 12.5px; line-height: 1.25; }
+  #ovSub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ov-chips { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 8px 0; }
+  .chip { font: 12px/16px var(--font-sans); padding: 3px 0; border: 1px solid var(--axis); border-radius: 999px;
+          background: var(--surface); color: var(--ink-2); cursor: pointer; font-variant-numeric: tabular-nums; }
+  .chip b { color: var(--ink); font-weight: 700; margin-right: 2px; }
+  .chip:hover:not(:disabled) { background: var(--hover); }
+  .chip.on, .chip.on:hover { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .chip.on b { color: inherit; }
+  .chip:disabled { opacity: .45; cursor: default; }
+  .ov-sort { margin: 0 0 3px; }
+  #ovList { border-top: 1px solid var(--grid); }
+  .ov-row { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; column-gap: 8px; align-items: center;
+            width: 100%; padding: 3px 4px 3px 0; border: 0; border-bottom: 1px solid var(--grid);
+            background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+  .ov-row:hover { background: var(--hover); }
+  .ov-rank { color: var(--muted); font-size: 11.5px; text-align: right; font-variant-numeric: tabular-nums; }
+  .ov-main { display: block; min-width: 0; }
+  .ov-name { display: flex; align-items: center; gap: 6px; font-weight: 600; line-height: 17px; }
+  .ov-name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ov-meta { display: block; color: var(--muted); font-size: 11px; line-height: 14px;
+             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ov-runs { color: var(--ink-2); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .live { flex: none; padding: 0 4px; border-radius: 3px; background: var(--warn-bg); color: var(--warn);
+          font: 700 9px/14px var(--font-sans); letter-spacing: .06em; }
+  .ov-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 6px;
+              color: var(--ink-2); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .ov-pager button { width: 26px; height: 22px; padding: 0; border: 1px solid var(--axis); border-radius: 6px;
+                     background: var(--surface); color: var(--ink); font: 15px/1 var(--font-sans); cursor: pointer; }
+  .ov-pager button:hover:not(:disabled) { background: var(--hover); }
+  .ov-pager button:disabled { opacity: .4; cursor: default; }
 </style>
 </head>
 <body>
-<div id="side">
-  <a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><img src="cornea-logo-on-light.webp" alt="Cornea"></a>
+<div id="side" class="nosel">
+  <div class="brandrow">
+    <a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><img src="cornea-logo-on-light.webp" alt="Cornea"></a>
+  </div>
   <h1>Fire forecast map</h1>
   <p class="sub">Pyrecast ELMFIRE layers (live WMS) over Cornea perimeters &amp; hotspots ·
   <a href="report.html">skill report</a></p>
 
+  <button type="button" id="allFires" class="linkbtn fire-only">&larr; All fires</button>
   <div class="picker">
     <input type="text" id="search" placeholder="search fires" autocomplete="off" spellcheck="false">
     <div id="firelist" class="dropdown" hidden></div>
   </div>
 
-  <div class="sec">
+  <div class="sec" id="overview">
+    <h2>Active fires</h2>
+    <div class="ov-head"><span class="ov-num" id="ovNum">&ndash;</span><span class="ov-lab" id="ovLab"></span></div>
+    <div class="note" id="ovSub">loading fires…</div>
+    <div class="ov-chips" id="ovChips" role="group" aria-label="latest forecast within"></div>
+    <div class="note ov-sort">Sorted by latest forecast</div>
+    <div id="ovList"></div>
+    <div class="ov-pager"><button type="button" id="ovPrev" aria-label="previous page" disabled>&lsaquo;</button>
+      <span id="ovRange"></span><button type="button" id="ovNext" aria-label="next page" disabled>&rsaquo;</button></div>
+  </div>
+
+  <div class="sec fire-only">
     <h2>Forecast layer <a class="src-logo" href="https://www.pyregence.org/" target="_blank"
       rel="noopener" title="Forecasts by Pyregence"><img src="pyregence-logo.svg" alt="by Pyregence"></a></h2>
     <select id="selRun"></select>
-    <select id="selVar">
-      <option value="time-of-arrival" selected>time of arrival</option>
-      <option value="spread-rate">spread rate</option>
-      <option value="flame-length">flame length</option>
-      <option value="crown-fire">crown fire</option>
-      <option value="hours-since-burned">hours since burned</option>
-      <option value="isochrones">isochrones (vector)</option>
-      <option value="">— none —</option>
-    </select>
-    <select id="selPct">
-      <option value="10">10th percentile</option>
-      <option value="30">30th percentile</option>
-      <option value="50" selected>50th percentile</option>
-      <option value="70">70th percentile</option>
-      <option value="90">90th percentile</option>
-    </select>
+    <div class="pair">
+      <select id="selVar">
+        <option value="time-of-arrival" selected>time of arrival</option>
+        <option value="spread-rate">spread rate</option>
+        <option value="flame-length">flame length</option>
+        <option value="crown-fire">crown fire</option>
+        <option value="hours-since-burned">hours since burned</option>
+        <option value="isochrones">isochrones (vector)</option>
+        <option value="">— none —</option>
+      </select>
+      <select id="selPct">
+        <option value="10">10th percentile</option>
+        <option value="30">30th percentile</option>
+        <option value="50" selected>50th percentile</option>
+        <option value="70">70th percentile</option>
+        <option value="90">90th percentile</option>
+      </select>
+    </div>
     <div id="timerow" hidden>
       <label class="row" style="display:block"><span id="timePrefix">forecast hour:</span>
         <b id="timelabel"></b>
@@ -141,7 +230,13 @@
     <img id="legendimg" alt="" hidden>
   </div>
 
-  <div class="sec">
+  <div class="sec fire-only" id="skillSec" hidden>
+    <div class="sec-head"><h2>Forecast skill <span class="help" title="Growth-only precision, recall and intersection-over-union of this run's predicted spread vs the NIFC perimeter at each horizon — same rows and default filters as the skill report.">?</span></h2>
+      <a href="report.html">skill report</a></div>
+    <table class="skill" id="skillTable"></table>
+  </div>
+
+  <div class="sec fire-only">
     <h2>Perimeters (NIFC)</h2>
     <div class="picker" id="perimPicker">
       <button type="button" id="perimBtn" class="dropbtn" disabled>select a fire</button>
@@ -149,21 +244,20 @@
     </div>
   </div>
 
-  <div class="sec">
-    <h2>Hotspots (NASA VIIRS)</h2>
-    <label class="row"><input type="checkbox" id="chkHot" checked>show detections</label>
+  <div class="sec fire-only">
+    <div class="sec-head"><h2>Hotspots (NASA VIIRS)</h2>
+      <label class="row"><input type="checkbox" id="chkHot" checked>show detections</label></div>
     <div class="hot-head">playhead: <b id="hotTimeLabel">now</b></div>
     <div id="hotMarks"></div>
     <input type="range" id="hotTime" min="0" max="336" value="336" aria-label="hotspot playhead">
     <div id="hotTicks" aria-hidden="true"></div>
     <div class="note" style="display:flex;justify-content:space-between;margin-bottom:2px">
       <span id="hotStartLabel"></span><span id="hotEndLabel">now</span></div>
-    <div class="hot-key"><i class="mk" style="--c:#eb6834"></i>perimeter<i class="mk"
-      style="--c:#2166ac"></i>forecast run · click to jump</div>
-    <div style="height:10px;border-radius:5px;margin:2px 0;
-      background:linear-gradient(to left,#ffd21f,hsl(20,90%,50%),hsl(340,90%,43%),hsl(275,90%,33%))"></div>
-    <div class="note" style="display:flex;justify-content:space-between">
-      <span>7d before</span><span>&le;24h before playhead</span></div>
+    <div class="hot-key" id="hotKey"></div>
+    <div class="hot-legend">
+      <span class="bar" id="scarSwatch"></span><span class="bar" id="hotRamp"></span>
+      <span>burn scar</span><span class="ends"><span>7d before</span><span>&le;24h before playhead</span></span>
+    </div>
     <div class="note" id="hotnote"></div>
   </div>
 </div>
@@ -175,15 +269,30 @@ const CORNEA = "https://fire-api-prod.web.app";
 const WMS = "https://geoserver-usw1.pyrecast.org/geoserver02/wms";
 const BUCKET = "https://f005.backblazeb2.com/file/fire-forecast-archive";
 
-const map = L.map("map").setView([41, -114], 5);
+const OVERVIEW_VIEW = [[41, -114], 5];
+if (new URLSearchParams(location.search).get("fire")) document.getElementById("side").classList.remove("nosel");
+
+const map = L.map("map").setView(...OVERVIEW_VIEW);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
   { maxZoom: 16, attribution: "OSM · forecasts: Pyregence · perimeters: NIFC · hotspots: NASA VIIRS" }).addTo(map);
+// burn scar above the forecast raster and perimeters (overlayPane, 400) and under
+// the active hotspots; the scar is display-only, so its canvas never takes the pointer
+const scarPane = map.createPane("scar");
+scarPane.style.zIndex = 420;
+scarPane.style.pointerEvents = "none";
+map.createPane("hotspots").style.zIndex = 430;
+const hotRenderer = L.canvas({ padding: 0.2, pane: "hotspots" });   // thousands of points -> canvas
+// fire markers above the hotspot canvas, which would otherwise take their clicks;
+// Leaflet's per-pane SVG root is pointer-events none, so it doesn't block the canvas
+map.createPane("fires").style.zIndex = 440;
 
 const state = {
   fires: [],            // [{slug, title, cornea_id, centroid:[lon,lat], runs:[ts...]}]
   sel: null,
   searchDirty: false,   // true once the user types; until then the fire list is unfiltered
   wmsLayer: null,
+  toaGeo: null,         // georaster behind wmsLayer when it is the archived ToA raster
+  wmsSeq: 0,
   perimLayers: new Map(),   // epochms -> L.geoJSON
   perimIndex: [],           // [{ems, date}]
   hotLayer: null,
@@ -194,10 +303,15 @@ const state = {
   granIdx: 12,         // hourly-mosaic forecast-hour slider
   georasterCache: new Map(),
   seq: 0,
+  skillIndex: null,     // promise of {slug: scored rows} from skill/index.json, {} when unavailable
+  skill: new Map(),     // slug -> skill/<slug>.json
+  ovWin: "All",         // no-selection overview: recency filter (a RECENCY key), page, rows per page
+  ovPage: 0,
+  ovSize: 10,
 };
 
-async function getJson(url) {
-  const r = await fetch(url, { cache: "no-cache" });  // manifest/perimeters update every 2h
+async function getJson(url, signal) {
+  const r = await fetch(url, { cache: "no-cache", signal });  // manifest/perimeters update every 2h
   if (!r.ok) throw new Error(`HTTP ${r.status} for ${url}`);
   return r.json();
 }
@@ -210,6 +324,8 @@ async function loadLocalOrBucket(key) {
 // ---------------------------------------------------------------- fire list
 
 async function init() {
+  state.skillIndex = getJson(`${BUCKET}/skill/index.json`)
+    .then(j => (j && j.slugs && typeof j.slugs === "object" ? j.slugs : {}), () => ({}));
   const [matches, manifest] = await Promise.all([
     loadLocalOrBucket("fire_matches.json"), loadLocalOrBucket("manifest.json")]);
   const bySlug = {};
@@ -230,20 +346,23 @@ async function init() {
   }
   for (const f of Object.values(bySlug)) {
     f.runs.sort().reverse();
+    f.latest = runDate(f.runs[0]).getTime();
     const m = matches.matches[f.slug];
     f.title = m ? (m.post_title || f.slug) : null;
     f.cornea_id = m ? m.cornea_id : null;
   }
-  state.fires = Object.values(bySlug).sort((a, b) => a.slug.localeCompare(b.slug));
-  for (const f of state.fires) {
+  const fires = Object.values(bySlug).sort((a, b) => a.slug.localeCompare(b.slug));
+  for (const f of fires) {
     if (!f.centroid) continue;
     f.marker = L.circleMarker([f.centroid[1], f.centroid[0]],
-      { radius: 5, color: "#52514e", weight: 1.5, fillColor: "#eb6834", fillOpacity: 0.8 })
+      { pane: "fires", radius: 5, color: "#52514e", weight: 1.5, fillColor: "#eb6834", fillOpacity: 0.8 })
       .addTo(map).bindTooltip(`${f.title || f.slug}`).on("click", () => select(f.slug));
   }
+  state.fires = fires.sort((a, b) => b.latest - a.latest || fireName(a).localeCompare(fireName(b)));
   renderList();
   const want = new URLSearchParams(location.search).get("fire");
   if (want && state.fires.some(x => x.slug === want)) select(want);
+  else deselect();
   wirePickers();
   for (const id of ["selRun", "selVar", "selPct"])
     document.getElementById(id).addEventListener("change", refreshWms);
@@ -259,6 +378,7 @@ async function init() {
     } else if (variable === "time-of-arrival") {
       state.toaMaxH = +slider.value;
       document.getElementById("timelabel").textContent = `+${slider.value}h`;
+      renderToaLegend();
     }
   });
   slider.addEventListener("change", () => {          // apply on release
@@ -273,7 +393,7 @@ async function init() {
     }
   });
   document.getElementById("chkHot").addEventListener("change", refreshHotspots);
-  layoutHotTimeline({ start: dayOf(Date.now() - 14 * DAY) * DAY, end: Date.now(), contained: false });
+  layoutHotTimeline(defaultHotSpan());
   let hotPending = false;   // setTimeout, not rAF — rAF pauses in hidden tabs
   document.getElementById("hotTime").addEventListener("input", () => {
     if (hotPending) return;
@@ -314,6 +434,24 @@ function wirePickers() {
   search.addEventListener("blur", () => { list.hidden = true; showSelectedName(); });
   list.addEventListener("mousedown", ev => ev.preventDefault());   // keep focus until the click lands
 
+  document.getElementById("allFires").addEventListener("click", deselect);
+  document.getElementById("ovChips").addEventListener("click", ev => {
+    const chip = ev.target.closest(".chip");
+    if (!chip || chip.disabled) return;
+    state.ovWin = chip.dataset.win;
+    state.ovPage = 0;
+    renderOverview();
+  });
+  document.getElementById("ovList").addEventListener("click", ev => {
+    const row = ev.target.closest(".ov-row");
+    if (row) select(row.dataset.slug);
+  });
+  document.getElementById("ovPrev").addEventListener("click", () => { state.ovPage--; renderOverview(); });
+  document.getElementById("ovNext").addEventListener("click", () => { state.ovPage++; renderOverview(); });
+  window.addEventListener("resize", () => { if (!state.sel) fitOverview(); });
+  // the serif headline and row text change height when the web fonts swap in
+  if (document.fonts) document.fonts.ready.then(() => { if (!state.sel) fitOverview(); });
+
   const btn = document.getElementById("perimBtn"), perims = document.getElementById("perimlist");
   btn.addEventListener("click", () => { if (perims.hidden) openDropdown(perims); else perims.hidden = true; });
   document.addEventListener("mousedown", ev => {
@@ -338,13 +476,108 @@ function renderList() {
   }
 }
 
+// ------------------------------------------------- overview (no fire selected)
+
+// [chip, latest run within (hours), headline wording]
+const RECENCY = [["24h", 24, "24 hours"], ["48h", 48, "48 hours"], ["7d", 168, "7 days"], ["All", Infinity, ""]];
+const fireName = f => f.title || f.slug;
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const fmtRunShort = ts => `${fmtDay(runDate(ts).getTime())} ${ts.slice(9, 11)}:${ts.slice(11, 13)}Z`;
+const plural = (n, word) => `${n.toLocaleString("en-US")} ${word}${n === 1 ? "" : "s"}`;
+
+function setMode() {
+  const none = !state.sel;
+  document.getElementById("side").classList.toggle("nosel", none);
+  if (none) renderOverview();
+}
+
+function renderOverview() {
+  const now = Date.now();
+  const within = h => state.fires.filter(f => now - f.latest <= h * HOUR);
+  const [, winH, winText] = RECENCY.find(([k]) => k === state.ovWin);
+  const fires = within(winH);
+  const num = n => n.toLocaleString("en-US");
+  document.getElementById("ovNum").textContent = num(fires.length);
+  document.getElementById("ovLab").innerHTML =
+    "fires with Pyrecast forecasts" + (winText ? `<br>in the last ${winText}` : "");
+  const runs = fires.reduce((n, f) => n + f.runs.length, 0);
+  document.getElementById("ovSub").textContent = fires.length
+    ? `latest forecast ${fmtRunShort(fires[0].runs[0])} · ${plural(runs, "run")} in total`
+    : "no forecast runs in this window";
+  document.getElementById("ovChips").innerHTML = RECENCY.map(([k, h]) => {
+    const n = within(h).length, on = k === state.ovWin;
+    const tip = h === Infinity ? "all fires" : `fires whose latest forecast run is within the last ${k}`;
+    return `<button type="button" class="chip${on ? " on" : ""}" data-win="${k}" aria-pressed="${on}" ` +
+      `title="${tip}"${n || on ? "" : " disabled"}><b>${k}</b> ${num(n)}</button>`;
+  }).join("");
+  const size = state.ovSize, pages = Math.max(1, Math.ceil(fires.length / size));
+  state.ovPage = Math.min(Math.max(state.ovPage, 0), pages - 1);
+  const first = state.ovPage * size, shown = fires.slice(first, first + size);
+  document.getElementById("ovList").innerHTML = shown.map((f, i) => {
+    const live = f.runs.some(r => f.live[r] === true)
+      ? `<span class="live" title="a forecast run is still live on Pyrecast">LIVE</span>` : "";
+    return `<button type="button" class="ov-row" data-slug="${esc(f.slug)}">` +
+      `<span class="ov-rank">${first + i + 1}</span><span class="ov-main">` +
+      `<span class="ov-name"><span>${esc(fireName(f))}</span>${live}</span>` +
+      `<span class="ov-meta">${esc(f.slug.split("-")[0].toUpperCase())} · latest forecast ${fmtRunShort(f.runs[0])}</span>` +
+      `</span><span class="ov-runs">${plural(f.runs.length, "run")}</span></button>`;
+  }).join("");
+  document.getElementById("ovRange").textContent =
+    fires.length ? `${first + 1}–${first + shown.length} of ${num(fires.length)}` : "0 of 0";
+  document.getElementById("ovPrev").disabled = state.ovPage === 0;
+  document.getElementById("ovNext").disabled = state.ovPage >= pages - 1;
+  fitOverview();
+}
+
+function fitOverview() {
+  // as many rows per page as the panel holds without scrolling, at least 5
+  const side = document.getElementById("side"), list = document.getElementById("ovList");
+  const row = list.firstElementChild;
+  if (state.sel || !row) return;
+  const top = side.getBoundingClientRect().top - side.scrollTop;
+  const used = document.getElementById("overview").getBoundingClientRect().bottom - top +
+    parseFloat(getComputedStyle(side).paddingBottom);
+  const fixed = used - list.getBoundingClientRect().height;
+  const size = Math.max(5, Math.floor((side.clientHeight - fixed) / row.getBoundingClientRect().height));
+  if (size === state.ovSize) return;
+  state.ovPage = Math.floor(state.ovPage * state.ovSize / size);
+  state.ovSize = size;
+  renderOverview();
+}
+
 // ---------------------------------------------------------------- selection
+
+function setFireParam(slug) {
+  const url = new URL(location.href);
+  if (slug) url.searchParams.set("fire", slug);
+  else url.searchParams.delete("fire");
+  history.replaceState(history.state, "", url);
+}
+
+function deselect() {
+  state.sel = null;
+  state.seq++;              // drops in-flight forecast, perimeter and skill responses
+  setFireParam(null);
+  document.getElementById("selRun").innerHTML = "";
+  refreshWms();             // with no run this only removes the forecast layer
+  clearPerims();
+  refreshHotspots();        // bumps hotSeq, aborts hotspot/history requests, drops hotspots + burn scar
+  clearTimeout(hotFetchTimer);
+  layoutHotTimeline(defaultHotSpan());
+  showSelectedName();
+  renderList();
+  setMode();
+  map.setView(...OVERVIEW_VIEW);
+}
 
 async function select(slug) {
   const f = state.fires.find(x => x.slug === slug);
   if (!f) return;
   state.sel = slug;
   const seq = ++state.seq;   // guard stale async responses after reselect
+  clearHotspots();
+  setFireParam(slug);
+  setMode();
   renderList();
   showSelectedName();
   if (f.centroid) map.setView([f.centroid[1], f.centroid[0]], 11);
@@ -359,8 +592,10 @@ async function select(slug) {
     return `<option value="${r}"${r === shown ? " selected" : ""}>run ${fmtRun(r)}${tag}</option>`;
   }).join("");
   refreshWms();
+  loadSkill(f, seq);
   // perimeters first: the hotspot query box is sized from the perimeter bounds
   await loadPerims(f, seq);
+  if (state.seq !== seq) return;
   await refreshHotspots();
 }
 
@@ -397,6 +632,7 @@ function timeParam(run) {
 }
 
 function refreshWms() {
+  const token = ++state.wmsSeq;
   const f = state.fires.find(x => x.slug === state.sel);
   const run = document.getElementById("selRun").value;
   const variable = document.getElementById("selVar").value;
@@ -404,7 +640,9 @@ function refreshWms() {
   const note = document.getElementById("wmsnote");
   const legend = document.getElementById("legendimg");
   renderHotMarks();   // the forecast-run marker follows the selected run and layer
+  renderSkill();
   if (state.wmsLayer) { map.removeLayer(state.wmsLayer); state.wmsLayer = null; }
+  state.toaGeo = null;
   legend.hidden = true;
   note.textContent = "";
   note.className = "note";
@@ -414,7 +652,7 @@ function refreshWms() {
   if (variable === "time-of-arrival") {
     // always client-rendered from our archive: the threshold slider needs pixel
     // access, and pyrecast's geoserver rejects SLD_BODY restyling
-    renderArchivedToa(f, run, pct, note, f.live[run] === false);
+    renderArchivedToa(f, run, pct, note, f.live[run] === false, token);
     return;
   }
   if (f.live[run] === false) {
@@ -468,26 +706,48 @@ function configureTimeSlider(variable) {
 
 // ------------------------------------------------- archived raster rendering
 
-// hours-to-arrival bins, blue (imminent) -> red (late), like pyrecast's styling
-const TOA_BINS = [[12, "#08306b"], [24, "#2166ac"], [48, "#4393c3"], [72, "#92c5de"],
-                  [96, "#c6dbef"], [120, "#fdd0a2"], [168, "#f4a582"],
-                  [240, "#d6604d"], [Infinity, "#b2182b"]];
-
 function toaColor(v, maxH) {
   if (!v || v <= 0 || isNaN(v)) return null;  // nodata=0 = not forecast to burn
   if (maxH && v > maxH) return null;          // beyond the arrival-time slider
-  for (const [h, c] of TOA_BINS) if (v <= h) return c;
-  return null;
+  return Palette.toaColor(v);
 }
+
+// the open-ended last band is drawn wider so its ">10d" label clears the "10d" edge label
+const TOA_LAST_FLEX = 1.6;
 
 function toaLegendHtml(maxH) {
-  return "hours to arrival: " + TOA_BINS
-    .filter(([h]) => h !== Infinity && h <= Math.max(maxH, 12))
-    .map(([h, c]) => `<span style="background:${c};color:#fff;padding:0 4px;border-radius:3px">&le;${h}</span>`)
-    .join(" ");
+  const edges = Palette.TOA_EDGES, n = edges.length;
+  const lab = h => (h >= 168 ? `${h / 24}d` : `${h}`);
+  const total = n - 1 + TOA_LAST_FLEX;
+  const segs = Palette.toaColors().map((c, i) =>
+    `<i style="background:${c};flex:${i === n - 1 ? TOA_LAST_FLEX : 1}"` +
+    `${i && edges[i - 1] >= maxH ? ' class="dim"' : ""}></i>`).join("");
+  const ticks = edges.slice(0, -1).map((h, i) =>
+    `<span style="left:${(100 * (i + 1) / total).toFixed(2)}%">${lab(h)}</span>`).join("");
+  const last = `&gt;${lab(edges[n - 2])}`;
+  const aria = edges.slice(0, -1).map(h => `&le;${lab(h)}`).join(", ") + `, ${last}`;
+  return `<div class="toa-key" id="toaKey" role="img" aria-label="hours to arrival: ${aria}">` +
+    `<span>hours to arrival</span><span class="toa-bar">${segs}</span>` +
+    `<span class="toa-ticks">${ticks}<span class="last">${last}</span></span></div>`;
 }
 
-async function renderArchivedToa(f, run, pct, note, expired) {
+function renderToaLegend() {
+  const key = document.getElementById("toaKey");
+  if (key) key.outerHTML = toaLegendHtml(state.toaMaxH);
+}
+
+function drawToaRaster(georaster) {
+  if (state.wmsLayer) map.removeLayer(state.wmsLayer);
+  const maxH = state.toaMaxH;
+  state.wmsLayer = new GeoRasterLayer({
+    georaster, resolution: 192, pane: "overlayPane",
+    opacity: +document.getElementById("opacity").value / 100,
+    pixelValuesToColorFn: vals => toaColor(vals[0], maxH),
+  }).addTo(map);
+  state.toaGeo = georaster;
+}
+
+async function renderArchivedToa(f, run, pct, note, expired, token) {
   note.textContent = "loading time-of-arrival raster…";
   const key = `forecast_archive/${f.slug}/${run}/${pct}.tif`;
   let georaster = state.georasterCache.get(key);
@@ -500,11 +760,13 @@ async function renderArchivedToa(f, run, pct, note, expired) {
       } catch (e) { /* local 404 or bucket CORS -> try next */ }
     }
     if (!buf) {
+      if (token !== state.wmsSeq) return;
       if (!expired) {
         // too fresh to be archived yet (collector runs every 2h) — fall back to
         // pyrecast's live tiles; the arrival slider needs pixel access, so hide it
         document.getElementById("timerow").hidden = true;
         const layer = `fire-spread-forecast_${f.slug}_${run}:elmfire_landfire_${pct}_time-of-arrival`;
+        state.toaGeo = null;
         state.wmsLayer = L.tileLayer.wms(WMS, {
           layers: layer, format: "image/png", transparent: true, version: "1.1.1",
           opacity: +document.getElementById("opacity").value / 100,
@@ -530,29 +792,62 @@ async function renderArchivedToa(f, run, pct, note, expired) {
     }
   }
   // selection may have moved on while the tif downloaded
-  if (state.sel !== f.slug || document.getElementById("selRun").value !== run) return;
-  const maxH = state.toaMaxH;
-  if (state.wmsLayer) { map.removeLayer(state.wmsLayer); }  // raster replaces WMS slot
-  state.wmsLayer = new GeoRasterLayer({
-    georaster, resolution: 192, pane: "overlayPane",
-    opacity: +document.getElementById("opacity").value / 100,
-    pixelValuesToColorFn: vals => toaColor(vals[0], maxH),
-  }).addTo(map);
-  document.getElementById("timelabel").textContent = `+${maxH}h`;
-  note.innerHTML = "time-of-arrival, rendered from the archive<br>" + toaLegendHtml(maxH);
+  if (token !== state.wmsSeq) return;
+  drawToaRaster(georaster);   // raster replaces WMS slot
+  document.getElementById("timelabel").textContent = `+${state.toaMaxH}h`;
+  note.innerHTML = "time-of-arrival, rendered from the archive" + toaLegendHtml(state.toaMaxH);
   note.className = "note";
+}
+
+// ---------------------------------------------------------------- forecast skill
+
+// skill/<slug>.json rows are [horizon_h, precision, recall, iou]
+const SKILL_ROWS = [["Precision", 1], ["Recall", 2], ["IoU", 3]];
+
+async function loadSkill(f, seq) {
+  const index = await state.skillIndex;
+  if (!index[f.slug] || state.skill.has(f.slug)) return;
+  let doc;
+  try { doc = await getJson(`${BUCKET}/skill/${encodeURIComponent(f.slug)}.json`); }
+  catch (e) { return; }
+  state.skill.set(f.slug, doc);
+  if (state.seq === seq) renderSkill();
+}
+
+function renderSkill() {
+  // the selected run and percentile's scored horizons; hidden when there are none
+  const sec = document.getElementById("skillSec");
+  const doc = state.sel && state.skill.get(state.sel);
+  const byPct = doc && doc.runs && doc.runs[document.getElementById("selRun").value];
+  const got = byPct && byPct[document.getElementById("selPct").value];
+  const rows = Array.isArray(got) ? got.filter(Array.isArray) : [];
+  sec.hidden = !rows.length;
+  if (sec.hidden) return;
+  const hLab = h => (h >= 168 && h % 24 === 0 ? `${h / 24}d` : `${h}h`);
+  const cell = v => (typeof v === "number" && isFinite(v)
+    ? `<td style="--v:${Math.min(Math.max(v, 0), 1)}">${Math.round(100 * v)}</td>` : "<td>—</td>");
+  document.getElementById("skillTable").innerHTML =
+    `<thead><tr><th></th>${rows.map(r => `<th scope="col">${hLab(r[0])}</th>`).join("")}</tr></thead><tbody>` +
+    SKILL_ROWS.map(([name, i]) => `<tr><th scope="row">${name} <span>%</span></th>` +
+      `${rows.map(r => cell(r[i])).join("")}</tr>`).join("") + "</tbody>";
 }
 
 // ---------------------------------------------------------------- perimeters
 
-async function loadPerims(f, seq) {
+function clearPerims() {
   const btn = document.getElementById("perimBtn"), el = document.getElementById("perimlist");
   el.hidden = true;
   el.innerHTML = "";
   btn.disabled = true;
+  btn.textContent = "select a fire";
   for (const l of state.perimLayers.values()) map.removeLayer(l);
   state.perimLayers.clear();
   state.perimIndex = [];
+}
+
+async function loadPerims(f, seq) {
+  const btn = document.getElementById("perimBtn"), el = document.getElementById("perimlist");
+  clearPerims();
   if (!f.cornea_id) { btn.textContent = "no Cornea match for this fire"; return; }
   btn.textContent = "loading…";
   let idx;
@@ -560,7 +855,7 @@ async function loadPerims(f, seq) {
     idx = await getJson(`${CORNEA}/fires/${encodeURIComponent(f.cornea_id)}/perimeters`);
   } catch (e) {
     try { idx = (await loadLocalOrBucket(`perimeter_archive/${f.slug}/index.json`)).index; }
-    catch (e2) { btn.textContent = "no perimeters available"; return; }
+    catch (e2) { if (state.seq === seq) btn.textContent = "no perimeters available"; return; }
   }
   if (state.seq !== seq) return;
   state.perimIndex = idx.map(p => ({
@@ -573,9 +868,9 @@ async function loadPerims(f, seq) {
     const p = state.perimIndex[i], latest = i === n - 1;
     const lab = document.createElement("label");
     lab.className = "row";
-    const color = latest ? "#eb6834" : "#52514e";
+    const color = latest ? Palette.get().perimeter : "#52514e";
     lab.innerHTML = `<input type="checkbox" data-ems="${p.ems}" ${latest ? "checked" : ""}>
-      <span class="dot" style="background:${color}"></span>
+      <span class="dot${latest ? " cur" : ""}" style="background:${color}"></span>
       ${fmtPerim(p)}${latest ? " (current)" : ""}`;
     lab.querySelector("input").addEventListener("change", ev => {
       togglePerim(f, p, ev.target.checked, latest);
@@ -608,15 +903,21 @@ async function togglePerim(f, p, on, latest) {
     return;
   }
   if (state.perimLayers.has(p.ems)) return;
+  const seq = state.seq;
   let gj;
   try { gj = await getJson(CORNEA + p.path); }
   catch (e) {
     try { gj = await loadLocalOrBucket(`perimeter_archive/${f.slug}/${p.ems}.geojson`); }
     catch (e2) { return; }
   }
+  // another fire was selected (or none), an overlapping toggle already loaded it,
+  // or the box was unchecked while the fetch was in flight
+  if (state.seq !== seq || state.perimLayers.has(p.ems)) return;
+  const box = document.querySelector(`#perimlist input[data-ems="${p.ems}"]`);
+  if (box && !box.checked) return;
   const layer = L.geoJSON(gj, {
     style: latest
-      ? { color: "#eb6834", weight: 2.5, fillOpacity: 0.08 }
+      ? { color: Palette.get().perimeter, weight: 2.5, fillOpacity: 0.08 }
       : { color: "#52514e", weight: 1.5, dashArray: "4 3", fillOpacity: 0 },
   }).addTo(map).bindTooltip(`perimeter ${p.date.slice(0, 16).replace("T", " ")}Z`);
   state.perimLayers.set(p.ems, layer);
@@ -634,22 +935,18 @@ function parseAcq(p) {
 }
 
 function hotColor(ageH) {
-  // age relative to the playhead: <=24h solid yellow, then yellow->deep purple
-  // along the warm path (orange/red/magenta) out to 7 days; else hidden
-  if (ageH < 0 || ageH > 168) return null;
-  if (ageH <= 24) return "#ffd21f";
-  const f = (ageH - 24) / 144;
-  const h = (50 - 135 * f + 360) % 360;   // 50° (yellow) -> 275° (purple)
-  return `hsl(${h.toFixed(0)} 90% ${(55 - 22 * f).toFixed(0)}%)`;
+  // age relative to the playhead; null outside the palette's 0-7 day ramp
+  return Palette.hotspotColor(ageH);
 }
 
 // The playhead spans the fire's whole life, and a big fire can hold 100k+
 // detections. The API returns rows oldest-first from `since`, capped at `limit`,
 // with no end-date filter, so one whole-fire query silently drops the newest
 // weeks. Instead, load the 7-day window behind the playhead on demand, in
-// day-aligned chunks, and keep only that window's markers on the map.
+// day-aligned chunks, then the rest of the fire's history in the background for
+// the burn scar. Only the window's detections become Leaflet markers.
 const HOUR = 3600e3, DAY = 864e5;
-const HOT_LOOKBACK_H = 168;   // matches hotColor's 7-day fade
+const HOT_LOOKBACK_H = 168;   // matches hotColor's 7-day ramp; older is burn scar
 const HOT_LIMIT = 20000;      // rows per request (~5 MB at most)
 const MONDAY0 = 4 * DAY;      // 1970-01-05, the first Monday after the epoch
 const dayOf = ms => Math.floor(ms / DAY);
@@ -671,6 +968,8 @@ async function fireSpan(f) {
   }
   return { start: dayOf(start) * DAY, end, contained };
 }
+
+const defaultHotSpan = () => ({ start: dayOf(Date.now() - 14 * DAY) * DAY, end: Date.now(), contained: false });
 
 function layoutHotTimeline(span) {
   state.hotSpan = span;
@@ -699,9 +998,13 @@ function layoutHotTimeline(span) {
 }
 
 function renderHotMarks() {
-  // markers for the newest perimeter toggled on and the forecast run on the map;
-  // times outside the timeline pin to its edge, faded. Click to seek there.
-  const el = document.getElementById("hotMarks"), span = state.hotSpan;
+  // markers for the newest perimeter toggled on, the forecast run on the map and
+  // the containment; times outside the timeline pin to its edge, faded. Click to seek there.
+  const el = document.getElementById("hotMarks"), span = state.hotSpan, pal = Palette.get();
+  const key = [[pal.perimeter, "perimeter"], ["#2166ac", "forecast run"]];
+  if (span && span.contained) key.push([pal.contained, "contained"]);
+  document.getElementById("hotKey").innerHTML =
+    key.map(([c, what]) => `<i class="mk" style="--c:${c}"></i>${what}`).join("") + " · click to jump";
   el.innerHTML = "";
   if (!span) return;
   const marks = [];
@@ -709,10 +1012,11 @@ function renderHotMarks() {
     .map(i => state.perimIndex.find(p => p.ems === i.dataset.ems)).filter(Boolean);
   if (shown.length) {
     const t = Math.max(...shown.map(p => Date.parse(p.date)));
-    marks.push(["#eb6834", t, "perimeter"]);
+    marks.push([pal.perimeter, t, "perimeter"]);
   }
   const run = document.getElementById("selRun").value;
   if (run && document.getElementById("selVar").value) marks.push(["#2166ac", runDate(run).getTime(), "forecast run"]);
+  if (span.contained) marks.push([pal.contained, span.end, "contained"]);
   const total = +document.getElementById("hotTime").max * HOUR;
   for (const [color, t, what] of marks) {
     const outside = t < span.start ? " (before the timeline starts)" : t > span.end ? " (after the timeline ends)" : "";
@@ -732,11 +1036,155 @@ function seekHot(t) {
   el.dispatchEvent(new Event("input"));
 }
 
+// The burn scar: every detection older than the ramp, in one canvas. A big fire's
+// history is 100k+ points, far past what Leaflet markers can redraw while
+// scrubbing. Points arrive pre-projected at zoom 0 and sorted by time; the canvas
+// carries the translucency, so overlapping points don't darken each other.
+const ScarLayer = L.Layer.extend({
+  options: { pane: "scar", padding: 0.2, radius: 2, opacity: 0.55 },
+
+  initialize(options) {
+    L.setOptions(this, options);
+    this._pts = null;
+    this._lo = this._hi = 0;
+    this._color = null;
+  },
+
+  onAdd() {
+    this._canvas = L.DomUtil.create("canvas",
+      `leaflet-zoom-${this._zoomAnimated ? "animated" : "hide"}`, this.getPane());
+    this._canvas.style.opacity = this.options.opacity;
+    this._reset();
+  },
+
+  onRemove() { L.DomUtil.remove(this._canvas); },
+
+  getEvents() {
+    const ev = { moveend: this._reset };
+    if (this._zoomAnimated) ev.zoomanim = this._animateZoom;
+    return ev;
+  },
+
+  // draws pts.x/pts.y[lo, hi); when only hi grew, just the new points are added
+  update(pts, lo, hi, color) {
+    const same = pts === this._pts && lo === this._lo && color === this._color;
+    if (same && hi === this._hi) return;
+    const from = same && hi > this._hi ? this._hi : lo;
+    this._pts = pts;
+    this._lo = lo;
+    this._hi = hi;
+    this._color = color;
+    if (this._map) this._draw(from, from === lo);
+  },
+
+  _reset() {
+    const map = this._map, size = map.getSize(), pad = size.multiplyBy(this.options.padding).round();
+    const topLeft = map.containerPointToLayerPoint(pad.multiplyBy(-1)).round();
+    const w = size.x + 2 * pad.x, h = size.y + 2 * pad.y, c = this._canvas;
+    this._dpr = window.devicePixelRatio || 1;
+    L.DomUtil.setPosition(c, topLeft);
+    c.width = Math.round(w * this._dpr);
+    c.height = Math.round(h * this._dpr);
+    c.style.width = `${w}px`;
+    c.style.height = `${h}px`;
+    this._nw = map.layerPointToLatLng(topLeft);
+    this._origin = map.getPixelOrigin().add(topLeft);
+    this._scale = map.getZoomScale(map.getZoom(), 0);
+    this._draw(this._lo, true);
+  },
+
+  _animateZoom(e) {
+    const map = this._map;
+    // the pixel origin the map will have at e.zoom (Leaflet's private _getNewPixelOrigin)
+    const origin = map.project(e.center, e.zoom).subtract(map.getSize().divideBy(2))
+      .add(L.DomUtil.getPosition(map.getPane("mapPane"))).round();
+    L.DomUtil.setTransform(this._canvas, map.project(this._nw, e.zoom).subtract(origin),
+                           map.getZoomScale(e.zoom));
+  },
+
+  _draw(from, clear) {
+    const c = this._canvas, ctx = c.getContext("2d"), P = this._pts;
+    if (clear) ctx.clearRect(0, 0, c.width, c.height);
+    if (!P || from >= this._hi) return;
+    const r = this.options.radius * this._dpr, k = this._scale * this._dpr;
+    const ox = this._origin.x * this._dpr, oy = this._origin.y * this._dpr;
+    const W = c.width + r, H = c.height + r, xs = P.x, ys = P.y;
+    // one path, one fill: per-point fillRect/drawImage calls are 5-50x slower to
+    // rasterize at 100k points
+    ctx.fillStyle = this._color;
+    ctx.beginPath();
+    for (let i = from, hi = this._hi; i < hi; i++) {
+      const x = xs[i] * k - ox, y = ys[i] * k - oy;
+      if (x < -r || y < -r || x > W || y > H) continue;
+      ctx.moveTo(x + r, y);
+      ctx.arc(x, y, r, 0, 2 * Math.PI);
+    }
+    ctx.fill();
+  },
+});
+const scarLayer = new ScarLayer().addTo(map);
+
+function lowerBound(a, v) {   // first index with a[i] >= v, a ascending
+  let lo = 0, hi = a.length;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (a[m] < v) lo = m + 1; else hi = m;
+  }
+  return lo;
+}
+
+function hotFlat(H) {
+  // every loaded detection as time-sorted typed arrays, rebuilt after a load adds rows
+  if (H.flat) return H.flat;
+  const days = [...H.days.keys()].sort((a, b) => a - b);
+  let n = 0;
+  for (const d of days) n += H.days.get(d).length;
+  const t = new Float64Array(n), x = new Float64Array(n), y = new Float64Array(n);
+  let i = 0;
+  for (const d of days) {
+    for (const r of H.days.get(d).sort((a, b) => a[2] - b[2])) {
+      t[i] = r[2]; x[i] = r[3]; y[i] = r[4]; i++;
+    }
+  }
+  return (H.flat = { t, x, y });
+}
+
+function renderScar(H, p) {
+  // detections since the timeline start that are older than the ramp
+  const F = hotFlat(H);
+  const lo = lowerBound(F.t, H.span.start);
+  const hi = Math.max(lo, lowerBound(F.t, p - HOT_LOOKBACK_H * HOUR));
+  scarLayer.update(F, lo, hi, Palette.get().scar);
+  return hi - lo;
+}
+
+function hotMarker(r) {
+  const m = L.circleMarker([r[0], r[1]], { renderer: hotRenderer, radius: 3, weight: 0.5 });
+  m._r = r;
+  return m;
+}
+
+function dropHotMarks(H, d) {
+  for (const m of H.marks.get(d) || []) state.hotLayer.removeLayer(m);
+  H.marks.delete(d);
+}
+
+function clearHotspots() {
+  state.hotSeq++;
+  clearTimeout(hotFetchTimer);
+  if (state.hot && state.hot.req) state.hot.req.ctl.abort();
+  if (state.hotLayer) { map.removeLayer(state.hotLayer); state.hotLayer = null; }
+  // Leaflet never removes a renderer itself, and its full-viewport canvas would keep
+  // taking the pointer from the fire markers below; the next hotMarker re-adds it
+  if (map.hasLayer(hotRenderer)) map.removeLayer(hotRenderer);
+  state.hot = null;
+  scarLayer.update(null, 0, 0, null);
+}
+
 async function refreshHotspots() {
   const note = document.getElementById("hotnote");
-  const token = ++state.hotSeq;
-  if (state.hotLayer) { map.removeLayer(state.hotLayer); state.hotLayer = null; }
-  state.hot = null;
+  clearHotspots();
+  const token = state.hotSeq;
   const f = state.fires.find(x => x.slug === state.sel);
   if (!f) { note.textContent = "select a fire"; return; }
   // the timeline (and its perimeter/run markers) follows the fire even when
@@ -750,40 +1198,54 @@ async function refreshHotspots() {
   // a fixed box visibly clips the dot cloud along straight lines); centroid fallback
   // NB: the API's bbox is lat-first (min_lat,min_lon,max_lat,max_lon)
   let bbox = `${lat - 0.4},${lon - 0.4},${lat + 0.4},${lon + 0.4}`;
-  const latestPerim = [...state.perimLayers.values()].pop();
+  const cur = [...state.perimIndex].reverse().find(p => state.perimLayers.has(p.ems));
+  const latestPerim = cur && state.perimLayers.get(cur.ems);
   if (latestPerim) {
     const b = latestPerim.getBounds();
     bbox = `${b.getSouth() - 0.2},${b.getWest() - 0.2},${b.getNorth() + 0.2},${b.getEast() + 0.2}`;
   }
   state.hotLayer = L.layerGroup().addTo(map);
-  state.hot = { bbox, span, days: new Map(), keys: new Set(), covered: new Set(),
-                shown: new Set(), capped: false, loading: false,
-                renderer: L.canvas({ padding: 0.2 }) };   // thousands of points -> canvas
+  // days: day -> detections, each [lat, lon, t, x0, y0, source, acq_date, acq_time,
+  // frp, confidence] with (x0, y0) its zoom-0 map pixel; marks: day -> markers,
+  // only for the days in the window behind the playhead; req: the request in flight
+  state.hot = { bbox, span, days: new Map(), marks: new Map(), keys: new Set(), covered: new Set(),
+                capped: false, req: null, flat: null, histError: "" };
   renderHotspots();
   ensureHotCoverage();
 }
 
-async function ensureHotCoverage() {
+async function ensureHotCoverage(historyOnly) {
+  // the window behind the playhead first, then the rest of the fire's history from
+  // its start; one request at a time, and a history request yields to the window
   const H = state.hot;
-  if (!H || H.loading) return;
+  if (!H) return;
   const p = hotPlayhead();
-  let d = dayOf(p - HOT_LOOKBACK_H * HOUR);
-  while (d <= dayOf(p) && H.covered.has(d)) d++;
-  if (d > dayOf(p)) return;
-  H.loading = true;
+  const gap = (a, b) => { for (let k = a; k <= b; k++) if (!H.covered.has(k)) return k; return null; };
+  const need = gap(dayOf(p - HOT_LOOKBACK_H * HOUR), dayOf(p));
+  if (need !== null && historyOnly) return;   // scheduled by renderHotspots once the scrubber settles
+  const d = need !== null ? need : H.histError ? null : gap(dayOf(H.span.start), dayOf(Date.now()));
+  if (d === null) return;
+  if (H.req) {
+    if (need === null || !H.req.history) return;
+    H.req.ctl.abort();
+  }
+  const req = H.req = { history: need === null, ctl: new AbortController() };
   let gj;
   try {
     gj = await getJson(`${CORNEA}/hotspots?bbox=${H.bbox}` +
-      `&since=${new Date(d * DAY).toISOString().slice(0, 10)}&limit=${HOT_LIMIT}`);
+      `&since=${new Date(d * DAY).toISOString().slice(0, 10)}&limit=${HOT_LIMIT}`, req.ctl.signal);
   } catch (e) {
-    H.loading = false;
-    if (state.hot === H) document.getElementById("hotnote").textContent = "hotspots request failed: " + e.message;
+    if (H.req === req) H.req = null;
+    if (state.hot !== H || req.ctl.signal.aborted) return;
+    if (req.history) { H.histError = e.message; renderHotspots(); }
+    else document.getElementById("hotnote").textContent = "hotspots request failed: " + e.message;
     return;
   }
-  H.loading = false;
+  if (H.req === req) H.req = null;
   if (state.hot !== H) return;
   const feats = gj.features || [];
   let last = d;
+  const grown = new Set();
   for (const feat of feats) {
     const props = feat.properties || {}, c = feat.geometry && feat.geometry.coordinates;
     const t = parseAcq(props);
@@ -792,12 +1254,14 @@ async function ensureHotCoverage() {
     const key = `${props.acq_date}|${props.acq_time}|${c[0]}|${c[1]}|${props.source}`;
     if (H.keys.has(key)) continue;
     H.keys.add(key);
-    const m = L.circleMarker([c[1], c[0]], { renderer: H.renderer, radius: 3, weight: 0.5 });
-    m._t = t;
-    m._p = props;
-    if (!H.days.has(dayOf(t))) H.days.set(dayOf(t), []);
-    H.days.get(dayOf(t)).push(m);
+    const day = dayOf(t), xy = map.project([c[1], c[0]], 0);
+    if (!H.days.has(day)) H.days.set(day, []);
+    H.days.get(day).push([c[1], c[0], t, xy.x, xy.y,
+                          props.source, props.acq_date, props.acq_time, props.frp, props.confidence]);
+    grown.add(day);
   }
+  for (const day of grown) dropHotMarks(H, day);   // remade with the new rows on render
+  if (grown.size) H.flat = null;
   // rows come oldest-first: an uncapped reply is complete through today; a capped
   // one only up to its last day, which may be partial (and is refetched next)
   const full = feats.length < HOT_LIMIT;
@@ -806,6 +1270,7 @@ async function ensureHotCoverage() {
     H.covered.add(k);
   }
   renderHotspots();
+  ensureHotCoverage(true);
 }
 
 let hotFetchTimer = 0;
@@ -827,35 +1292,65 @@ function renderHotspots() {
   const H = state.hot;
   if (!H) return;
   const d0 = dayOf(p - HOT_LOOKBACK_H * HOUR), d1 = dayOf(p);
-  for (const d of H.shown) {   // days that slid out of the window leave the map
-    if (d >= d0 && d <= d1) continue;
-    for (const m of H.days.get(d) || []) state.hotLayer.removeLayer(m);
-    H.shown.delete(d);
+  for (const d of H.marks.keys()) {   // days that slid out of the window leave the map
+    if (d < d0 || d > d1) dropHotMarks(H, d);
   }
   let vis = 0, pending = false;
   for (let d = d0; d <= d1; d++) {
     if (!H.covered.has(d)) pending = true;
-    const ms = H.days.get(d);
-    if (!ms) continue;
-    H.shown.add(d);
-    for (const m of ms) {
-      const col = hotColor((p - m._t) / HOUR);
+    const recs = H.days.get(d);
+    if (!recs) continue;
+    if (!H.marks.has(d)) H.marks.set(d, recs.map(hotMarker));
+    for (const m of H.marks.get(d)) {
+      const col = hotColor((p - m._r[2]) / HOUR);
       if (!col) { state.hotLayer.removeLayer(m); continue; }
       vis++;
       m.setStyle({ color: col, fillColor: col, opacity: 0.9, fillOpacity: 0.55 });
       if (!m.getTooltip()) {
-        const q = m._p;
-        m.bindTooltip(`${q.source || "?"} ${q.acq_date || ""} ${String(q.acq_time || "").replace(".0", "")}Z · FRP ${q.frp ?? "?"} · conf ${q.confidence ?? "?"}`);
+        const [, , , , , source, date, time, frp, conf] = m._r;
+        m.bindTooltip(`${source || "?"} ${date || ""} ${String(time || "").replace(".0", "")}Z · FRP ${frp ?? "?"} · conf ${conf ?? "?"}`);
       }
       if (!state.hotLayer.hasLayer(m)) state.hotLayer.addLayer(m);
     }
   }
-  document.getElementById("hotnote").textContent = pending ? "loading detections…"
-    : `${vis} detections in the 7 days before the playhead` +
-      (H.capped ? " (a single day exceeded the API cap — some are missing)" : "");
+  const scar = renderScar(H, p);
+  const first = dayOf(H.span.start), today = dayOf(Date.now());
+  let have = 0;
+  for (let d = first; d <= today; d++) if (H.covered.has(d)) have++;
+  const num = n => n.toLocaleString("en-US");
+  const parts = [pending ? "loading detections…" : `${num(vis)} detections in the 7 days before the playhead` +
+    (H.capped ? " (a single day exceeded the API cap — some are missing)" : "")];
+  if (scar) parts.push(`${num(scar)} earlier (burn scar)`);
+  if (!pending && have <= today - first) {
+    parts.push(H.histError ? "earlier history failed to load"
+      : `loading history ${Math.floor(100 * have / (today - first + 1))}%`);
+  }
+  document.getElementById("hotnote").textContent = parts.join(" · ");
   if (pending) scheduleHotCoverage();
 }
 
+function renderHotLegend() {
+  document.getElementById("scarSwatch").style.background = Palette.get().scar;
+  document.getElementById("hotRamp").style.background = Palette.hotspotGradient();
+}
+
+function applyPalette() {
+  const pal = Palette.get();
+  if (state.toaGeo) drawToaRaster(state.toaGeo);
+  renderToaLegend();
+  const cur = state.perimIndex[state.perimIndex.length - 1];
+  const latest = cur && state.perimLayers.get(cur.ems);
+  if (latest) latest.setStyle({ color: pal.perimeter });
+  for (const dot of document.querySelectorAll("#perimlist .dot.cur")) dot.style.background = pal.perimeter;
+  renderHotMarks();
+  renderHotLegend();
+  if (state.hotSpan) renderHotspots();
+}
+
+document.querySelector(".brandrow").append(Palette.gearButton());
+Palette.onChange(applyPalette);
+renderHotLegend();
+renderHotMarks();
 init();
 </script>
 </body>

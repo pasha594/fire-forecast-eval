@@ -25,7 +25,7 @@
     font: 14px/1.45 var(--font-sans);
   }
   .wrap { max-width: 1180px; margin: 0 auto; padding: 24px 20px 60px; }
-  .brand { margin-bottom: 14px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
   .brand img { height: 26px; }
   h1 { font-size: 26px; font-weight: 800; margin: 0 0 4px; }
   .sub { color: var(--ink-2); margin: 0 0 18px; }
@@ -72,7 +72,9 @@
 </head>
 <body>
 <div class="wrap">
-  <a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><img src="cornea-logo-on-light.webp" alt="Cornea"></a>
+  <div class="topbar" id="topbar">
+    <a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><img src="cornea-logo-on-light.webp" alt="Cornea"></a>
+  </div>
   <h1>ELMFIRE forecast skill vs actual perimeters</h1>
   <p class="sub">Growth-only precision &amp; recall of Pyrecast fire-spread forecasts against Cornea
   perimeter snapshots. One row per (fire, forecast run, weather percentile, horizon) with ground
@@ -124,10 +126,13 @@
   </div>
 </div>
 
+<script src="palette.js"></script>
 <script>
 "use strict";
 const BUCKET = "https://f005.backblazeb2.com/file/fire-forecast-archive";
 const CORNEA = "https://fire-api-prod.web.app";
+
+document.getElementById("topbar").append(Palette.gearButton());
 
 
 function parseCSV(text) {
@@ -251,7 +256,8 @@ const CLS_STYLE = {
   3: ["#2a78d6", "false alarm: predicted, didn't burn (hurts precision)"],
   4: ["#e34948", "miss: burned, not predicted (hurts recall)"],
 };
-const INS = { map: null, layers: [], cacheToa: new Map(), cacheGj: new Map(), busy: false };
+const INS = { map: null, layers: [], actLayer: null, cacheToa: new Map(), cacheGj: new Map(), busy: false };
+Palette.onChange(s => { if (INS.actLayer) INS.actLayer.setStyle({ color: s.perimeter }); });
 
 async function fetchArchive(key, asJson) {
   for (const url of [`raw/${key}`, `${BUCKET}/${key}`]) {
@@ -403,8 +409,9 @@ async function renderInspection(row) {
     for (const l of INS.layers) INS.map.removeLayer(l);
     INS.layers = [L.imageOverlay(overlay.url, overlay.bounds, { opacity: 0.7 }).addTo(INS.map)];
     if (baseGj) INS.layers.push(L.geoJSON(baseGj, { style: { color: "#52514e", weight: 1.5, dashArray: "4 3", fillOpacity: 0 } }).addTo(INS.map));
-    const actLayer = L.geoJSON(actGj, { style: { color: "#eb6834", weight: 2, fillOpacity: 0 } }).addTo(INS.map);
+    const actLayer = L.geoJSON(actGj, { style: { color: Palette.get().perimeter, weight: 2, fillOpacity: 0 } }).addTo(INS.map);
     INS.layers.push(actLayer);
+    INS.actLayer = actLayer;
     INS.map.fitBounds(actLayer.getBounds(), { padding: [16, 16] });
 
     // satellite detections inside the exact forecast window, marked by whether

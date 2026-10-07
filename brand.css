@@ -1,6 +1,7 @@
 /* Cornea brand layer: palette and type from fires.cornea.is (its light theme,
    shown regardless of the viewer's system setting). Only UI chrome lives here;
-   data encodings (ToA ramp, TP/FP/FN, perimeters, hotspots) stay in each page. */
+   data encodings live in palette.js (ToA ramp, hotspots, perimeters) or in each
+   page (TP/FP/FN). */
 :root {
   color-scheme: light;
   --font-sans: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -21,3 +22,68 @@ a { color: var(--link); text-decoration-color: var(--accent); text-underline-off
 
 .brand { display: inline-block; line-height: 0; }
 .brand img { display: block; width: auto; }
+
+/* color settings overlay and its gear button, both built by palette.js; the
+   panel sits above Leaflet's controls (z-index 1000) */
+.palette-gear {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 28px; height: 28px; padding: 0; border: 1px solid var(--axis); border-radius: 6px;
+  background: transparent; color: var(--ink-2); cursor: pointer;
+}
+.palette-gear:hover { background: var(--hover); color: var(--ink); }
+.palette-gear svg { display: block; width: 16px; height: 16px; }
+
+.palette-panel {
+  position: fixed; top: 12px; right: 12px; z-index: 2000;
+  width: 300px; max-width: calc(100vw - 24px); max-height: calc(100vh - 24px); overflow-y: auto;
+  padding: 12px 14px 14px; background: var(--surface); color: var(--ink);
+  border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(59, 29, 41, 0.18), 0 2px 6px rgba(59, 29, 41, 0.08);
+  font: 13px/1.4 var(--font-sans); text-align: left;
+}
+.palette-panel, .palette-panel * { box-sizing: border-box; }
+.palette-panel[hidden], .palette-panel [hidden] { display: none; }
+.palette-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.palette-panel h2 { font: 700 19px/1.2 var(--font-serif); color: var(--ink); margin: 0; }
+.palette-panel h3 { font: 700 14.5px/1.3 var(--font-serif); color: var(--ink); margin: 0 0 7px; }
+.palette-close {
+  width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: var(--ink-2); font: 20px/1 var(--font-sans); cursor: pointer;
+}
+.palette-close:hover { background: var(--hover); color: var(--ink); }
+.palette-sec, .palette-foot { border-top: 1px solid var(--grid); margin-top: 10px; padding-top: 10px; }
+.palette-strip { display: flex; height: 10px; border-radius: 5px; overflow: hidden; }
+.palette-strip span { flex: 1; }
+.palette-bar { height: 10px; border-radius: 5px; }
+.palette-ends { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 2px; }
+.palette-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 8px; margin: 8px 0; }
+.palette-row {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  color: var(--ink-2); font-size: 12px; white-space: nowrap; cursor: pointer;
+}
+.palette-row.palette-wide { grid-column: 1 / -1; }
+.palette-row input[type=color] {
+  flex: none; width: 30px; height: 22px; margin: 0; padding: 0; cursor: pointer;
+  border: 1px solid var(--axis); border-radius: 5px; background: var(--surface);
+}
+.palette-row input[type=color]::-webkit-color-swatch-wrapper { padding: 2px; }
+.palette-row input[type=color]::-webkit-color-swatch { border: 0; border-radius: 3px; }
+.palette-row input[type=color]::-moz-color-swatch { border: 0; border-radius: 3px; }
+.palette-check { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12px; cursor: pointer; }
+.palette-check input { margin: 0; }
+.palette-actions { display: flex; gap: 8px; }
+.palette-btn {
+  font: 600 12.5px/1.2 var(--font-sans); padding: 6px 10px; cursor: pointer;
+  border: 1px solid var(--axis); border-radius: 6px; background: var(--surface); color: var(--ink);
+}
+.palette-btn:hover { background: var(--hover); }
+.palette-btn-primary, .palette-btn-primary:hover {
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+}
+.palette-btn-primary:hover { filter: brightness(0.96); }
+.palette-copybox {
+  display: block; width: 100%; margin-top: 8px; padding: 6px; resize: vertical;
+  font: 11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: var(--ink);
+  background: var(--page); border: 1px solid var(--axis); border-radius: 6px;
+}
+.palette-note { color: var(--muted); font-size: 11.5px; margin: 8px 0 0; }

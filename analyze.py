@@ -10,8 +10,11 @@ with --sync-url) and writes data/metrics.csv. One row per
   analyze.py --refresh-perims         re-fetch Cornea perimeters before computing
   analyze.py --inspect PATH.tif       print raster calibration info
   analyze.py --overlay SLUG RUN PCT H write an eyeball GeoJSON to raw/
+  analyze.py --skill-only             rebuild + upload per-fire skill files from the
+                                      published metrics.csv (needs S3_* env)
 """
 import argparse
+import concurrent.futures
 import csv
 import json
 import sys
@@ -39,6 +42,11 @@ PERCENTILES = ("10", "30", "50", "70", "90")
 
 REPO = Path(__file__).resolve().parent
 RAW = REPO / "raw"
+SKILL_DIR = REPO / "data" / "skill"
+
+# must stay equal to report.html's default filter inputs
+SKILL_FILTERS = {"min_act_new_acres": 10, "max_abs_offset_h": 6, "max_offgrid_frac": 0.10}
+SKILL_UPLOAD_WORKERS = 16
 
 CSV_COLUMNS = ["slug", "cornea_id", "run_ts", "run_dt_utc", "percentile",
                "horizon_h", "valid_dt_utc", "baseline_perim_ms", "baseline_offset_h",
@@ -399,6 +407,90 @@ def compute(only_slug=None):
     log(f"wrote {len(rows)} rows -> {out} | skipped runs: {skipped}")
 
 
+# ---------------------------------------------------------------- skill files
+
+def _num(s):
+    return float(s) if s else None
+
+
+def _r3(s):
+    v = _num(s)
+    return None if v is None else round(v, 3)
+
+
+def _passes_skill_filters(r):
+    # blank offset / off-grid count as 0, as report.html's null coercion does
+    grow = _num(r["act_new_acres"])
+    off = _num(r["actual_offset_h"]) or 0.0
+    offgrid = _num(r["act_offgrid_frac"]) or 0.0
+    return (grow is not None and grow >= SKILL_FILTERS["min_act_new_acres"]
+            and abs(off) <= SKILL_FILTERS["max_abs_offset_h"]
+            and offgrid <= SKILL_FILTERS["max_offgrid_frac"])
+
+
+def build_skill(csv_path, out_dir):
+    """Per-fire skill files for map.html from a metrics CSV: out_dir/<slug>.json
+    + out_dir/index.json, rows filtered like the report's default view.
+    Returns (fires, rows)."""
+    fires = {}
+    with open(csv_path, newline="") as fh:
+        for r in csv.DictReader(fh):
+            if not _passes_skill_filters(r):
+                continue
+            entry = [int(float(r["horizon_h"])),
+                     _r3(r["precision"]), _r3(r["recall"]), _r3(r["iou"])]
+            (fires.setdefault(r["slug"], {}).setdefault(r["run_ts"], {})
+             .setdefault(r["percentile"], []).append(entry))
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for p in out_dir.glob("*.json"):
+        p.unlink()
+    generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    index = {}
+    for slug in sorted(fires):
+        runs = {run_ts: {pct: sorted(by_pct[pct], key=lambda e: e[0])
+                         for pct in sorted(by_pct, key=int)}
+                for run_ts, by_pct in sorted(fires[slug].items())}
+        index[slug] = sum(len(v) for by_pct in runs.values() for v in by_pct.values())
+        doc = {"v": 1, "slug": slug, "generated": generated,
+               "filters": SKILL_FILTERS, "runs": runs}
+        (out_dir / f"{slug}.json").write_text(json.dumps(doc, separators=(",", ":")))
+    (out_dir / "index.json").write_text(json.dumps(
+        {"v": 1, "generated": generated, "slugs": index}, separators=(",", ":")))
+    return len(index), sum(index.values())
+
+
+def publish_skill(client, bucket, csv_path):
+    n_fires, n_rows = build_skill(csv_path, SKILL_DIR)
+    index = SKILL_DIR / "index.json"
+    files = sorted(SKILL_DIR.glob("*.json"))
+
+    def put(p):
+        client.upload_file(str(p), bucket, f"skill/{p.name}",
+                           ExtraArgs={"ContentType": "application/json"})
+
+    with concurrent.futures.ThreadPoolExecutor(SKILL_UPLOAD_WORKERS) as ex:
+        list(ex.map(put, [p for p in files if p != index]))
+    # index last, so it never lists a slug whose file is not uploaded yet
+    put(index)
+    log(f"published skill files: {n_fires} fires, {n_rows} rows, {len(files)} files")
+
+
+def skill_only():
+    import collect
+    import requests
+    # before the download, so missing S3_* env fails fast
+    client, bucket = collect.make_r2()
+    r = requests.get(f"{PUBLIC_BUCKET_URL}/metrics.csv", timeout=(10, 120))
+    r.raise_for_status()
+    dst = RAW / "metrics_published.csv"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(r.content)
+    log(f"downloaded published metrics.csv ({len(r.content)} bytes) -> {dst}")
+    publish_skill(client, bucket, dst)
+
+
 # ---------------------------------------------------------------- overlay
 
 def overlay(slug, run_ts, pct, H):
@@ -452,12 +544,18 @@ def main():
     ap.add_argument("--overlay", nargs=4, metavar=("SLUG", "RUN", "PCT", "H"))
     ap.add_argument("--only", help="restrict metrics to one slug")
     ap.add_argument("--publish", action="store_true",
-                    help="after computing, upload data/metrics.csv to the bucket "
+                    help="after computing, upload data/metrics.csv + skill/*.json to the bucket "
                          "(needs S3_* env; used by the CI analyze workflow)")
+    ap.add_argument("--skill-only", action="store_true",
+                    help="only rebuild + upload skill/*.json from the published "
+                         "metrics.csv, without computing (needs S3_* env)")
     args = ap.parse_args()
 
     if args.inspect:
         inspect(args.inspect)
+        return
+    if args.skill_only:
+        skill_only()
         return
     if args.sync or args.sync_url:
         sync_bucket(args.sync_url or PUBLIC_BUCKET_URL)
@@ -481,6 +579,7 @@ def main():
         client.upload_file(str(REPO / "data" / "metrics.csv"), bucket, "metrics.csv",
                            ExtraArgs={"ContentType": "text/csv"})
         log("published metrics.csv to bucket")
+        publish_skill(client, bucket, REPO / "data" / "metrics.csv")
 
 
 if __name__ == "__main__":

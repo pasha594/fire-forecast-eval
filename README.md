@@ -16,7 +16,7 @@ which retains dated perimeter snapshots per fire (~2–3/day for active fires).
 |---|---|
 | `collect.py` | scraper/archiver + fire matcher. CI runs it against the bucket; `--local` archives to `raw/` |
 | `.github/workflows/collect.yml` | cron `17 * * * *` + manual dispatch; concurrency group = single writer |
-| `.github/workflows/analyze.yml` | cron 2x daily: syncs ToA+perimeters on the runner, recomputes and publishes `metrics.csv` to the bucket — no laptop needed; `report.html` falls back to the bucket copy |
+| `.github/workflows/analyze.yml` | cron 2x daily: syncs ToA+perimeters on the runner, recomputes and publishes `metrics.csv` + per-fire `skill/*.json` to the bucket — no laptop needed; `report.html` falls back to the bucket copy |
 | `analyze.py` | local: syncs the archive, computes growth-only P/R → `data/metrics.csv` |
 | `report.html` | static Plotly report over `data/metrics.csv` |
 | `map.html` | interactive map: pyrecast forecast layers (live WMS, all variables/percentiles) over Cornea perimeter history + hotspots |
@@ -34,6 +34,8 @@ perimeter_archive/{slug}/index.json, {epochms}.geojson  # Cornea perimeter snaps
 hotspot_archive/{slug}/{YYYY-MM-DD}.geojson             # VIIRS/MODIS detections by acq day
 manifest.json                                           # collector state (source of truth)
 fire_matches.json                                       # slug -> cornea fire
+metrics.csv                                             # analyze.yml output (bucket only)
+skill/index.json, skill/{slug}.json                     # per-fire skill for map.html (bucket only)
 ```
 
 Since ~Aug 15 the static host 403s ToA tifs during a ~5-6h staging window
@@ -49,6 +51,27 @@ upstream quirks: percentile tifs appear over ~2h after a run is listed, and
 pyrecast **purges the hourly granule dirs within ~2–4h** — hence the 2h cron,
 whose interval bounds worst-case granule loss; a variable tar holds whatever
 survived at capture time (`got`/`n` in the manifest records the gap).
+
+### Per-fire skill files
+
+`analyze.py --publish` also turns `metrics.csv` into small per-fire JSON files
+for `map.html` (built in git-ignored `data/skill/`, uploaded to `skill/` in the
+bucket, e.g. `https://f005.backblazeb2.com/file/fire-forecast-archive/skill/index.json`):
+
+```
+skill/index.json   {"v": 1, "generated": "<UTC ISO>", "slugs": {"<slug>": <scored rows>, ...}}
+skill/{slug}.json  {"v": 1, "slug", "generated", "filters": {...},
+                    "runs": {"<run_ts>": {"<pct>": [[H, precision, recall, iou], ...]}}}
+```
+
+Rows use the skill report's default filters exactly (actual growth ≥ 10 acres,
+perimeter offset within ±6h, off-grid growth ≤ 10%; blank offset/off-grid count as
+0), entries are sorted by `H`, scores are rounded to 3 decimals (`null` when
+undefined), and `index.json` lists only fires with ≥ 1 scored row. Fires that
+drop out keep a stale `skill/{slug}.json` in the bucket, but are no longer
+listed. To rebuild just these files from the already-published `metrics.csv`
+(no sync or recompute), run the analyze workflow manually with **skill_only**
+checked (`analyze.py --skill-only`, needs the `S3_*` env).
 
 ## One-time setup
 
