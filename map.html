@@ -548,9 +548,7 @@ class ViewToggles {
       if (want === view.is3d) return;   // already showing that
       view.want3d = want;
       remember("cornea-3d", want ? "1" : "0");
-      // on a newest run, 3D is that run's own choice: it swaps Pyrecast's live tiles
-      // for the archived copy, while the run's default stays the live tiles
-      state.live3d = want && state.liveRun ? state.liveKey : null;
+      // on a newest run the choice also picks the source: live tiles flat, the archive in 3D
       if (state.liveRun) refreshWms();
       else apply3d();
     });
@@ -564,8 +562,9 @@ mapReady.then(() => {
   view.base = base === "satellite" ? "satellite" : "map";
   view.want3d = remembered("cornea-3d", "0") === "1";
   setBasemap(view.base);
-  // with a fire in the link, a remembered 3D waits for its run (the newest may be live
-  // tiles, which are flat), so the map doesn't tilt and then flatten; 2D applies now
+  // with a fire in the link, a remembered 3D waits for its run (the newest may not be
+  // archived yet, which keeps it flat), so the map doesn't tilt and then flatten; 2D
+  // applies now
   if (!view.want3d || !new URLSearchParams(location.search).get("fire")) apply3d(false);
 });
 
@@ -873,8 +872,6 @@ const state = {
   liveRun: false,       // the selected run is still on Pyrecast (see refreshWms)
   liveForced: false,    // ...and its live tiles are on the map, which keeps it flat
   liveArchived: false,  // ...and its archived copy is in, for 3D
-  liveKey: null,        // "slug/run" of a selected newest run
-  live3d: null,         // the newest run ("slug/run") the viewer asked to see in 3D
   granIdx: 12,         // hourly-mosaic forecast-hour slider
   georasterCache: new Map(),
   seq: 0,
@@ -1166,7 +1163,6 @@ async function select(slug) {
     map.jumpTo({ center: f.centroid, zoom: FIRE_ZOOM });
     live.paused = false;
   }
-  if (state.live3d && !state.live3d.startsWith(`${slug}/`)) state.live3d = null;
 
   const selRun = document.getElementById("selRun");
   // runs that expired upstream before any file was archived can't draw anything;
@@ -1242,15 +1238,18 @@ function refreshWms() {
   const variable = document.getElementById("selVar").value;
   const pct = document.getElementById("selPct").value;
   const note = document.getElementById("wmsnote");
-  // the newest runs (still on Pyrecast) default to its live tiles, which are flat;
-  // 3D draws the run's archived copy instead, once there is one
+  // 2D or 3D changes only with the toggle, never with the run. In 2D the newest runs
+  // (still on Pyrecast) show its live tiles, which are flat; in 3D every run is drawn
+  // from the archive, the newest too once their copy is in
   const liveRun = !!f && !!run && f.live[run] === true;
   const layer = liveRun && variable ? `fire-spread-forecast_${f.slug}_${run}:elmfire_landfire_${pct}_${variable}` : null;
   state.liveRun = liveRun;
-  state.liveKey = liveRun ? `${f.slug}/${run}` : null;
   state.liveArchived = !!layer && isArchived(f, run, variable, pct);
-  // 3D on a newest run is that run's own choice (see the 3D button)
-  state.liveForced = !!layer && !isDead(layer) && !(state.live3d === state.liveKey && state.liveArchived);
+  state.liveForced = !!layer && !isDead(layer) && !(view.want3d && state.liveArchived);
+  // a newest run that isn't archived yet can't be shown in 3D: the map goes flat and
+  // stays so on the runs after it (no flipping back on its own), though the saved
+  // choice stands for the next visit
+  if (state.liveForced && view.want3d) view.want3d = false;
   if (!state.liveForced) liveOff();
   apply3d(view.is3d !== null);   // the first look at a fire is instant
   dropCanvas("fc");
