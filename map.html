@@ -68,6 +68,7 @@
          margin-top: var(--sp-4); padding-top: var(--sp-2); border-top: 1px solid var(--grid); }
   .sec > * { margin: 0; }
   #tlSlot:empty { display: none; }   /* docked: the empty slot takes no gap */
+  #hotSlot { display: contents; }     /* its legend and count are the section's own items */
   /* every header: an 11px caps eyebrow, its source muted after it, an optional 12px action on the right */
   .sec h2, .sec-head { display: flex; align-items: center; height: var(--lh-label); margin: 0; }
   .sec h2 { gap: var(--sp-3); font: 700 var(--fs-meta)/var(--lh-label) var(--font-sans); text-transform: uppercase;
@@ -263,9 +264,11 @@
                       align-items: center; }
   /* docked, the detection legend and count sit in the head, between the playhead and the axis end */
   .tl-legend:empty { display: none; }
-  .tl-legend { display: flex; align-items: center; gap: 14px; min-width: 0; margin-left: auto; }
-  #tlDock #hotEndLabel { margin-left: 0; }
-  .tl-legend #hotnote { min-width: 0; max-width: 360px; font-weight: 400; }
+  .tl-legend { display: flex; flex: 1 1 auto; flex-wrap: wrap; align-items: center; justify-content: flex-end;
+               column-gap: 14px; row-gap: 2px; min-width: 0; margin-left: auto; }
+  .tl-legend .hot-legend { flex: none; }
+  .tl-legend #hotnote { flex: 0 1 auto; min-width: min(200px, 100%); max-width: 360px; font-weight: 400; }
+  #tlDock #hotEndLabel { flex: none; margin-left: 0; }
   #tlDock #hotEndLabel { font-size: var(--fs-label); }
   #tlDock .lane-cap { height: 16px; margin-top: 3px; font-size: var(--fs-label); line-height: 16px; }
   #tlDock .lane { height: 15px; }
@@ -363,7 +366,7 @@
   <div class="sec fire-only">
     <div class="sec-head"><h2>Forecast layer <a class="src-logo" href="https://www.pyregence.org/" target="_blank"
       rel="noopener" title="Forecasts by Pyregence"><img src="pyregence-logo.svg" alt="by Pyregence"></a></h2>
-      <label class="row"><input type="checkbox" id="chkFc" checked>Show</label></div>
+      <label class="row"><input type="checkbox" id="chkFc" checked autocomplete="off" aria-label="Show forecast layer">Show</label></div>
     <select id="selRun"></select>
     <div class="pair">
       <select id="selVar">
@@ -391,7 +394,7 @@
 
   <div class="sec fire-only">
     <div class="sec-head"><h2>Perimeters <span class="src">NIFC</span></h2>
-      <label class="row"><input type="checkbox" id="chkPerim" checked>Show</label></div>
+      <label class="row"><input type="checkbox" id="chkPerim" checked autocomplete="off" aria-label="Show perimeters">Show</label></div>
     <div class="picker" id="perimPicker">
       <button type="button" id="perimBtn" class="dropbtn" disabled>Select a fire</button>
       <div id="perimlist" class="dropdown" hidden></div>
@@ -400,7 +403,7 @@
 
   <div class="sec fire-only">
     <div class="sec-head"><h2>Hotspots <span class="src">NASA VIIRS</span></h2>
-      <label class="row"><input type="checkbox" id="chkHot" checked>Show</label></div>
+      <label class="row"><input type="checkbox" id="chkHot" checked autocomplete="off" aria-label="Show hotspots">Show</label></div>
     <div id="tlSlot"><div id="tlBlock">
     <div class="hot-head ctl-head"><span>Playhead</span><b id="hotTimeLabel">now</b><span class="tl-legend" id="tlLegend"></span><span id="hotEndLabel" hidden>now</span></div>
     <div class="tl" id="tl">
@@ -793,8 +796,9 @@ async function init() {
   else deselect();
   wirePickers();
   wireLanes();
-  for (const id of ["selRun", "selVar", "selPct"])
-    document.getElementById(id).addEventListener("change", refreshWms);
+  for (const id of ["selRun", "selVar", "selPct"]) {
+    document.getElementById(id).addEventListener("change", () => { showLayer("chkFc"); refreshWms(); });
+  }
   const slider = document.getElementById("timeslider");
   slider.addEventListener("input", () => {           // live label while dragging
     const variable = forecastVar();
@@ -813,13 +817,8 @@ async function init() {
   slider.addEventListener("change", setLiveHour);    // live tiles reload on release
   document.getElementById("chkHot").addEventListener("change", refreshHotspots);
   document.getElementById("chkFc").addEventListener("change", refreshWms);
-  document.getElementById("chkPerim").addEventListener("change", ev => {
-    // the snapshots stay picked; only the layers hide
-    for (const id of ["perim-fill", "perim-old", "perim-cur"]) {
-      map.setLayoutProperty(id, "visibility", ev.target.checked ? "visible" : "none");
-    }
-    renderHotMarks();
-  });
+  document.getElementById("chkPerim").addEventListener("change", applyPerimVisibility);
+  applyPerimVisibility();
   layoutHotTimeline(defaultHotSpan());
   let hotPending = false;   // setTimeout, not rAF — rAF pauses in hidden tabs
   document.getElementById("hotTime").addEventListener("input", () => {
@@ -1701,6 +1700,7 @@ async function loadPerims(f, seq) {
       <span class="dot${latest ? " cur" : ""}" style="background:${color}"></span>
       ${fmtPerim(p)}${latest ? " (current)" : ""}`;
     lab.querySelector("input").addEventListener("change", ev => {
+      if (ev.target.checked) showLayer("chkPerim");
       togglePerim(f, p, ev.target.checked);
       renderHotMarks();
       perimSummary();
@@ -2003,13 +2003,31 @@ function pinTargets(kind) {
   return f.runs.filter(r => f.pcts[r].size || f.live[r] !== false).map(r => ({ t: runDate(r).getTime(), run: r }));
 }
 
+function applyPerimVisibility() {
+  // the perimeters' Show switch: the snapshots stay picked; only the layers hide
+  const on = document.getElementById("chkPerim").checked;
+  for (const id of ["perim-fill", "perim-old", "perim-cur"]) map.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+  renderHotMarks();
+}
+
+function showLayer(id) {
+  // picking something of a hidden layer (a run, a variable, a snapshot) shows the layer;
+  // false if it was already shown
+  const box = document.getElementById(id);
+  if (box.checked) return false;
+  box.checked = true;
+  if (id === "chkPerim") applyPerimVisibility();
+  return true;
+}
+
 function applyPin(kind, target) {
   if (kind === "run") {
-    const sel = document.getElementById("selRun");
-    if (sel.value !== target.run) { sel.value = target.run; refreshWms(); }
+    const sel = document.getElementById("selRun"), shown = showLayer("chkFc");
+    if (sel.value !== target.run || shown) { sel.value = target.run; refreshWms(); }
     return;
   }
   // picking on the perimeter lane shows just that snapshot
+  showLayer("chkPerim");
   const f = state.fires.find(x => x.slug === state.sel);
   for (const box of document.querySelectorAll("#perimlist input")) {
     const on = box.dataset.ems === target.p.ems;
