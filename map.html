@@ -29,7 +29,7 @@
   /* no fire selected: the overview replaces the per-fire sections */
   #side.nosel .fire-only, #side:not(.nosel) #overview { display: none; }
   .brandrow { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-  .brand img { height: 22px; }
+  .lockup { --logo-h: 22px; }
   /* the 28px gear must not grow the 22px logo row (side panel height budget) */
   .brandrow .palette-gear { margin: -3px 0; }
   h1 { font-size: 19px; font-weight: 800; margin: 0 0 2px; }
@@ -274,7 +274,7 @@
 <body>
 <div id="side" class="nosel">
   <div class="brandrow">
-    <a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><img src="cornea-logo-on-light.webp" alt="Cornea"></a>
+    <div class="lockup"><a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><img src="cornea-logo-on-light.webp" alt="Cornea"></a><span class="product">Projector</span></div>
   </div>
   <h1>Fire forecast map</h1>
   <p class="sub">Pyrecast ELMFIRE layers over Cornea perimeters &amp; hotspots ·

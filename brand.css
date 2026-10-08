@@ -22,6 +22,17 @@ a { color: var(--link); text-decoration-color: var(--accent); text-underline-off
 
 .brand { display: inline-block; line-height: 0; }
 .brand img { display: block; width: auto; }
+/* "Cornea | PROJECTOR": the logo, a hairline, then the product name, all sized off
+   the logo's height (pages set --logo-h) */
+.lockup { --logo-h: 26px; display: flex; align-items: center; width: max-content; }
+.lockup .brand img { height: var(--logo-h); }
+.lockup .product {
+  display: flex; align-items: center; height: calc(var(--logo-h) * 0.85);
+  margin-left: calc(var(--logo-h) * 0.45); padding-left: calc(var(--logo-h) * 0.45);
+  border-left: 1px solid var(--axis); color: var(--ink-2);
+  font: 500 calc(var(--logo-h) * 0.46)/1 var(--font-sans); letter-spacing: 0.14em;
+  text-transform: uppercase; white-space: nowrap;
+}
 
 /* settings overlay (colors, plus a page's own options) and its gear button, both
    built by palette.js; the panel sits above the map and its controls */
