@@ -146,8 +146,16 @@
   .toa-key { display: grid; grid-template-columns: auto 1fr; column-gap: var(--sp-3); align-items: center; }
   .toa-key > span:first-child { color: var(--ink-2); white-space: nowrap; }
   .toa-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; }
-  .toa-bar i.dim { opacity: .25; }
   .toa-bar.ramp { display: block; }
+  /* the time-of-arrival legend doubles as its "show arrival within" slider: the bands
+     under a transparent range input, inset by half the 6px thumb like the timeline, and
+     a veil over the arrivals past the cut-off */
+  .toa-ctl { display: flex; flex-direction: column; gap: var(--sp-1); }
+  .toa-track { position: relative; height: var(--rng-h); }
+  .toa-track .toa-bar { position: absolute; left: 3px; right: 3px; top: calc((var(--rng-h) - 10px) / 2); }
+  .toa-veil { position: absolute; right: 3px; top: calc((var(--rng-h) - 10px) / 2); height: 10px; pointer-events: none;
+              border-radius: 0 5px 5px 0; background: color-mix(in srgb, var(--surface) 72%, transparent); }
+  .toa-ctl .toa-ticks { margin: 0 3px; }
   .iso-key { display: inline-block; width: 18px; height: 0; margin: 0 5px 3px 0; vertical-align: middle;
              border-top: 1.5px solid #ff0000; }
   .toa-ticks { grid-column: 2; position: relative; height: var(--lh-micro); font-size: var(--fs-micro);
@@ -157,11 +165,11 @@
   /* one slider for the arrival / forecast hour, opacity and the playhead: a 4px --axis track
      and a 6px --accent bar thumb (22/6 in the dock). Keep webkit and moz pseudo-elements in
      separate rules: a selector list that mixes them is dropped whole */
-  #timeslider, #opacity, #hotTime {
+  #timeslider, #opacity, #hotTime, #toaRange {
     -webkit-appearance: none; appearance: none; display: block; width: 100%; height: var(--rng-h);
     margin: 0; padding: 0; border: 0; background: transparent; cursor: pointer;
   }
-  #hotTime { position: relative; z-index: 3; }
+  #hotTime, #toaRange { position: relative; z-index: 3; }
   #timeslider::-webkit-slider-runnable-track, #opacity::-webkit-slider-runnable-track {
     height: var(--rng-track); border-radius: calc(var(--rng-track) / 2); background: var(--axis); }
   #timeslider::-moz-range-track, #opacity::-moz-range-track {
@@ -169,20 +177,20 @@
   /* hotspot playhead: the track line is ours (.track-line), drawn under a transparent slider so
      the forecast's arrival bands can sit on it; every row on this time axis is inset by half the
      6px thumb (3px) to line up with the thumb's travel */
-  #hotTime::-webkit-slider-runnable-track { height: var(--rng-h); background: transparent; }
-  #hotTime::-moz-range-track { height: var(--rng-h); background: transparent; }
-  #timeslider::-webkit-slider-thumb, #opacity::-webkit-slider-thumb, #hotTime::-webkit-slider-thumb {
+  #hotTime::-webkit-slider-runnable-track, #toaRange::-webkit-slider-runnable-track { height: var(--rng-h); background: transparent; }
+  #hotTime::-moz-range-track, #toaRange::-moz-range-track { height: var(--rng-h); background: transparent; }
+  #timeslider::-webkit-slider-thumb, #opacity::-webkit-slider-thumb, #hotTime::-webkit-slider-thumb, #toaRange::-webkit-slider-thumb {
     -webkit-appearance: none; width: var(--rng-thumb-w); height: var(--rng-h); border: 0; border-radius: 3px;
     margin-top: calc((var(--rng-track) - var(--rng-h)) / 2); background: var(--accent); box-shadow: var(--rng-ring); }
-  #hotTime::-webkit-slider-thumb { margin-top: 0; }
-  #timeslider::-moz-range-thumb, #opacity::-moz-range-thumb, #hotTime::-moz-range-thumb {
+  #hotTime::-webkit-slider-thumb, #toaRange::-webkit-slider-thumb { margin-top: 0; }
+  #timeslider::-moz-range-thumb, #opacity::-moz-range-thumb, #hotTime::-moz-range-thumb, #toaRange::-moz-range-thumb {
     width: var(--rng-thumb-w); height: var(--rng-h); border: 0; border-radius: 3px;
     background: var(--accent); box-shadow: var(--rng-ring); }
-  :is(#timeslider, #opacity, #hotTime):hover::-webkit-slider-thumb { box-shadow: var(--rng-ring-hover); }
-  :is(#timeslider, #opacity, #hotTime):hover::-moz-range-thumb { box-shadow: var(--rng-ring-hover); }
-  :is(#timeslider, #opacity, #hotTime):focus-visible { outline: none; }
-  :is(#timeslider, #opacity, #hotTime):focus-visible::-webkit-slider-thumb { box-shadow: var(--rng-ring-focus); }
-  :is(#timeslider, #opacity, #hotTime):focus-visible::-moz-range-thumb { box-shadow: var(--rng-ring-focus); }
+  :is(#timeslider, #opacity, #hotTime, #toaRange):hover::-webkit-slider-thumb { box-shadow: var(--rng-ring-hover); }
+  :is(#timeslider, #opacity, #hotTime, #toaRange):hover::-moz-range-thumb { box-shadow: var(--rng-ring-hover); }
+  :is(#timeslider, #opacity, #hotTime, #toaRange):focus-visible { outline: none; }
+  :is(#timeslider, #opacity, #hotTime, #toaRange):focus-visible::-webkit-slider-thumb { box-shadow: var(--rng-ring-focus); }
+  :is(#timeslider, #opacity, #hotTime, #toaRange):focus-visible::-moz-range-thumb { box-shadow: var(--rng-ring-focus); }
   /* every slider's head: its label, the value 6px after it, the full-width slider 2px below
      (the playhead's head also carries the axis end at the right) */
   .ctl { display: block; cursor: pointer; }
@@ -807,11 +815,6 @@ async function init() {
       state.granIdx = +slider.value;
       if (run) labelForecastHour(run);
       scheduleProductPaint();
-    } else if (variable === "time-of-arrival") {
-      state.toaMaxH = +slider.value;
-      document.getElementById("timelabel").textContent = `${slider.value}h`;
-      renderToaLegend();
-      scheduleToaPaint();
     }
   });
   slider.addEventListener("change", setLiveHour);    // live tiles reload on release
@@ -1147,13 +1150,8 @@ function configureTimeSlider(variable) {
     row.title = "This variable is an hourly snapshot — slide through the forecast";
     const run = document.getElementById("selRun").value;
     if (run) labelForecastHour(run);
-  } else if (variable === "time-of-arrival") {
-    row.hidden = false;
-    s.min = 1; s.max = 336; s.value = state.toaMaxH;
-    prefix.textContent = "Show arrival within";
-    row.title = "Hides areas the model reaches later than the slider";
   } else {
-    row.hidden = true;
+    row.hidden = true;   // time of arrival's cut-off is its legend (see toaLegendHtml)
   }
 }
 
@@ -1188,25 +1186,76 @@ function setLiveHour() {
 // the open-ended last band is drawn wider so its ">10d" label clears the "10d" edge label
 const TOA_LAST_FLEX = 1.6;
 
-function toaLegendHtml(maxH) {
-  const edges = Palette.TOA_EDGES, n = edges.length;
-  const lab = h => (h >= 168 ? `${h / 24}d` : `${h}`);
-  const total = n - 1 + TOA_LAST_FLEX;
-  const segs = Palette.toaColors().map((c, i) =>
-    `<i style="background:${c};flex:${i === n - 1 ? TOA_LAST_FLEX : 1}"` +
-    `${i && edges[i - 1] >= maxH ? ' class="dim"' : ""}></i>`).join("");
-  const ticks = edges.slice(0, -1).map((h, i) =>
-    `<span style="left:${(100 * (i + 1) / total).toFixed(2)}%">${lab(h)}</span>`).join("");
-  const last = `&gt;${lab(edges[n - 2])}`;
-  const aria = edges.slice(0, -1).map(h => `&le;${lab(h)}`).join(", ") + `, ${last}`;
-  return `<div class="toa-key" id="toaKey" role="img" aria-label="Hours to arrival: ${aria}">` +
-    `<span>Hours to arrival</span><span class="toa-bar">${segs}</span>` +
-    `<span class="toa-ticks">${ticks}<span class="last">${last}</span></span></div>`;
+const TOA_MAX_H = 336;   // forecasts run 14 days
+
+// The time-of-arrival legend is also its "show arrival within" control. The bands keep
+// their drawn widths (the last one wider), and a position maps to hours linearly within
+// its band, so the thumb always sits on the colour its cut-off falls in.
+function toaScale() {
+  // each band's hours [h0, h1] and its span [x0, x1] as fractions of the bar
+  const edges = Palette.TOA_EDGES, n = edges.length, total = n - 1 + TOA_LAST_FLEX;
+  let x = 0, h = 0;
+  return edges.map((e, i) => {
+    const band = { h0: h, h1: Math.min(e, TOA_MAX_H), x0: x, x1: x + (i === n - 1 ? TOA_LAST_FLEX : 1) / total };
+    x = band.x1; h = band.h1;
+    return band;
+  });
+}
+function toaHoursAt(f) {
+  const scale = toaScale(), b = scale.find(b => f <= b.x1) || scale[scale.length - 1];
+  return b.h0 + (b.h1 - b.h0) * (f - b.x0) / (b.x1 - b.x0);
+}
+function toaFracOf(h) {
+  const scale = toaScale(), b = scale.find(b => h <= b.h1) || scale[scale.length - 1];
+  return b.x0 + (b.x1 - b.x0) * (h - b.h0) / (b.h1 - b.h0);
 }
 
-function renderToaLegend() {
-  const key = document.getElementById("toaKey");
-  if (key) key.outerHTML = toaLegendHtml(state.toaMaxH);
+function toaLegendHtml() {
+  const edges = Palette.TOA_EDGES, n = edges.length;
+  const lab = h => (h >= 168 ? `${h / 24}d` : `${h}`);
+  const segs = edges.map((e, i) => `<i style="flex:${i === n - 1 ? TOA_LAST_FLEX : 1}"></i>`).join("");
+  const ticks = toaScale().slice(0, -1).map((b, i) =>
+    `<span style="left:${(100 * b.x1).toFixed(2)}%">${lab(edges[i])}</span>`).join("");
+  return '<div class="toa-ctl">' +
+    '<label class="ctl-head" for="toaRange"><span>Show arrival within</span><b id="toaVal"></b></label>' +
+    `<div class="toa-track"><span class="toa-bar" id="toaBar">${segs}</span><i class="toa-veil" id="toaVeil"></i>` +
+    '<input type="range" id="toaRange" min="0" max="1000" step="1" ' +
+    'title="Drag along the legend: areas the model reaches later are hidden"></div>' +
+    `<span class="toa-ticks" aria-hidden="true">${ticks}<span class="last">&gt;${lab(edges[n - 2])}</span></span></div>`;
+}
+
+function wireToaControl() {
+  const range = document.getElementById("toaRange");
+  if (!range) return;
+  range.addEventListener("input", () => setToaMaxH(toaHoursAt(+range.value / 1000), false));
+  range.addEventListener("keydown", ev => {
+    // keys step in hours (the range's own units are thousandths of the bar)
+    const step = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1, PageUp: 24, PageDown: -24 }[ev.key];
+    const to = ev.key === "Home" ? 1 : ev.key === "End" ? TOA_MAX_H : step ? state.toaMaxH + step : null;
+    if (to === null) return;
+    ev.preventDefault();
+    setToaMaxH(to, true);
+  });
+  renderToaLegend();
+}
+
+function setToaMaxH(hours, moveThumb) {
+  state.toaMaxH = Math.min(TOA_MAX_H, Math.max(1, Math.round(hours)));
+  renderToaLegend(moveThumb);
+  scheduleToaPaint();
+}
+
+function renderToaLegend(moveThumb = true) {
+  // in place, so a drag carries on: the colours (the palette may change), the value,
+  // the veil past it and, unless it's being dragged, the thumb
+  const range = document.getElementById("toaRange");
+  if (!range) return;
+  const f = toaFracOf(state.toaMaxH);
+  [...document.getElementById("toaBar").children].forEach((seg, i) => { seg.style.background = Palette.toaColors()[i]; });
+  document.getElementById("toaVal").textContent = `${state.toaMaxH}h`;
+  document.getElementById("toaVeil").style.left = `calc(3px + (100% - 6px) * ${f.toFixed(4)})`;
+  if (moveThumb) range.value = Math.round(1000 * f);
+  range.setAttribute("aria-valuetext", `${state.toaMaxH} hours to arrival`);
 }
 
 async function fetchArchive(key, live = null, liveFirst = false) {
@@ -1371,8 +1420,8 @@ async function renderToa(f, run, pct, note, token) {
   paintToa(grid);
   showCanvas("fc", grid, "iso", forecastOpacity());
   renderHotMarks();
-  document.getElementById("timelabel").textContent = `${state.toaMaxH}h`;
-  note.innerHTML = toaLegendHtml(state.toaMaxH);
+  note.innerHTML = toaLegendHtml();
+  wireToaControl();
 }
 
 // Pyrecast's own styles for the hourly variables, from its GetLegendGraphic JSON (the
