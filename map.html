@@ -50,6 +50,22 @@
   .lockup { --logo-h: 22px; }
   /* the 28px gear must not grow the 22px logo row (side panel height budget) */
   .brandrow .palette-gear { margin: -3px 0; }
+  .brand-actions { display: flex; gap: var(--sp-3); }
+  .brand-actions .iconbtn { width: 28px; height: 28px; margin: -3px 0; font-size: 16px; }
+  /* the panel hides on request; a button on the map (top left) brings it back */
+  body.panel-hidden #side { display: none; }
+  .panel-toggle { display: none; }
+  body.panel-hidden .panel-toggle { display: block; }
+  .panel-toggle button { font: 600 18px/1 var(--font-sans); color: var(--ink-2); }
+  /* a phone: the map takes the screen, and the panel slides in over it */
+  @media (max-width: 760px) {
+    body { position: relative; }
+    #side { position: absolute; left: 0; top: 0; bottom: 0; z-index: 30; width: min(320px, 88vw); min-width: 0;
+            box-shadow: 4px 0 24px rgba(59, 29, 41, 0.25); }
+    #tlDock { padding: 6px 12px 4px; }
+    #tlDock .hot-head { flex-wrap: wrap; row-gap: 2px; }
+    #tlDock .tl-legend { order: 5; flex: 1 1 100%; justify-content: flex-start; margin-left: 0; }
+  }
   h1 { font: 800 19px/24px var(--font-serif); margin: 0 0 var(--sp-1); }
   .sub { color: var(--ink-2); font-size: var(--fs-label); line-height: var(--lh-label); margin: 0 0 var(--sp-4); }
   a:hover { text-decoration-color: var(--ink); }
@@ -209,6 +225,8 @@
   #hotTicks span { position: absolute; top: 0; width: 1px; height: 4px; margin-left: -0.5px;
                    background: var(--axis); }
   #hotTicks span.major { height: 8px; background: var(--muted); }
+  #hotTicks span.now { width: 2px; height: 10px; margin-left: -1px; background: var(--ink); }
+  #hotDates span.now { color: var(--ink); font-weight: 600; }
   /* level MM/DD labels centred on their tick */
   #hotDates { position: relative; height: var(--lh-micro); margin: 1px 3px 0; }
   #hotDates span { position: absolute; top: 0; color: var(--muted); font-size: var(--fs-micro); line-height: var(--lh-micro);
@@ -287,6 +305,7 @@
   #tlDock #hotTicks { height: 11px; }
   #tlDock #hotTicks span { height: 5px; }
   #tlDock #hotTicks span.major { height: 11px; }
+  #tlDock #hotTicks span.now { height: 13px; }
   #tlDock #hotDates { height: var(--lh-meta); margin-top: 1px; }
   #tlDock #hotDates span { font-size: var(--fs-meta); line-height: var(--lh-meta); }
   .tl-guides i { position: absolute; width: 1px; margin-left: -0.5px; background: var(--c); opacity: .6; }
@@ -344,9 +363,12 @@
 </style>
 </head>
 <body>
+<script>/* a phone starts with the panel put away (before the first paint, so it doesn't flash) */
+if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel-hidden");</script>
 <div id="side" class="nosel">
   <div class="brandrow">
     <div class="lockup"><a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><img src="cornea-logo-on-light.webp" alt="Cornea"></a><span class="product">Projector</span></div>
+    <div class="brand-actions"><button type="button" class="iconbtn" id="hidePanel" aria-label="Hide panel" title="Hide panel">&laquo;</button></div>
   </div>
   <!-- the page's title, or with a fire selected, the fire (see setMode) -->
   <h1 id="pageTitle">Fire forecast map</h1>
@@ -535,8 +557,34 @@ const map = new maplibregl.Map({
     ],
   },
 });
+// with the panel hidden, a button on the map brings it back (see setPanel)
+class PanelToggle {
+  onAdd() {
+    const el = this.el = document.createElement("div");
+    el.className = "maplibregl-ctrl maplibregl-ctrl-group panel-toggle";
+    el.innerHTML = '<button type="button" aria-label="Show panel" title="Show panel">&raquo;</button>';
+    el.addEventListener("click", () => setPanel(true));
+    return el;
+  }
+  onRemove() { this.el.remove(); }
+}
+map.addControl(new PanelToggle(), "top-left");
 map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-left");
 const mapReady = new Promise(resolve => map.once("style.load", resolve));
+{
+  // MapLibre opens the compact attribution by itself (on load, as sources change); it
+  // folds back to its "i" after 3 seconds. One the viewer opens stays open.
+  const attrib = map.getContainer().querySelector(".maplibregl-ctrl-attrib");
+  let byViewer = false, timer = 0;
+  const fold = () => {
+    clearTimeout(timer);
+    if (!attrib.classList.contains("maplibregl-compact-show")) { byViewer = false; return; }
+    if (!byViewer) timer = setTimeout(() => attrib.classList.remove("maplibregl-compact-show"), 3000);
+  };
+  attrib.addEventListener("click", ev => { if (ev.target.closest(".maplibregl-ctrl-attrib-button")) byViewer = true; }, true);
+  new MutationObserver(fold).observe(attrib, { attributes: true, attributeFilter: ["class"] });
+  fold();
+}
 // a debugging handle for local runs (serve.py)
 if (["localhost", "127.0.0.1"].includes(location.hostname)) window.__map = map;
 
@@ -557,21 +605,22 @@ function setBasemap(name) {
   remember("cornea-basemap", name);
 }
 
-function apply3d(animate = true) {
+function apply3d(animate = true, gesture = false) {
   // 3D drapes everything over the terrain and lets the map tilt and turn; 2D keeps
-  // the flat, north-up map
+  // the flat, north-up map. Right-drag and two-finger tilt stay live in 2D: starting
+  // one is how a viewer lifts the flat map into 3D (see gestureTo3d), so only twisting
+  // a pinch and the keyboard's turns are 2D-off
   const on = view.want3d;
   for (const b of document.querySelectorAll(".base-toggle button[data-dim]")) b.classList.toggle("on", (b.dataset.dim === "3d") === on);
   if (on === view.is3d) return;
   view.is3d = on;
   const duration = animate ? 900 : 0;
-  for (const h of [map.dragRotate, map.touchPitch]) on ? h.enable() : h.disable();
   on ? map.touchZoomRotate.enableRotation() : map.touchZoomRotate.disableRotation();
   on ? map.keyboard.enableRotation() : map.keyboard.disableRotation();
   if (on) {
     map.setMaxPitch(75);
     map.setTerrain({ source: "dem", exaggeration: 1.3 });
-    map.easeTo({ pitch: 60, duration });
+    if (!gesture) map.easeTo({ pitch: 60, duration });   // a gesture tilts it itself
   } else {
     map.setTerrain(null);
     if (duration) {
@@ -585,7 +634,18 @@ function apply3d(animate = true) {
   setBasemap(view.base);
 }
 
-// 2D stays north-up and flat, even after an interrupted ease or a turn of the compass
+// a viewer's right-drag (turn or tilt) or two-finger tilt on the flat map lifts it into
+// 3D, and the same gesture carries on tilting it; programmatic moves carry no originalEvent
+function gestureTo3d(ev) {
+  if (view.is3d !== false || !ev.originalEvent) return;
+  view.want3d = true;
+  remember("cornea-3d", "1");
+  apply3d(true, true);
+}
+map.on("rotatestart", gestureTo3d);
+map.on("pitchstart", gestureTo3d);
+
+// 2D stays north-up and flat, even after an interrupted ease
 map.on("moveend", () => {
   if (view.is3d !== false || map.isMoving()) return;
   if (Math.abs(map.getBearing()) > 0.01 || map.getPitch() > 0.01) map.jumpTo({ bearing: 0, pitch: 0 });
@@ -1032,6 +1092,7 @@ async function select(slug) {
   renderList();
   showSelectedName();
   if (f.centroid) map.jumpTo({ center: f.centroid, zoom: FIRE_ZOOM });
+  if (PHONE.matches) setPanel(false);   // the fire is on the map: let the phone show it
 
   const selRun = document.getElementById("selRun");
   // runs that expired upstream before any file was archived can't draw anything;
@@ -1948,13 +2009,28 @@ function layoutTimelineAxis() {
       ticks.appendChild(tick);
     }
   }
-  // MM/DD under every major tick, or every 2nd, 3rd... so the labels don't touch: slanted
-  // ones (in the panel) 18px apart, level ones (docked) 44px
-  const width = ticks.clientWidth || 260;
-  const every = Math.max(1, Math.ceil((docked ? 44 : 32) / (width * majorH * HOUR / (el.max * HOUR))));
-  document.getElementById("hotDates").innerHTML = majors.filter((t, i) => i % every === 0).map(t => {
-    return `<span style="left:${(100 * frac(t)).toFixed(3)}%">${fmtDate(t).slice(0, 5)}</span>`;
-  }).join("");
+  // "now" on a burning fire's axis (its end), so the playhead's "now" has a place on it
+  const nowAt = span.contained ? null : frac(Math.min(Date.now(), span.end));
+  if (nowAt !== null) {
+    const tick = document.createElement("span");
+    tick.className = "now";
+    tick.style.left = `${100 * nowAt}%`;
+    ticks.appendChild(tick);
+  }
+  // MM/DD under every major tick, or every 2nd, 3rd... so the labels don't touch (44px
+  // apart docked, 32px in the panel), none crowding "now"; a label near an end of the
+  // axis lines up with it instead of centring on its tick and running past it
+  const width = ticks.clientWidth || 260, gap = docked ? 44 : 32;
+  const every = Math.max(1, Math.ceil(gap / (width * majorH * HOUR / (el.max * HOUR))));
+  const label = (f, text, cls = "") => {
+    const x = f * width, half = gap / 2 - 4;
+    const align = x < half ? "transform:none" : x > width - half ? "transform:translateX(-100%)" : "";
+    return `<span class="${cls}" style="left:${(100 * f).toFixed(3)}%;${align}">${text}</span>`;
+  };
+  document.getElementById("hotDates").innerHTML = majors.filter((t, i) => i % every === 0)
+    .filter(t => nowAt === null || Math.abs(frac(t) - nowAt) * width >= gap)
+    .map(t => label(frac(t), fmtDate(t).slice(0, 5))).join("") +
+    (nowAt === null ? "" : label(nowAt, "now", "now"));
 }
 
 const RUN_PIN = "#2166ac";
@@ -2389,6 +2465,24 @@ function applyPalette() {
   if (state.hotSpan) renderHotspots();
 }
 
+// ---------------------------------------------------------------- the panel
+
+// The side panel hides on request (« in its corner) and comes back from the map's top
+// left. On a phone it starts hidden and slides in over the map, and picking a fire or
+// tapping the map puts it away again.
+const PHONE = matchMedia("(max-width: 760px)");
+function setPanel(open) {
+  document.body.classList.toggle("panel-hidden", !open);
+  // beside the map (not over it), the panel's width moves to the map and the dock
+  map.resize();
+  layoutTimelineAxis();
+  renderHotMarks();
+  if (open && !state.sel) fitOverview();   // the list sized itself to the panel's height
+}
+document.getElementById("hidePanel").addEventListener("click", () => setPanel(false));
+map.on("click", () => { if (PHONE.matches && !document.body.classList.contains("panel-hidden")) setPanel(false); });
+if (PHONE.matches) setPanel(false);
+
 // ---------------------------------------------------------------- forecast opacity
 
 // a set-and-forget display preference, so it lives in Settings (and is remembered)
@@ -2451,7 +2545,7 @@ function fitDock() {
 }
 new ResizeObserver(fitDock).observe(document.getElementById("tlDock"));
 
-document.querySelector(".brandrow").append(Palette.gearButton());
+document.querySelector(".brand-actions").prepend(Palette.gearButton());
 Palette.onChange(applyPalette);
 renderHotLegend();
 placeTimeline(remembered("cornea-timeline-place", "map"));
