@@ -117,7 +117,7 @@
                 background: var(--axis); }
   #fcBar { position: absolute; left: 3px; right: 3px; top: 6px; height: 4px; }
   #fcBar i { position: absolute; top: 0; height: 4px; }
-  #hotTime { -webkit-appearance: none; appearance: none; position: relative; display: block; width: 100%;
+  #hotTime { -webkit-appearance: none; appearance: none; position: relative; z-index: 3; display: block; width: 100%;
              height: 16px; margin: 0; padding: 0; border: 0; background: transparent; }
   #hotTime::-webkit-slider-runnable-track { height: 16px; background: transparent; }
   #hotTime::-moz-range-track { height: 16px; background: transparent; }
@@ -150,21 +150,19 @@
   .hot-key :first-child { margin-left: 0; }
   /* perimeter / run lanes share the playhead track's time axis (same 3px inset) */
   .tl { position: relative; }
-  .lane { position: relative; height: 10px; margin: 0 3px; cursor: ew-resize; touch-action: none; }
-  .lane::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; height: 1px; background: var(--grid); }
-  /* the other runs/snapshots are faint dots; the active one is a bar topped by its flag */
-  .lane i { position: absolute; top: 2.5px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%;
-            background: var(--c); opacity: .3; }
-  .lane i.on { top: 0; width: 3px; height: 10px; margin-left: -1.5px; border-radius: 0 0 1px 1px; opacity: 1; }
-  /* the flag keeps the bar's color as its edge (3px on the side it flies from, so it
-     continues the bar) with a lighter fill; it drags its lane */
-  .flags { position: relative; height: 12px; margin: 2px 3px 0; pointer-events: none; }
-  .flag { position: absolute; top: 0; box-sizing: border-box; height: 12px; padding: 0 4px;
-          border: 1px solid var(--c); border-left-width: 3px; border-radius: 0 3px 3px 0;
-          background: color-mix(in srgb, var(--c) 14%, var(--surface)); color: var(--c);
-          font: 600 9.5px/10px var(--font-sans); white-space: nowrap;
-          pointer-events: auto; cursor: ew-resize; touch-action: none; }
-  .flag.flip { border-left-width: 1px; border-right-width: 3px; border-radius: 3px 0 0 3px; }
+  .lane { position: relative; height: 12px; margin: 0 3px; cursor: ew-resize; touch-action: none; }
+  .lane::before { content: ""; position: absolute; left: 0; right: 0; top: 8px; height: 1px; background: var(--grid); }
+  /* the other runs/snapshots are solid light dots, so overlaps don't darken into what
+     looks like an active mark; the active one is a slim bar under a small triangle */
+  .lane i { position: absolute; top: 5.5px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%;
+            background: color-mix(in srgb, var(--c) 35%, var(--surface)); }
+  .lane i.on { top: 4px; width: 2px; height: 8px; margin-left: -1px; border-radius: 0; background: var(--c); }
+  .lane i.on::before { content: ""; position: absolute; left: -3.5px; top: -4px;
+                       border: solid transparent; border-width: 5px 4.5px 0; border-top-color: var(--c); }
+  /* the selected run / snapshot, named at the left of its lane so it never moves */
+  .lane-cap { height: 12px; margin: 2px 3px 0; color: var(--ink-2); font-size: 10px; line-height: 12px;
+              white-space: nowrap; }
+  .lane-cap b { color: var(--c); font-weight: 700; }
   .tl-guides { position: absolute; inset: 0; pointer-events: none; }
   .tl-guides i { position: absolute; width: 1px; margin-left: -0.5px; background: var(--c); opacity: .6; }
   .hot-legend { display: flex; align-items: center; gap: 8px; margin: 1px 0 2px;
@@ -314,9 +312,9 @@
       <label class="row"><input type="checkbox" id="chkHot" checked>show detections</label></div>
     <div class="hot-head"><span>playhead: <b id="hotTimeLabel">now</b></span><span id="hotEndLabel">now</span></div>
     <div class="tl" id="tl">
-      <div class="flags" data-kind="run"></div>
+      <div class="lane-cap" data-kind="run"></div>
       <div class="lane" data-kind="run" title="Forecast runs: press or drag to show one"></div>
-      <div class="flags" data-kind="perimeter"></div>
+      <div class="lane-cap" data-kind="perimeter"></div>
       <div class="lane" data-kind="perimeter" title="Perimeter snapshots: press or drag to show one"></div>
       <div class="track"><div class="track-line"></div><div id="fcBar"></div>
         <input type="range" id="hotTime" min="0" max="336" value="336" aria-label="hotspot playhead"></div>
@@ -1242,7 +1240,7 @@ function renderHotMarks() {
   guides.innerHTML = bar.innerHTML = "";
   bar.title = "";
   for (const lane of lanes) lane.innerHTML = "";
-  for (const row of document.querySelectorAll(".flags")) row.innerHTML = "";
+  for (const cap of document.querySelectorAll(".lane-cap")) cap.innerHTML = "";
   if (!span || !state.sel) return;
   const tl = document.getElementById("tl"), track = tl.querySelector(".track");
   const guide = (t, color, top, bottom) => {
@@ -1255,20 +1253,15 @@ function renderHotMarks() {
   for (const lane of lanes) {
     const kind = lane.dataset.kind, color = kind === "run" ? RUN_PIN : pal.perimeter;
     const items = pinTargets(kind), act = laneActive(kind, items);
+    const cap = document.querySelector(`.lane-cap[data-kind="${kind}"]`);
     lane.style.setProperty("--c", color);
-    lane.innerHTML = items.map(c => `<i style="left:${(100 * pinFrac(c.t)).toFixed(3)}%"` +
-      `${c === act ? ' class="on"' : ""}></i>`).join("");
+    cap.style.setProperty("--c", color);
+    cap.innerHTML = `<b>${kind === "run" ? "Forecast" : "Perimeter"}</b> ${act ? fmtShort(act.t) : "none shown"}`;
+    const at = c => `left:${(100 * pinFrac(c.t)).toFixed(3)}%`;
+    // the active mark goes last so no dot covers it
+    lane.innerHTML = items.filter(c => c !== act).map(c => `<i style="${at(c)}"></i>`).join("") +
+      (act ? `<i class="on" style="${at(act)}"></i>` : "");
     if (!act) continue;
-    const flags = document.querySelector(`.flags[data-kind="${kind}"]`);
-    const flag = document.createElement("b");
-    flag.className = "flag";
-    flag.style.setProperty("--c", color);
-    flag.textContent = `${kind === "run" ? "Forecast" : "Perimeter"} ${fmtShort(act.t)}`;
-    flags.appendChild(flag);
-    // the flag's edge continues the 3px tick below it; it flies left near the right end
-    const x = pinFrac(act.t) * flags.clientWidth, w = flag.offsetWidth;
-    if (x - 1.5 + w <= flags.clientWidth + 3) flag.style.left = `${x - 1.5}px`;
-    else { flag.classList.add("flip"); flag.style.left = `${x + 1.5 - w}px`; }
     if (kind === "run") renderArrivalBar(bar, act);
     guide(act.t, color, lane.offsetTop + lane.offsetHeight, mid);
   }
@@ -1323,33 +1316,24 @@ function applyPin(kind, target) {
 
 function wireLanes() {
   for (const lane of document.querySelectorAll(".lane")) {
-    lane.addEventListener("pointerdown", ev => startLaneDrag(lane, ev, false));
+    lane.addEventListener("pointerdown", ev => startLaneDrag(lane, ev));
   }
-  for (const row of document.querySelectorAll(".flags")) {
-    row.addEventListener("pointerdown", ev => {
-      if (ev.target.closest(".flag")) startLaneDrag(document.querySelector(`.lane[data-kind="${row.dataset.kind}"]`), ev, true);
-    });
-  }
-  window.addEventListener("resize", renderHotMarks);   // flags and guides are placed in px
+  window.addEventListener("resize", renderHotMarks);   // guides are placed in px
 }
 
-function startLaneDrag(lane, ev, fromFlag) {
-  // press a lane to jump to the nearest tick, or grab its flag; dragging moves between
-  // ticks. The highlight follows the pointer at once, the map after a 120ms rest and on
-  // release. Capture goes to the lane: flags are rebuilt on every render
+function startLaneDrag(lane, ev) {
+  // press a lane to jump to the nearest tick; dragging moves between ticks. The
+  // highlight follows the pointer at once, the map after a 120ms rest and on release
   const kind = lane.dataset.kind;
   if (ev.button !== 0 || !state.sel) return;
   const items = pinTargets(kind);
   if (!items.length) return;
   ev.preventDefault();
   lane.setPointerCapture(ev.pointerId);
-  const r0 = lane.getBoundingClientRect(), act = laneActive(kind, items);
-  // a grabbed flag keeps its tick under the same offset from the pointer
-  const grab = fromFlag && act ? r0.left + pinFrac(act.t) * r0.width - ev.clientX : 0;
   let cur = null, timer = 0;
   const pick = e => {
     const r = lane.getBoundingClientRect();
-    const fx = Math.min(Math.max((e.clientX + grab - r.left) / r.width, 0), 1);
+    const fx = Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1);
     const t = state.hotSpan.start + fx * +document.getElementById("hotTime").max * HOUR;
     // nearest on screen; among ticks stacked at a clamped edge, nearest in time
     let best = null, bd = Infinity, bt = Infinity;
