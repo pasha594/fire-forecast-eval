@@ -173,7 +173,7 @@
                       justify-items: center; row-gap: 2px; line-height: 12px; }
   .hot-legend .dot { width: 10px; height: 10px; border-radius: 50%; }
   .hot-legend .cap { line-height: 13px; }
-  /* forecast skill: 9 horizon columns have to fit the 292px content width */
+  /* forecast metrics: 9 horizon columns have to fit the 292px content width */
   /* fixed height (a full table): the section must not change size as runs change */
   .skill-box { height: 58px; }
   .skill-empty { margin: 0; padding-top: 6px; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
@@ -228,7 +228,7 @@
   </div>
   <h1>Fire forecast map</h1>
   <p class="sub">Pyrecast ELMFIRE layers (live WMS) over Cornea perimeters &amp; hotspots ·
-  <a href="report.html">skill report</a></p>
+  <a href="report.html">metrics report</a></p>
 
   <button type="button" id="allFires" class="linkbtn fire-only">&larr; All fires</button>
   <div class="picker">
@@ -280,9 +280,9 @@
   </div>
 
   <div class="sec fire-only" id="skillSec">
-    <div class="sec-head"><h2>Forecast skill <button type="button" class="help" id="skillHelpBtn"
-        aria-label="How forecast skill is calculated" aria-controls="skillHelp" aria-expanded="false">?</button></h2>
-      <a href="report.html">skill report</a></div>
+    <div class="sec-head"><h2>Forecast metrics <button type="button" class="help" id="skillHelpBtn"
+        aria-label="How forecast metrics are calculated" aria-controls="skillHelp" aria-expanded="false">?</button></h2>
+      <a href="report.html">metrics report</a></div>
     <div class="help-pop" id="skillHelp" role="tooltip">
       <b>How these numbers are calculated</b>
       <p>This run is scored against <b>NIFC fire perimeters</b> — hotspots are not used.</p>
@@ -295,7 +295,7 @@
         <b>IoU</b> = overlap ÷ area either one covers</p>
       <p class="muted">A horizon is shown only when the fire grew at least 10 acres, a perimeter was
         mapped within 6h of it, and at most 10% of the growth fell outside the forecast's area —
-        the skill report's default filters.</p>
+        the metrics report's default filters.</p>
     </div>
     <div class="skill-box"><table class="skill" id="skillTable"></table>
       <p class="skill-empty" id="skillEmpty" hidden></p></div>
@@ -527,7 +527,7 @@ function wirePickers() {
   });
   document.addEventListener("keydown", ev => { if (ev.key === "Escape") perims.hidden = true; });
 
-  // the skill "?" opens on hover/focus; a click pins it open (touch has no hover)
+  // the metrics "?" opens on hover/focus; a click pins it open (touch has no hover)
   const helpBtn = document.getElementById("skillHelpBtn"), help = document.getElementById("skillHelp");
   const pinHelp = open => { help.classList.toggle("open", open); helpBtn.setAttribute("aria-expanded", open); };
   helpBtn.addEventListener("click", () => pinHelp(!help.classList.contains("open")));
@@ -978,7 +978,7 @@ async function renderArchivedToa(f, run, pct, note, expired, token) {
   note.className = "note";
 }
 
-// ---------------------------------------------------------------- forecast skill
+// ---------------------------------------------------------------- forecast metrics
 
 // skill/<slug>.json rows are [horizon_h, precision, recall, iou]
 const SKILL_ROWS = [["Precision", 1], ["Recall", 2], ["IoU", 3]];

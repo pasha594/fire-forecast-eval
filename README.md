@@ -1,6 +1,6 @@
 # fire-forecast-eval
 
-Survey of pyrecast/ELMFIRE fire-spread forecast skill vs actual perimeters:
+Survey of pyrecast/ELMFIRE fire-spread forecast metrics vs actual perimeters:
 area-based precision & recall per (fire, forecast run, weather percentile,
 forecast window), plus how skill improves as forecasts refresh.
 
@@ -64,7 +64,7 @@ skill/{slug}.json  {"v": 1, "slug", "generated", "filters": {...},
                     "runs": {"<run_ts>": {"<pct>": [[H, precision, recall, iou], ...]}}}
 ```
 
-Rows use the skill report's default filters exactly (actual growth ≥ 10 acres,
+Rows use the metrics report's default filters exactly (actual growth ≥ 10 acres,
 perimeter offset within ±6h, off-grid growth ≤ 10%; blank offset/off-grid count as
 0), entries are sorted by `H`, scores are rounded to 3 decimals (`null` when
 undefined), and `index.json` lists only fires with ≥ 1 scored row. Fires that
