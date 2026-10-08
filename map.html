@@ -113,7 +113,7 @@
      the thumb's travel (native thumbs differ in width between browsers); the tick
      row is inset by half the 14px thumb on each side */
   #hotTime { -webkit-appearance: none; appearance: none; display: block; height: 14px;
-             margin: 1px 0 0; padding: 0; border: 0; background: transparent; }
+             margin: 3px 0 0; padding: 0; border: 0; background: transparent; }
   #hotTime::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--axis); }
   #hotTime::-moz-range-track { height: 4px; border-radius: 2px; background: var(--axis); }
   #hotTime::-webkit-slider-thumb { -webkit-appearance: none; box-sizing: border-box; width: 14px;
@@ -147,6 +147,9 @@
   .lane i.on { top: 0; height: 13px; width: 3px; margin-left: -1.5px; opacity: 1; }
   .lane b { position: absolute; top: 0; padding: 0 3px; background: var(--surface); color: var(--c);
             font: 600 10px/13px var(--font-sans); white-space: nowrap; pointer-events: none; }
+  /* the selected run's arrival bands laid on the time axis (run time + band hours) */
+  .fc-bar { position: relative; height: 4px; margin: 1px 7px 0; }
+  .fc-bar i { position: absolute; top: 0; height: 4px; }
   .tl-guides { position: absolute; inset: 0; pointer-events: none; }
   .tl-guides i { position: absolute; width: 1px; margin-left: -0.5px; background: var(--c); opacity: .6; }
   .hot-legend { display: flex; align-items: center; gap: 8px; margin: 1px 0 2px;
@@ -297,10 +300,11 @@
       <label class="row"><input type="checkbox" id="chkHot" checked>show detections</label></div>
     <div class="hot-head">playhead: <b id="hotTimeLabel">now</b></div>
     <div class="tl" id="tl">
+      <div class="lane" data-kind="run" title="Forecast runs: press or drag to show one"></div>
+      <div class="fc-bar" id="fcBar"></div>
+      <div class="lane" data-kind="perimeter" title="Perimeter snapshots: press or drag to show one"></div>
       <input type="range" id="hotTime" min="0" max="336" value="336" aria-label="hotspot playhead">
       <div id="hotTicks" aria-hidden="true"></div>
-      <div class="lane" data-kind="perimeter" title="Perimeter snapshots: press or drag to show one"></div>
-      <div class="lane" data-kind="run" title="Forecast runs: press or drag to show one"></div>
       <div class="tl-guides" id="tlGuides" aria-hidden="true"></div>
     </div>
     <div class="note" style="display:flex;justify-content:space-between;margin-bottom:2px">
@@ -813,11 +817,15 @@ function toaGrid(georaster) {
   const merc = L.Projection.SphericalMercator;
   // most of a forecast tif is nodata: crop to the cells that arrive at all, so the
   // canvas can keep the native 30m cells (a downsampled one blurs when zoomed in)
-  let r0 = Ht, r1 = -1, c0 = W, c1 = -1;
+  let r0 = Ht, r1 = -1, c0 = W, c1 = -1, maxHours = 0;
   for (let r = 0; r < Ht; r++) {
     const row = src[r];
     for (let c = 0; c < W; c++) {
-      if (row[c] > 0) { if (r < r0) r0 = r; if (r > r1) r1 = r; if (c < c0) c0 = c; if (c > c1) c1 = c; }
+      const v = row[c];
+      if (v > 0) {
+        if (r < r0) r0 = r; if (r > r1) r1 = r; if (c < c0) c0 = c; if (c > c1) c1 = c;
+        if (v > maxHours) maxHours = v;
+      }
     }
   }
   if (r1 < 0) { r0 = 0; r1 = 0; c0 = 0; c1 = 0; }
@@ -870,7 +878,7 @@ function toaGrid(georaster) {
   canvas.style.imageRendering = "pixelated";   // crisp 30m cells when zoomed in
   const ctx = canvas.getContext("2d");
   const bounds = L.latLngBounds(merc.unproject(L.point(mx0, my0)), merc.unproject(L.point(mx1, my1)));
-  return (georaster._toaGrid = { canvas, ctx, img: ctx.createImageData(w, h), hours, band, bounds });
+  return (georaster._toaGrid = { canvas, ctx, img: ctx.createImageData(w, h), hours, band, bounds, maxHours });
 }
 
 function paintToa(grid) {
@@ -890,7 +898,7 @@ function scheduleToaPaint() {   // setTimeout, not rAF — rAF pauses in hidden 
   if (toaPaintTimer || !state.toaGeo) return;
   toaPaintTimer = setTimeout(() => {
     toaPaintTimer = 0;
-    if (state.toaGeo) paintToa(toaGrid(state.toaGeo));
+    if (state.toaGeo) { paintToa(toaGrid(state.toaGeo)); renderHotMarks(); }
   }, 16);
 }
 
@@ -901,6 +909,7 @@ function drawToaRaster(georaster) {
   state.wmsLayer = new CanvasOverlay(grid.canvas, grid.bounds,
     { opacity: +document.getElementById("opacity").value / 100 }).addTo(map);
   state.toaGeo = georaster;
+  renderHotMarks();
 }
 
 async function renderArchivedToa(f, run, pct, note, expired, token) {
@@ -1193,16 +1202,19 @@ function laneActive(kind, items) {
 }
 
 function renderHotMarks() {
-  // lanes under the playhead track: every perimeter snapshot / forecast run as a light
-  // tick, the one on the map dark and labelled, with a guide line up to the track;
-  // containment is a magenta line across the track
+  // lanes above the playhead track: every forecast run / perimeter snapshot as a light
+  // tick, the one on the map dark and labelled, with a guide line down to the track;
+  // under the run lane, the shown forecast's arrival bands; containment is a magenta
+  // line across the track
   const span = state.hotSpan, pal = Palette.get();
   const key = [[pal.perimeter, "perimeter", "lk"], [RUN_PIN, "forecast run", "lk"]];
   if (span && span.contained) key.push([pal.contained, "contained", "mk"]);
   document.getElementById("hotKey").innerHTML =
     key.map(([c, what, cls]) => `<i class="${cls}" style="--c:${c}"></i>${what}`).join("");
   const guides = document.getElementById("tlGuides"), lanes = document.querySelectorAll(".lane");
-  guides.innerHTML = "";
+  const bar = document.getElementById("fcBar");
+  guides.innerHTML = bar.innerHTML = "";
+  bar.title = "";
   for (const lane of lanes) lane.innerHTML = "";
   if (!span || !state.sel) return;
   const tl = document.getElementById("tl"), track = document.getElementById("hotTime");
@@ -1226,9 +1238,27 @@ function renderHotMarks() {
     const x = pinFrac(act.t) * lane.clientWidth, w = label.offsetWidth;
     // beside the tick, on whichever side keeps it inside the panel
     label.style.left = `${x + 4 + w <= lane.clientWidth + 7 ? x + 3 : x - 3 - w}px`;
-    guide(act.t, color, mid, lane.offsetTop);
+    if (kind === "run") renderArrivalBar(bar, act);
+    const below = kind === "run" ? bar : lane;
+    guide(act.t, color, below.offsetTop + below.offsetHeight, mid);
   }
   if (span.contained) guide(span.end, pal.contained, track.offsetTop, track.offsetTop + track.offsetHeight + 8);
+}
+
+function renderArrivalBar(bar, run) {
+  // each time-of-arrival band at run time + its hours, in the map's colors, up to the
+  // "show arrival within" setting or the forecast's latest arrival, whichever is first
+  if (document.getElementById("selVar").value !== "time-of-arrival" || !state.toaGeo) return;
+  const until = Math.min(state.toaMaxH, toaGrid(state.toaGeo).maxHours);
+  const edges = Palette.TOA_EDGES, colors = Palette.toaColors();
+  let html = "", h0 = 0;
+  for (let k = 0; k < edges.length && h0 < until; k++) {
+    const x0 = pinFrac(run.t + h0 * HOUR), x1 = pinFrac(run.t + Math.min(edges[k], until) * HOUR);
+    if (x1 > x0) html += `<i style="left:${(100 * x0).toFixed(3)}%;width:${(100 * (x1 - x0)).toFixed(3)}%;background:${colors[k]}"></i>`;
+    h0 = edges[k];
+  }
+  bar.innerHTML = html;
+  bar.title = `forecast arrival from ${fmtShort(run.t)}, up to +${Math.round(until)}h`;
 }
 
 function pinFrac(t) {
