@@ -3,17 +3,20 @@
    settings overlay styled by brand.css. Classic script: defines window.Palette. */
 (function () {
   "use strict";
-  const KEY = "cornea-palette-v1";
+  // v1 settings were saved against the pre-reversal defaults; a stored "reversed"
+  // flag would flip the new defaults straight back, so they are not carried over
+  const KEY = "cornea-palette-v2";
   const TOA_EDGES = Object.freeze([12, 24, 48, 72, 96, 120, 168, 240, Infinity]);
   const HOT_STOPS_H = Object.freeze([24, 48, 72, 96, 168]);
   const HOT_MAX_H = HOT_STOPS_H[HOT_STOPS_H.length - 1];
   const DEFAULTS = Object.freeze({
-    // <=12h ... >240h: Figma "Colour allocation" plus one extrapolated purple for >240h
-    toa: Object.freeze(["#A9DCD6", "#A2CEE9", "#90B9E7", "#7CA2DE", "#8691D9",
-                        "#8F82D2", "#9A75CB", "#A569C4", "#B05DBD"]),
+    // <=12h ... >240h: Figma "Colour allocation" (plus one extrapolated purple), run
+    // from purple for imminent arrival to teal for late
+    toa: Object.freeze(["#B05DBD", "#A569C4", "#9A75CB", "#8F82D2", "#8691D9",
+                        "#7CA2DE", "#90B9E7", "#A2CEE9", "#A9DCD6"]),
     toaReversed: false,
-    // freshest (<=24h) ... 7 days old
-    hotspot: Object.freeze(["#FF9E8A", "#FA7A5E", "#E85538", "#CC3630", "#A81F2D"]),
+    // freshest (<=24h, deep crimson) ... 7 days old (salmon)
+    hotspot: Object.freeze(["#A81F2D", "#CC3630", "#E85538", "#FA7A5E", "#FF9E8A"]),
     hotspotReversed: false,
     scar: "#B9A895",
     perimeter: "#A4161A",

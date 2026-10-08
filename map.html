@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script>
-<script src="https://unpkg.com/georaster-layer-for-leaflet@3.10.0/dist/georaster-layer-for-leaflet.min.js"></script>
+<script src="https://unpkg.com/proj4@2.11.0/dist/proj4.js"></script>
 <script src="palette.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -47,8 +47,20 @@
   .sec-head label.row { margin: 0; font-size: 12px; color: var(--ink-2); white-space: nowrap; }
   .sec-head > a { font-size: 11.5px; }
   .help { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px;
-          margin-left: -3px; border: 1px solid var(--axis); border-radius: 50%; color: var(--muted);
-          font: 600 9.5px/1 var(--font-sans); letter-spacing: 0; cursor: help; }
+          margin-left: -3px; padding: 0; border: 1px solid var(--axis); border-radius: 50%;
+          background: transparent; color: var(--muted); font: 600 9.5px/1 var(--font-sans);
+          letter-spacing: 0; cursor: pointer; }
+  .help:hover, .help[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-2); }
+  #skillSec { position: relative; }
+  .help-pop { display: none; position: absolute; left: 0; right: 0; top: 24px; z-index: 1100;
+              padding: 8px 10px; background: var(--surface); color: var(--ink);
+              border: 1px solid var(--axis); border-radius: 8px;
+              box-shadow: 0 6px 18px rgba(59, 29, 41, 0.16); font-size: 11.5px; line-height: 1.45; }
+  .help-pop p, .help-pop ul { margin: 5px 0 0; }
+  .help-pop ul { padding-left: 16px; }
+  .help-pop .muted { color: var(--muted); }
+  #skillSec:has(.help:hover) .help-pop, #skillSec:has(.help:focus-visible) .help-pop,
+  .help-pop.open { display: block; }
   .sec h2 .src-logo { line-height: 0; }
   /* the flame fills the logo's full height but the wordmark only its lower
      59%, so centering the box leaves the lettering low; lift it to the caps */
@@ -120,12 +132,12 @@
   #hotMarks { position: relative; height: 7px; margin: 4px 7px 0; }
   #hotMarks .mk { position: absolute; top: 0; margin: 0 0 0 -4px; cursor: pointer; }
   #hotMarks .mk.clamped { opacity: .45; }
-  .hot-legend { display: grid; grid-template-columns: 56px 1fr; gap: 3px 2px; margin: 2px 0 4px;
-                color: var(--muted); font-size: 11.5px; }
-  .hot-legend .bar { height: 10px; }
-  #scarSwatch { border-radius: 5px 0 0 5px; }
-  #hotRamp { border-radius: 0 5px 5px 0; }
-  .hot-legend .ends { display: flex; justify-content: space-between; }
+  .hot-legend { display: flex; align-items: center; gap: 8px; margin: 2px 0 4px;
+                color: var(--muted); font-size: 10.5px; }
+  .hot-legend .days { display: grid; grid-template-columns: 30px repeat(7, 22px);
+                      justify-items: center; row-gap: 2px; line-height: 12px; }
+  .hot-legend .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .hot-legend .cap { line-height: 13px; }
   /* forecast skill: 9 horizon columns have to fit the 292px content width */
   .skill { border-collapse: collapse; font-size: 11px; line-height: 13px;
            font-variant-numeric: tabular-nums; }
@@ -231,8 +243,23 @@
   </div>
 
   <div class="sec fire-only" id="skillSec" hidden>
-    <div class="sec-head"><h2>Forecast skill <span class="help" title="Growth-only precision, recall and intersection-over-union of this run's predicted spread vs the NIFC perimeter at each horizon — same rows and default filters as the skill report.">?</span></h2>
+    <div class="sec-head"><h2>Forecast skill <button type="button" class="help" id="skillHelpBtn"
+        aria-label="How forecast skill is calculated" aria-controls="skillHelp" aria-expanded="false">?</button></h2>
       <a href="report.html">skill report</a></div>
+    <div class="help-pop" id="skillHelp" role="tooltip">
+      <b>How these numbers are calculated</b>
+      <p>This run is scored against <b>NIFC fire perimeters</b> — hotspots are not used.</p>
+      <ul>
+        <li><b>Predicted:</b> where the forecast's time of arrival is within the horizon.</li>
+        <li><b>Actual:</b> the NIFC perimeter mapped closest to run time + horizon.</li>
+        <li><b>Growth only:</b> the perimeter at forecast time is removed from both, so only new spread counts.</li>
+      </ul>
+      <p><b>Precision</b> = overlap ÷ predicted growth<br><b>Recall</b> = overlap ÷ actual growth<br>
+        <b>IoU</b> = overlap ÷ area either one covers</p>
+      <p class="muted">A horizon is shown only when the fire grew at least 10 acres, a perimeter was
+        mapped within 6h of it, and at most 10% of the growth fell outside the forecast's area —
+        the skill report's default filters.</p>
+    </div>
     <table class="skill" id="skillTable"></table>
   </div>
 
@@ -254,10 +281,7 @@
     <div class="note" style="display:flex;justify-content:space-between;margin-bottom:2px">
       <span id="hotStartLabel"></span><span id="hotEndLabel">now</span></div>
     <div class="hot-key" id="hotKey"></div>
-    <div class="hot-legend">
-      <span class="bar" id="scarSwatch"></span><span class="bar" id="hotRamp"></span>
-      <span>burn scar</span><span class="ends"><span>7d before</span><span>&le;24h before playhead</span></span>
-    </div>
+    <div class="hot-legend" id="hotLegend"></div>
     <div class="note" id="hotnote"></div>
   </div>
 </div>
@@ -281,7 +305,6 @@ const scarPane = map.createPane("scar");
 scarPane.style.zIndex = 420;
 scarPane.style.pointerEvents = "none";
 map.createPane("hotspots").style.zIndex = 430;
-const hotRenderer = L.canvas({ padding: 0.2, pane: "hotspots" });   // thousands of points -> canvas
 // fire markers above the hotspot canvas, which would otherwise take their clicks;
 // Leaflet's per-pane SVG root is pointer-events none, so it doesn't block the canvas
 map.createPane("fires").style.zIndex = 440;
@@ -379,17 +402,15 @@ async function init() {
       state.toaMaxH = +slider.value;
       document.getElementById("timelabel").textContent = `+${slider.value}h`;
       renderToaLegend();
+      scheduleToaPaint();
     }
   });
   slider.addEventListener("change", () => {          // apply on release
     const variable = document.getElementById("selVar").value;
     const run = document.getElementById("selRun").value;
     if (!run) return;
-    if (TIMED_VARS.has(variable)) {
-      if (state.wmsLayer && state.wmsLayer.setParams)
-        state.wmsLayer.setParams({ time: timeParam(run) });
-    } else if (variable === "time-of-arrival") {
-      refreshWms();  // rebuilds live SLD filter or re-renders the archived raster
+    if (TIMED_VARS.has(variable) && state.wmsLayer && state.wmsLayer.setParams) {
+      state.wmsLayer.setParams({ time: timeParam(run) });
     }
   });
   document.getElementById("chkHot").addEventListener("change", refreshHotspots);
@@ -458,6 +479,15 @@ function wirePickers() {
     if (!perims.hidden && !ev.target.closest("#perimPicker")) perims.hidden = true;
   });
   document.addEventListener("keydown", ev => { if (ev.key === "Escape") perims.hidden = true; });
+
+  // the skill "?" opens on hover/focus; a click pins it open (touch has no hover)
+  const helpBtn = document.getElementById("skillHelpBtn"), help = document.getElementById("skillHelp");
+  const pinHelp = open => { help.classList.toggle("open", open); helpBtn.setAttribute("aria-expanded", open); };
+  helpBtn.addEventListener("click", () => pinHelp(!help.classList.contains("open")));
+  document.addEventListener("mousedown", ev => {
+    if (help.classList.contains("open") && !ev.target.closest("#skillHelp, #skillHelpBtn")) pinHelp(false);
+  });
+  document.addEventListener("keydown", ev => { if (ev.key === "Escape") pinHelp(false); });
 }
 
 function renderList() {
@@ -706,12 +736,6 @@ function configureTimeSlider(variable) {
 
 // ------------------------------------------------- archived raster rendering
 
-function toaColor(v, maxH) {
-  if (!v || v <= 0 || isNaN(v)) return null;  // nodata=0 = not forecast to burn
-  if (maxH && v > maxH) return null;          // beyond the arrival-time slider
-  return Palette.toaColor(v);
-}
-
 // the open-ended last band is drawn wider so its ">10d" label clears the "10d" edge label
 const TOA_LAST_FLEX = 1.6;
 
@@ -736,14 +760,104 @@ function renderToaLegend() {
   if (key) key.outerHTML = toaLegendHtml(state.toaMaxH);
 }
 
+// an ImageOverlay whose element is a canvas we repaint in place
+const CanvasOverlay = L.ImageOverlay.extend({
+  _initImage() {
+    const el = this._image = this._url;
+    L.DomUtil.addClass(el, "leaflet-image-layer");
+    if (this._zoomAnimated) L.DomUtil.addClass(el, "leaflet-zoom-animated");
+    el.onselectstart = L.Util.falseFn;
+    el.onmousemove = L.Util.falseFn;
+  },
+});
+
+const TOA_MAX_PX = 1600;   // longest side of the resampled image (~2.5M pixels at most)
+
+function toaGrid(georaster) {
+  // resample the forecast's UTM raster once onto the Web Mercator grid the overlay is
+  // stretched over, keeping each pixel's hours and band: the arrival slider and palette
+  // changes then only repaint this canvas instead of re-rendering map tiles
+  if (georaster._toaGrid) return georaster._toaGrid;
+  const epsg = georaster.projection;
+  const utm = proj4("EPSG:4326", `+proj=utm +zone=${epsg % 100}${epsg >= 32701 ? " +south" : ""} +datum=WGS84 +units=m +no_defs`);
+  const { xmin, ymax, pixelWidth: pw, pixelHeight: ph, width: W, height: Ht } = georaster;
+  const src = georaster.values[0];
+  const merc = L.Projection.SphericalMercator;
+  // the UTM footprint is not a box in mercator, so bound it by sampling its edges
+  let mx0 = Infinity, my0 = Infinity, mx1 = -Infinity, my1 = -Infinity;
+  for (let i = 0; i <= 16; i++) {
+    const x = xmin + W * pw * i / 16, y = ymax - Ht * ph * i / 16;
+    for (const [X, Y] of [[x, ymax], [x, ymax - Ht * ph], [xmin, y], [xmin + W * pw, y]]) {
+      const [lon, lat] = utm.inverse([X, Y]);
+      const m = merc.project(L.latLng(lat, lon));
+      mx0 = Math.min(mx0, m.x); mx1 = Math.max(mx1, m.x);
+      my0 = Math.min(my0, m.y); my1 = Math.max(my1, m.y);
+    }
+  }
+  const w = Math.min(TOA_MAX_PX, W), h = Math.max(1, Math.round(w * (my1 - my0) / (mx1 - mx0)));
+  // UTM coordinates are projected exactly on a 16px lattice and interpolated in
+  // between (the projection is smooth at this scale; per-pixel proj4 takes seconds)
+  const S = 16, nx = Math.ceil(w / S) + 1, ny = Math.ceil(h / S) + 1;
+  const NX = new Float64Array(nx * ny), NY = new Float64Array(nx * ny);
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const ll = merc.unproject(L.point(mx0 + i * S / w * (mx1 - mx0), my1 - j * S / h * (my1 - my0)));
+      [NX[j * nx + i], NY[j * nx + i]] = utm.forward([ll.lng, ll.lat]);
+    }
+  }
+  const edges = Palette.TOA_EDGES;
+  const hours = new Float32Array(w * h), band = new Uint8Array(w * h);   // band 0 = no arrival
+  for (let py = 0; py < h; py++) {
+    const fy = (py + 0.5) / S, j = Math.min(Math.floor(fy), ny - 2), ty = fy - j;
+    for (let px = 0; px < w; px++) {
+      const fx = (px + 0.5) / S, i = Math.min(Math.floor(fx), nx - 2), tx = fx - i;
+      const a = j * nx + i, c = a + nx;
+      const X = (NX[a] + (NX[a + 1] - NX[a]) * tx) * (1 - ty) + (NX[c] + (NX[c + 1] - NX[c]) * tx) * ty;
+      const Y = (NY[a] + (NY[a + 1] - NY[a]) * tx) * (1 - ty) + (NY[c] + (NY[c + 1] - NY[c]) * tx) * ty;
+      const r = Math.floor((ymax - Y) / ph), q = Math.floor((X - xmin) / pw);
+      if (r < 0 || r >= Ht || q < 0 || q >= W) continue;
+      const v = src[r][q];
+      if (!(v > 0)) continue;   // nodata=0 = not forecast to burn
+      let k = 0;
+      while (v > edges[k]) k++;
+      hours[py * w + px] = v;
+      band[py * w + px] = k + 1;
+    }
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  const bounds = L.latLngBounds(merc.unproject(L.point(mx0, my0)), merc.unproject(L.point(mx1, my1)));
+  return (georaster._toaGrid = { canvas, ctx, img: ctx.createImageData(w, h), hours, band, bounds });
+}
+
+function paintToa(grid) {
+  const rgb = Palette.toaColors().map(c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)));
+  const d = grid.img.data, { hours, band } = grid, maxH = state.toaMaxH;
+  for (let o = 0, q = 0; o < band.length; o++, q += 4) {
+    const k = band[o];
+    if (!k || hours[o] > maxH) { d[q + 3] = 0; continue; }   // beyond the arrival-time slider
+    const c = rgb[k - 1];
+    d[q] = c[0]; d[q + 1] = c[1]; d[q + 2] = c[2]; d[q + 3] = 255;
+  }
+  grid.ctx.putImageData(grid.img, 0, 0);
+}
+
+let toaPaintTimer = 0;
+function scheduleToaPaint() {   // setTimeout, not rAF — rAF pauses in hidden tabs
+  if (toaPaintTimer || !state.toaGeo) return;
+  toaPaintTimer = setTimeout(() => {
+    toaPaintTimer = 0;
+    if (state.toaGeo) paintToa(toaGrid(state.toaGeo));
+  }, 16);
+}
+
 function drawToaRaster(georaster) {
   if (state.wmsLayer) map.removeLayer(state.wmsLayer);
-  const maxH = state.toaMaxH;
-  state.wmsLayer = new GeoRasterLayer({
-    georaster, resolution: 192, pane: "overlayPane",
-    opacity: +document.getElementById("opacity").value / 100,
-    pixelValuesToColorFn: vals => toaColor(vals[0], maxH),
-  }).addTo(map);
+  const grid = toaGrid(georaster);
+  paintToa(grid);
+  state.wmsLayer = new CanvasOverlay(grid.canvas, grid.bounds,
+    { opacity: +document.getElementById("opacity").value / 100 }).addTo(map);
   state.toaGeo = georaster;
 }
 
@@ -1158,8 +1272,8 @@ function renderScar(H, p) {
   return hi - lo;
 }
 
-function hotMarker(r) {
-  const m = L.circleMarker([r[0], r[1]], { renderer: hotRenderer, radius: 3, weight: 0.5 });
+function hotMarker(r, renderer) {
+  const m = L.circleMarker([r[0], r[1]], { renderer, radius: 3, weight: 0.5 });
   m._r = r;
   return m;
 }
@@ -1172,11 +1286,14 @@ function dropHotMarks(H, d) {
 function clearHotspots() {
   state.hotSeq++;
   clearTimeout(hotFetchTimer);
-  if (state.hot && state.hot.req) state.hot.req.ctl.abort();
+  const H = state.hot;
+  if (H && H.req) H.req.ctl.abort();
   if (state.hotLayer) { map.removeLayer(state.hotLayer); state.hotLayer = null; }
   // Leaflet never removes a renderer itself, and its full-viewport canvas would keep
-  // taking the pointer from the fire markers below; the next hotMarker re-adds it
-  if (map.hasLayer(hotRenderer)) map.removeLayer(hotRenderer);
+  // taking the pointer from the fire markers below. A removed canvas renderer also
+  // keeps its cancelled redraw request and never repaints until the map moves, so
+  // every session gets a fresh one (refreshHotspots)
+  if (H && map.hasLayer(H.renderer)) map.removeLayer(H.renderer);
   state.hot = null;
   scarLayer.update(null, 0, 0, null);
 }
@@ -1209,7 +1326,8 @@ async function refreshHotspots() {
   // frp, confidence] with (x0, y0) its zoom-0 map pixel; marks: day -> markers,
   // only for the days in the window behind the playhead; req: the request in flight
   state.hot = { bbox, span, days: new Map(), marks: new Map(), keys: new Set(), covered: new Set(),
-                capped: false, req: null, flat: null, histError: "" };
+                capped: false, req: null, flat: null, histError: "",
+                renderer: L.canvas({ padding: 0.2, pane: "hotspots" }) };   // thousands of points -> canvas
   renderHotspots();
   ensureHotCoverage();
 }
@@ -1300,7 +1418,7 @@ function renderHotspots() {
     if (!H.covered.has(d)) pending = true;
     const recs = H.days.get(d);
     if (!recs) continue;
-    if (!H.marks.has(d)) H.marks.set(d, recs.map(hotMarker));
+    if (!H.marks.has(d)) H.marks.set(d, recs.map(r => hotMarker(r, H.renderer)));
     for (const m of H.marks.get(d)) {
       const col = hotColor((p - m._r[2]) / HOUR);
       if (!col) { state.hotLayer.removeLayer(m); continue; }
@@ -1330,13 +1448,22 @@ function renderHotspots() {
 }
 
 function renderHotLegend() {
-  document.getElementById("scarSwatch").style.background = Palette.get().scar;
-  document.getElementById("hotRamp").style.background = Palette.hotspotGradient();
+  // oldest on the left like the timeline: the burn scar, then one dot per day of the
+  // 7-day fade, each in the color its detections reach at the end of that day
+  const dots = [[Palette.get().scar, "scar", "burn scar: detected more than 7 days before the playhead"]];
+  for (let d = 7; d >= 1; d--) {
+    dots.push([Palette.hotspotColor(d * 24), `${d}d`,
+               d === 1 ? "detected within 1 day before the playhead" : `detected ${d - 1}–${d} days before the playhead`]);
+  }
+  document.getElementById("hotLegend").innerHTML = '<div class="days">' +
+    dots.map(([c, , t]) => `<i class="dot" style="background:${c}" title="${t}"></i>`).join("") +
+    dots.map(([, l]) => `<span>${l}</span>`).join("") +
+    '</div><span class="cap">days before<br>the playhead</span>';
 }
 
 function applyPalette() {
   const pal = Palette.get();
-  if (state.toaGeo) drawToaRaster(state.toaGeo);
+  if (state.toaGeo) paintToa(toaGrid(state.toaGeo));
   renderToaLegend();
   const cur = state.perimIndex[state.perimIndex.length - 1];
   const latest = cur && state.perimLayers.get(cur.ems);
