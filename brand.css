@@ -23,8 +23,8 @@ a { color: var(--link); text-decoration-color: var(--accent); text-underline-off
 .brand { display: inline-block; line-height: 0; }
 .brand img { display: block; width: auto; }
 
-/* color settings overlay and its gear button, both built by palette.js; the
-   panel sits above Leaflet's controls (z-index 1000) */
+/* settings overlay (colors, plus a page's own options) and its gear button, both
+   built by palette.js; the panel sits above the map and its controls */
 .palette-gear {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
   width: 28px; height: 28px; padding: 0; border: 1px solid var(--axis); border-radius: 6px;
@@ -71,6 +71,7 @@ a { color: var(--link); text-decoration-color: var(--accent); text-underline-off
 .palette-row input[type=color]::-moz-color-swatch { border: 0; border-radius: 3px; }
 .palette-check { display: flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12px; cursor: pointer; }
 .palette-check input { margin: 0; }
+.palette-choices { display: grid; gap: 6px; }
 .palette-actions { display: flex; gap: 8px; }
 .palette-btn {
   font: 600 12.5px/1.2 var(--font-sans); padding: 6px 10px; cursor: pointer;

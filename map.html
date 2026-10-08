@@ -24,7 +24,8 @@
     width: 320px; min-width: 320px; overflow-y: auto; padding: 10px 14px;
     background: var(--surface); border-right: 1px solid var(--grid);
   }
-  #map { flex: 1; position: relative; }
+  #mapwrap { flex: 1; position: relative; min-width: 0; }
+  #map { position: absolute; inset: 0; }
   /* no fire selected: the overview replaces the per-fire sections */
   #side.nosel .fire-only, #side:not(.nosel) #overview { display: none; }
   .brandrow { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
@@ -103,7 +104,7 @@
   .toa-bar i.dim { opacity: .25; }
   .toa-bar.ramp { display: block; }
   .iso-key { display: inline-block; width: 18px; height: 0; margin: 0 5px 3px 0; vertical-align: middle;
-             border-top: 1.5px solid var(--ink); }
+             border-top: 1.5px solid #ff0000; }
   .toa-ticks { grid-column: 2; position: relative; height: 13px; font-size: 10px; line-height: 13px; }
   .toa-ticks span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
   .toa-ticks span.last { right: 0; transform: none; }
@@ -115,7 +116,7 @@
   .track { position: relative; height: 16px; margin-top: 3px; }
   .track-line { position: absolute; left: 0; right: 0; top: 6px; height: 4px; border-radius: 2px;
                 background: var(--axis); }
-  #fcBar { position: absolute; left: 3px; right: 3px; top: 6px; height: 4px; }
+  #fcBar { position: absolute; left: 3px; right: 3px; top: 6px; height: 4px; overflow: hidden; }
   #fcBar i { position: absolute; top: 0; height: 4px; }
   #hotTime { -webkit-appearance: none; appearance: none; position: relative; z-index: 3; display: block; width: 100%;
              height: 16px; margin: 0; padding: 0; border: 0; background: transparent; }
@@ -173,12 +174,48 @@
   /* over MapLibre's own control-button hover and press shading */
   .view-toggles .base-toggle button:not(.on):hover { background: var(--hover); color: var(--ink); }
   .view-toggles .base-toggle button.on:hover, .view-toggles .base-toggle button.on:active { background: var(--accent); }
+  .view-toggles .base-toggle button:disabled { color: var(--muted); opacity: .55; cursor: not-allowed; }
+  /* Pyrecast's live tiles (and the basemap under them) as <img>s under the map canvas */
+  /* each its own stacking context (z-index 0), so the tiles' z-index orders them only
+     within their layer, and the canvas, later in the page, stays on top */
+  .dom-layers, .dom-tiles { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+  .dom-tiles img { position: absolute; max-width: none; max-height: none; user-select: none; }
+  #fcLive { cursor: help; }
   /* hover labels on the map; they never take the pointer from what's under them */
   .map-tip { pointer-events: none; }
   .map-tip .maplibregl-popup-content { padding: 4px 8px; border-radius: 4px; color: var(--ink);
                                        font: 12px/1.35 var(--font-sans); box-shadow: 0 1px 4px rgba(59, 29, 41, 0.3); }
   .maplibregl-ctrl-attrib { font: 11px/1.4 var(--font-sans); }
   .tl-guides { position: absolute; inset: 0; pointer-events: none; }
+  /* Settings → Timeline: docked along the bottom of the map, as Incibrief does, with
+     the room for larger type and marks (the same 3px inset keeps rows on one axis) */
+  #tlDock { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; padding: 8px 20px 5px;
+            background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(6px);
+            border-top: 1px solid var(--border); box-shadow: 0 -6px 18px rgba(59, 29, 41, 0.08); }
+  #tlDock:empty, #side.nosel ~ #mapwrap #tlDock { display: none; }
+  body.tl-docked .maplibregl-ctrl-bottom-left,
+  body.tl-docked .maplibregl-ctrl-bottom-right { bottom: var(--dock-h, 0px); }
+  #tlDock .hot-head { margin: 0; font-size: 14px; }
+  #tlDock #hotEndLabel { font-size: 12.5px; }
+  #tlDock .lane-cap { height: 16px; margin-top: 3px; font-size: 12.5px; line-height: 16px; }
+  #tlDock .lane { height: 15px; }
+  #tlDock .lane::before { top: 10px; }
+  #tlDock .lane i { top: 6.5px; width: 7px; height: 7px; margin-left: -3.5px; }
+  #tlDock .lane i.on::before { left: -1.5px; top: -7px; border-width: 6px 5px 0; }
+  #tlDock .track { height: 22px; margin-top: 4px; }
+  #tlDock .track-line, #tlDock #fcBar { top: 8px; height: 6px; }
+  #tlDock .track-line { border-radius: 3px; }
+  #tlDock #fcBar i { height: 6px; }
+  #tlDock #hotTime, #tlDock #hotTime::-webkit-slider-runnable-track { height: 22px; }
+  #tlDock #hotTime::-moz-range-track { height: 22px; }
+  #tlDock #hotTime::-webkit-slider-thumb { height: 22px; }
+  #tlDock #hotTime::-moz-range-thumb { height: 22px; }
+  #tlDock #hotTicks { height: 11px; margin-top: -8px; }
+  #tlDock #hotTicks span { height: 5px; }
+  #tlDock #hotTicks span.major { height: 11px; }
+  /* level labels centred on their tick: there's room for them here */
+  #tlDock #hotDates { height: 16px; margin-top: 1px; }
+  #tlDock #hotDates span { font-size: 11.5px; line-height: 16px; transform: translateX(-50%); }
   .tl-guides i { position: absolute; width: 1px; margin-left: -0.5px; background: var(--c); opacity: .6; }
   .hot-legend { display: flex; align-items: center; gap: 8px; margin: 1px 0 2px;
                 color: var(--muted); font-size: 10.5px; }
@@ -262,7 +299,8 @@
 
   <div class="sec fire-only">
     <h2>Forecast layer <a class="src-logo" href="https://www.pyregence.org/" target="_blank"
-      rel="noopener" title="Forecasts by Pyregence"><img src="pyregence-logo.svg" alt="by Pyregence"></a></h2>
+      rel="noopener" title="Forecasts by Pyregence"><img src="pyregence-logo.svg" alt="by Pyregence"></a>
+      <span class="live" id="fcLive" hidden title="Pyrecast's live tiles for this run, which still is on Pyrecast. They are flat; 3D draws the run's archived copy">LIVE</span></h2>
     <select id="selRun"></select>
     <div class="pair">
       <select id="selVar">
@@ -324,6 +362,7 @@
   <div class="sec fire-only">
     <div class="sec-head"><h2>Hotspots (NASA VIIRS)</h2>
       <label class="row"><input type="checkbox" id="chkHot" checked>show detections</label></div>
+    <div id="tlSlot"><div id="tlBlock">
     <div class="hot-head"><span>playhead: <b id="hotTimeLabel">now</b></span><span id="hotEndLabel">now</span></div>
     <div class="tl" id="tl">
       <div class="lane-cap" data-kind="run"></div>
@@ -336,13 +375,14 @@
       <div id="hotDates" aria-hidden="true"></div>
       <div class="tl-guides" id="tlGuides" aria-hidden="true"></div>
     </div>
+    </div></div>
     <div class="legend-head">Legend</div>
     <div class="hot-key" id="hotKey"></div>
     <div class="hot-legend" id="hotLegend"></div>
     <div class="note" id="hotnote"></div>
   </div>
 </div>
-<div id="map"></div>
+<div id="mapwrap"><div id="map"></div><div id="tlDock" role="group" aria-label="timeline"></div></div>
 
 <script type="module">
 import * as maplibregl from "https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs";
@@ -368,6 +408,7 @@ const tiles = (url, extra) => ({ type: "raster", tiles: [url], tileSize: 256, ma
 const dem = () => ({ type: "raster-dem", tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
                      encoding: "terrarium", tileSize: 256, maxzoom: 15, attribution: "Terrain: Mapzen, AWS Open Data" });
 const OLD_PERIM = "#52514e";
+const INSTANT = { duration: 0, delay: 0 };
 
 const map = new maplibregl.Map({
   container: "map",
@@ -393,14 +434,18 @@ const map = new maplibregl.Map({
     // bottom to top; the forecast canvas goes in under "iso", and the burn scar over the
     // perimeters' fill but under their outlines, so they stay readable over a big scar
     layers: [
-      { id: "bg", type: "background", paint: { "background-color": "#f2efe9" } },
-      { id: "osm", type: "raster", source: "osm" },
-      { id: "imagery", type: "raster", source: "imagery", layout: { visibility: "none" } },
-      { id: "places", type: "raster", source: "places", layout: { visibility: "none" } },
+      // (their opacity switches with Pyrecast's live tiles, at once: see canvasBasemap)
+      { id: "bg", type: "background", paint: { "background-color": "#f2efe9", "background-opacity-transition": INSTANT } },
+      { id: "osm", type: "raster", source: "osm", paint: { "raster-opacity-transition": INSTANT } },
+      { id: "imagery", type: "raster", source: "imagery", layout: { visibility: "none" },
+        paint: { "raster-opacity-transition": INSTANT } },
+      { id: "places", type: "raster", source: "places", layout: { visibility: "none" },
+        paint: { "raster-opacity-transition": INSTANT } },
       { id: "shade", type: "hillshade", source: "shade", layout: { visibility: "none" },
         paint: { "hillshade-exaggeration": 0.45, "hillshade-shadow-color": "rgba(59, 29, 41, 0.5)",
                  "hillshade-highlight-color": "rgba(255, 255, 255, 0.35)", "hillshade-accent-color": "rgba(59, 29, 41, 0.25)" } },
-      { id: "iso", type: "line", source: "iso", paint: { "line-color": "#3b1d29", "line-width": 1.2 } },
+      // isochrones as Pyrecast draws them
+      { id: "iso", type: "line", source: "iso", paint: { "line-color": "#ff0000", "line-width": 1.5 } },
       // the newest perimeter shown takes the palette color, any older ones gray dashed
       { id: "perim-fill", type: "fill", source: "perims",
         paint: { "fill-color": OLD_PERIM, "fill-opacity": ["case", ["get", "cur"], 0.08, 0] } },
@@ -423,7 +468,9 @@ const mapReady = new Promise(resolve => map.once("style.load", resolve));
 // a debugging handle for local runs (serve.py)
 if (["localhost", "127.0.0.1"].includes(location.hostname)) window.__map = map;
 
-const view = { base: "map", is3d: false };
+// want3d is the viewer's choice (remembered); is3d is what the map shows, which is
+// flat whenever Pyrecast's live tiles are on it (state.liveForced)
+const view = { base: "map", want3d: false, is3d: null };   // null until first applied
 const remembered = (key, fallback) => { try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; } };
 const remember = (key, value) => { try { localStorage.setItem(key, value); } catch (e) { /* the choice just isn't remembered */ } };
 
@@ -437,11 +484,25 @@ function setBasemap(name) {
   map.setLayoutProperty("shade", "visibility", vis(name === "map" && view.is3d));
   for (const b of document.querySelectorAll(".base-toggle button[data-base]")) b.classList.toggle("on", b.dataset.base === name);
   remember("cornea-basemap", name);
+  if (live.on && live.baseName !== name) liveBasemap();
 }
 
-function set3d(on, animate = true) {
+function apply3d(animate = true) {
   // 3D drapes everything over the terrain and lets the map tilt and turn; 2D keeps
   // the flat, north-up map
+  const on = view.want3d && !state.liveForced;
+  const b3 = document.querySelector('.base-toggle button[data-dim="3d"]');
+  if (b3) {
+    // on a live run 3D draws the archived copy, so it waits for the archive
+    b3.disabled = state.liveForced && !state.liveArchived;
+    b3.title = b3.disabled
+      ? "3D isn't available for this run yet: Pyrecast's live tiles are flat, and 3D draws the run's " +
+        "archived copy, which isn't in yet (usually within an hour)"
+      : state.liveForced ? "show this run in 3D, drawn from its archived copy instead of Pyrecast's live tiles"
+      : "tilt the map over 3D terrain (right-drag or two fingers to tilt and turn)";
+  }
+  for (const b of document.querySelectorAll(".base-toggle button[data-dim]")) b.classList.toggle("on", (b.dataset.dim === "3d") === on);
+  if (on === view.is3d) return;
   view.is3d = on;
   const duration = animate ? 900 : 0;
   for (const h of [map.dragRotate, map.touchPitch]) on ? h.enable() : h.disable();
@@ -453,13 +514,22 @@ function set3d(on, animate = true) {
     map.easeTo({ pitch: 60, duration });
   } else {
     map.setTerrain(null);
-    map.easeTo({ pitch: 0, bearing: 0, duration });
-    map.once("moveend", () => { if (!view.is3d) map.setMaxPitch(0); });
+    if (duration) {
+      map.easeTo({ pitch: 0, bearing: 0, duration });
+      map.once("moveend", () => { if (!view.is3d) map.setMaxPitch(0); });
+    } else {
+      map.jumpTo({ pitch: 0, bearing: 0 });
+      map.setMaxPitch(0);
+    }
   }
   setBasemap(view.base);
-  for (const b of document.querySelectorAll(".base-toggle button[data-dim]")) b.classList.toggle("on", (b.dataset.dim === "3d") === on);
-  remember("cornea-3d", on ? "1" : "0");
 }
+
+// 2D stays north-up and flat, even after an interrupted ease or a turn of the compass
+map.on("moveend", () => {
+  if (view.is3d !== false || map.isMoving()) return;
+  if (Math.abs(map.getBearing()) > 0.01 || map.getPitch() > 0.01) map.jumpTo({ bearing: 0, pitch: 0 });
+});
 
 class ViewToggles {
   onAdd() {
@@ -469,12 +539,20 @@ class ViewToggles {
       '<div class="base-toggle" role="group" aria-label="basemap"><button type="button" data-base="map">Map</button>' +
       '<button type="button" data-base="satellite">Satellite</button></div>' +
       '<div class="base-toggle" role="group" aria-label="terrain"><button type="button" data-dim="2d">2D</button>' +
-      '<button type="button" data-dim="3d" title="tilt the map over 3D terrain (right-drag or two fingers to tilt and turn)">3D</button></div>';
+      '<button type="button" data-dim="3d">3D</button></div>';
     el.addEventListener("click", ev => {
       const b = ev.target.closest("button");
-      if (!b) return;
-      if (b.dataset.base) setBasemap(b.dataset.base);
-      else if ((b.dataset.dim === "3d") !== view.is3d) set3d(b.dataset.dim === "3d");
+      if (!b || b.disabled) return;
+      if (b.dataset.base) { setBasemap(b.dataset.base); return; }
+      const want = b.dataset.dim === "3d";
+      if (want === view.is3d) return;   // already showing that
+      view.want3d = want;
+      remember("cornea-3d", want ? "1" : "0");
+      // on a newest run, 3D is that run's own choice: it swaps Pyrecast's live tiles
+      // for the archived copy, while the run's default stays the live tiles
+      state.live3d = want && state.liveRun ? state.liveKey : null;
+      if (state.liveRun) refreshWms();
+      else apply3d();
     });
     return el;
   }
@@ -484,8 +562,235 @@ map.addControl(new ViewToggles(), "top-right");
 mapReady.then(() => {
   const base = remembered("cornea-basemap", "map");
   view.base = base === "satellite" ? "satellite" : "map";
-  set3d(remembered("cornea-3d", "0") === "1", false);
+  view.want3d = remembered("cornea-3d", "0") === "1";
+  setBasemap(view.base);
+  // with a fire in the link, a remembered 3D waits for its run (the newest may be live
+  // tiles, which are flat), so the map doesn't tilt and then flatten; 2D applies now
+  if (!view.want3d || !new URLSearchParams(location.search).get("fire")) apply3d(false);
 });
+
+// ---------------------------------------------------------------- live tiles
+
+// Pyrecast's live tiles, for the newest runs. WebGL may only read pixels a server
+// shares across origins, and Pyrecast's geoserver refuses every origin but its own;
+// a plain <img> tile makes no cross-origin request, so these are drawn as <img>
+// tiles under the MapLibre canvas. While they show, the basemap moves under them
+// too and the canvas draws only the data layers on a transparent background, so the
+// forecast keeps its place under the perimeters and hotspots. Tiles are placed by
+// projecting their corners, which holds only on a flat, north-up map: live tiles
+// are 2D only.
+const WMS = "https://geoserver-usw1.pyrecast.org/geoserver02/wms";
+const WORLD_M = 2 * Math.PI * 6378137;   // the Web Mercator world's width in meters
+
+class DomTiles {
+  constructor(url, { maxZoom = 18, onStatus = null } = {}) {
+    this.el = document.createElement("div");
+    this.el.className = "dom-tiles";
+    this.maxZoom = maxZoom;
+    this.onStatus = onStatus;   // (loaded, failed) for the current url, after each tile settles
+    this.tiles = new Map();     // key -> {img, z, x, y, gen, done}
+    this.gen = 0;
+    this.setUrl(url);
+  }
+
+  setUrl(url) {
+    // new tiles replace the old ones as they load, so a changed layer doesn't blink
+    this.url = url;
+    this.gen++;
+    this.loaded = this.failed = 0;
+  }
+
+  remove() {
+    for (const [key, t] of this.tiles) this.drop(key, t);
+    this.el.remove();
+  }
+
+  drop(key, t) {
+    // a tile still loading is cancelled, without counting as a failure
+    t.img.onload = t.img.onerror = null;
+    if (!t.done) t.img.removeAttribute("src");
+    t.img.remove();
+    this.tiles.delete(key);
+  }
+
+  update(map) {
+    // MapLibre's zoom counts 512px tiles; these are 256px
+    const z = this.z = Math.max(0, Math.min(this.maxZoom, Math.round(map.getZoom() + 1))), n = 2 ** z;
+    const b = map.getBounds(), clampLat = lat => Math.max(-85.0511, Math.min(85.0511, lat));
+    const tx = lon => Math.floor((lon + 180) / 360 * n);
+    const ty = lat => Math.floor((1 - Math.log(Math.tan(Math.PI / 4 + clampLat(lat) * D2R / 2)) / Math.PI) / 2 * n);
+    const x0 = tx(b.getWest()), x1 = tx(b.getEast());
+    const y0 = Math.max(0, ty(b.getNorth())), y1 = Math.min(n - 1, ty(b.getSouth()));
+    this.want = new Set();
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const key = `${this.gen}/${z}/${x}/${y}`;
+        this.want.add(key);
+        if (!this.tiles.has(key)) this.add(key, z, x, y);
+      }
+    }
+    this.prune();
+    for (const t of this.tiles.values()) this.place(map, t);
+  }
+
+  add(key, z, x, y) {
+    const n = 2 ** z, img = document.createElement("img"), gen = this.gen;
+    const t = { img, z, x, y, gen, done: false, ok: false };
+    img.alt = "";
+    img.draggable = false;
+    img.decoding = "async";
+    img.style.visibility = "hidden";
+    img.onload = () => { t.done = t.ok = true; img.style.visibility = ""; this.settled(t, true); };
+    img.onerror = () => { t.done = true; this.settled(t, false); };
+    img.src = this.url(z, ((x % n) + n) % n, y);   // x wraps around the antimeridian
+    this.tiles.set(key, t);
+    this.el.appendChild(img);
+  }
+
+  settled(t, ok) {
+    if (t.gen !== this.gen) return;
+    if (ok) this.loaded++; else this.failed++;
+    // the same tile from an older url (a previous layer or hour) would show through
+    // this one's transparent pixels
+    if (ok) {
+      for (const [key, o] of this.tiles) {
+        if (o.gen !== t.gen && o.z === t.z && o.x === t.x && o.y === t.y) this.drop(key, o);
+      }
+    }
+    this.prune();
+    if (this.onStatus) this.onStatus(this.loaded, this.failed);
+  }
+
+  ready() {
+    // every tile in view has loaded or failed
+    for (const key of this.want || []) { const t = this.tiles.get(key); if (t && !t.done) return false; }
+    return !!this.want;
+  }
+
+  prune() {
+    // loaded tiles of another zoom or url stay under the current ones until those settle
+    if (!this.want) return;
+    const keep = !this.ready();
+    for (const [key, t] of this.tiles) {
+      if (this.want.has(key)) continue;
+      if (keep && t.ok && (t.gen !== this.gen || t.z !== this.z)) { t.img.style.zIndex = 0; continue; }
+      this.drop(key, t);
+    }
+  }
+
+  place(map, t) {
+    // the tile's corners on screen, rounded so that neighbours share their edges
+    const n = 2 ** t.z, lon = x => x / n * 360 - 180;
+    const lat = y => Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n))) / D2R;
+    const p0 = map.project([lon(t.x), lat(t.y)]), p1 = map.project([lon(t.x + 1), lat(t.y + 1)]);
+    const l = Math.round(p0.x), tp = Math.round(p0.y);
+    const s = t.img.style;
+    s.left = `${l}px`; s.top = `${tp}px`;
+    s.width = `${Math.round(p1.x) - l}px`; s.height = `${Math.round(p1.y) - tp}px`;
+    if (this.want.has(`${t.gen}/${t.z}/${t.x}/${t.y}`)) s.zIndex = 1;
+  }
+}
+
+const xyzTile = template => (z, x, y) => template.replace("{z}", z).replace("{x}", x).replace("{y}", y);
+const BASE_TILES = {
+  map: [xyzTile("https://tile.openstreetmap.org/{z}/{x}/{y}.png")],
+  satellite: [xyzTile(`${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`),
+              xyzTile(`${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`)],
+};
+
+function wmsTile(layer, time) {
+  // one 256px GetMap per Web Mercator tile, as Leaflet's WMS layer asks for them
+  return (z, x, y) => {
+    const size = WORLD_M / 2 ** z, x0 = -WORLD_M / 2 + x * size, y1 = WORLD_M / 2 - y * size;
+    return `${WMS}?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&LAYERS=${encodeURIComponent(layer)}&STYLES=` +
+      "&FORMAT=image%2Fpng&TRANSPARENT=true&SRS=EPSG%3A3857&WIDTH=256&HEIGHT=256" +
+      `&BBOX=${x0},${y1 - size},${x0 + size},${y1}` + (time ? `&TIME=${encodeURIComponent(time)}` : "");
+  };
+}
+
+const live = {
+  on: false,
+  wrap: null,      // the <img> layers' container, under the MapLibre canvas
+  base: [],        // the basemap as <img> tiles
+  wms: null,       // the forecast
+  swapped: false,  // the canvas has handed the basemap over to the <img> tiles
+  swapTimer: 0,
+  baseName: null,  // the basemap the <img> tiles show
+  paused: false,   // a jump to another fire, before its forecast is picked
+};
+
+function liveBasemap() {
+  for (const t of live.base) t.remove();
+  // the canvas shows the basemap until these tiles are in, then hands it over
+  live.baseName = view.base;
+  live.base = BASE_TILES[view.base].map(url => new DomTiles(url, { maxZoom: 19,
+    onStatus: () => { if (live.on && !live.swapped) syncLive(); } }));
+  live.wrap.prepend(...live.base.map(t => t.el));
+  if (live.swapped) { canvasBasemap(true); live.swapped = false; }
+  syncLive();
+}
+
+function liveOn(url, onStatus) {
+  if (!live.wrap) {
+    live.wrap = document.createElement("div");
+    live.wrap.className = "dom-layers";
+    map.getContainer().prepend(live.wrap);   // before the canvas: under it
+  }
+  if (live.wms) live.wms.setUrl(url);
+  else live.wrap.appendChild((live.wms = new DomTiles(url)).el);
+  live.wms.onStatus = onStatus;
+  live.wms.el.style.opacity = forecastOpacity();
+  if (!live.on) {
+    live.on = true;
+    live.wrap.hidden = false;
+    liveBasemap();
+  } else syncLive();
+}
+
+function liveOff() {
+  if (!live.on) return;
+  live.on = false;
+  clearTimeout(live.swapTimer);
+  live.swapTimer = 0;
+  live.swapped = false;
+  canvasBasemap(true);
+  for (const t of live.base) t.remove();
+  live.base = [];
+  if (live.wms) { live.wms.remove(); live.wms = null; }
+  live.wrap.hidden = true;
+}
+
+function canvasBasemap(shown) {
+  // the canvas's own basemap fades out while the <img> tiles stand in for it; its
+  // sources stay in use, so the attribution keeps crediting them
+  for (const id of ["osm", "imagery", "places"]) map.setPaintProperty(id, "raster-opacity", shown ? 1 : 0);
+  map.setPaintProperty("bg", "background-opacity", shown ? 1 : 0);
+}
+
+const isFlat = () => map.getPitch() < 0.01 && Math.abs(map.getBearing()) < 0.01;
+
+function syncLive() {
+  if (!live.on || live.paused) return;
+  // placed tiles are only right on a flat, north-up map (they hide while 3D eases out)
+  const flat = isFlat();
+  live.wrap.style.visibility = flat ? "" : "hidden";
+  if (!flat) {
+    if (live.swapped) { canvasBasemap(true); live.swapped = false; }
+    return;
+  }
+  for (const t of [...live.base, live.wms]) t.update(map);
+  if (live.swapped) return;
+  // hand the basemap over once its tiles are in (or soon regardless), so it never blinks
+  const swap = () => { live.swapped = true; canvasBasemap(false); };
+  if (live.base.every(t => t.ready())) { clearTimeout(live.swapTimer); live.swapTimer = 0; swap(); }
+  else if (!live.swapTimer) {
+    live.swapTimer = setTimeout(() => {
+      live.swapTimer = 0;
+      if (live.on && !live.swapped && isFlat()) swap();
+    }, 1500);
+  }
+}
+for (const ev of ["move", "moveend", "resize"]) map.on(ev, syncLive);
 
 // Canvas layers (the forecast and the burn scar). A paused canvas source re-reads
 // its canvas only when told to, and 3D terrain keeps what it drapes cached until the
@@ -565,6 +870,11 @@ const state = {
   hotSpan: null,       // {start, end, contained} the playhead slider spans
   lanePreview: null,   // {kind, item} while a perimeter/run lane is being dragged
   toaMaxH: 336,        // time-of-arrival threshold slider (show arrival <= this)
+  liveRun: false,       // the selected run is still on Pyrecast (see refreshWms)
+  liveForced: false,    // ...and its live tiles are on the map, which keeps it flat
+  liveArchived: false,  // ...and its archived copy is in, for 3D
+  liveKey: null,        // "slug/run" of a selected newest run
+  live3d: null,         // the newest run ("slug/run") the viewer asked to see in 3D
   granIdx: 12,         // hourly-mosaic forecast-hour slider
   georasterCache: new Map(),
   seq: 0,
@@ -635,6 +945,7 @@ async function init() {
     const o = forecastOpacity();
     if (map.getLayer("fc")) map.setPaintProperty("fc", "raster-opacity", o);
     map.setPaintProperty("iso", "line-opacity", o);
+    if (live.wms) live.wms.el.style.opacity = o;
   });
   const slider = document.getElementById("timeslider");
   slider.addEventListener("input", () => {           // live label while dragging
@@ -651,6 +962,7 @@ async function init() {
       scheduleToaPaint();
     }
   });
+  slider.addEventListener("change", setLiveHour);    // live tiles reload on release
   document.getElementById("chkHot").addEventListener("change", refreshHotspots);
   layoutHotTimeline(defaultHotSpan());
   let hotPending = false;   // setTimeout, not rAF — rAF pauses in hidden tabs
@@ -827,6 +1139,7 @@ function deselect() {
   state.seq++;              // drops in-flight forecast, perimeter and skill responses
   setFireParam(null);
   document.getElementById("selRun").innerHTML = "";
+  map.jumpTo(OVERVIEW_VIEW);   // before refreshWms, whose 3D ease a jump would cut short
   refreshWms();             // with no run this only removes the forecast layer
   clearPerims();
   refreshHotspots();        // bumps hotSeq, aborts hotspot/history requests, drops hotspots + burn scar
@@ -835,7 +1148,6 @@ function deselect() {
   showSelectedName();
   renderList();
   setMode();
-  map.jumpTo(OVERVIEW_VIEW);
 }
 
 async function select(slug) {
@@ -848,7 +1160,13 @@ async function select(slug) {
   setMode();
   renderList();
   showSelectedName();
-  if (f.centroid) map.jumpTo({ center: f.centroid, zoom: FIRE_ZOOM });
+  if (f.centroid) {
+    // the previous fire's live tiles don't need loading here: refreshWms picks anew
+    live.paused = true;
+    map.jumpTo({ center: f.centroid, zoom: FIRE_ZOOM });
+    live.paused = false;
+  }
+  if (state.live3d && !state.live3d.startsWith(`${slug}/`)) state.live3d = null;
 
   const selRun = document.getElementById("selRun");
   // runs that expired upstream before any file was archived can't draw anything;
@@ -873,10 +1191,10 @@ function fmtRun(ts) {
 
 // ---------------------------------------------------------------- forecast layer
 
-// WebGL can only draw images whose server shares them across origins, and Pyrecast's
-// geoserver refuses every origin but its own. So, as Incibrief does, each forecast is
-// drawn here from our archive copy of the run: the time-of-arrival tif, the hourly
-// variables' tars and the isochrones' shapefile tar, decoded in the browser.
+// The newest runs, still on Pyrecast, show its live tiles (flat; see "live tiles"
+// above). Everything else, and those runs in 3D, is drawn as Incibrief draws it: from
+// our archive copy of the run (the time-of-arrival tif, the hourly variables' tars and
+// the isochrones' shapefile tar), decoded in the browser onto a canvas on the map.
 
 // these variables are hourly snapshots (one granule per forecast hour, run time ->
 // +168h), archived as one tar of tifs per run, percentile and variable
@@ -906,6 +1224,17 @@ const forecastOpacity = () => +document.getElementById("opacity").value / 100;
 const varLabel = v => document.querySelector(`#selVar option[value="${v}"]`).textContent;
 const byNumber = (a, b) => a - b;
 
+function isArchived(f, run, variable, pct) {
+  if (variable === "time-of-arrival") return f.pcts[run].has(pct);
+  const v = (f.vars[run] || {})[pct];
+  return !!(v && v[variable] && v[variable].ok);
+}
+
+// live layers whose tiles failed (Pyrecast's staging window, or the run aged off
+// since the last scrape): the archive stands in for them for a few minutes
+const deadLive = new Map();   // layer -> when its tiles failed
+const isDead = layer => deadLive.has(layer) && Date.now() - deadLive.get(layer) < 3 * 60e3;
+
 function refreshWms() {
   const token = ++state.wmsSeq;
   const f = state.fires.find(x => x.slug === state.sel);
@@ -913,16 +1242,29 @@ function refreshWms() {
   const variable = document.getElementById("selVar").value;
   const pct = document.getElementById("selPct").value;
   const note = document.getElementById("wmsnote");
-  renderHotMarks();   // the forecast-run marker follows the selected run and layer
-  renderSkill();
+  // the newest runs (still on Pyrecast) default to its live tiles, which are flat;
+  // 3D draws the run's archived copy instead, once there is one
+  const liveRun = !!f && !!run && f.live[run] === true;
+  const layer = liveRun && variable ? `fire-spread-forecast_${f.slug}_${run}:elmfire_landfire_${pct}_${variable}` : null;
+  state.liveRun = liveRun;
+  state.liveKey = liveRun ? `${f.slug}/${run}` : null;
+  state.liveArchived = !!layer && isArchived(f, run, variable, pct);
+  // 3D on a newest run is that run's own choice (see the 3D button)
+  state.liveForced = !!layer && !isDead(layer) && !(state.live3d === state.liveKey && state.liveArchived);
+  if (!state.liveForced) liveOff();
+  apply3d(view.is3d !== null);   // the first look at a fire is instant
   dropCanvas("fc");
   map.getSource("iso").setData(EMPTY);
   state.fc = state.toaGrid = null;
+  document.getElementById("fcLive").hidden = !state.liveForced;
   note.textContent = "";
   note.className = "note";
   configureTimeSlider(variable);
+  renderHotMarks();   // the forecast-run marker follows the selected run and layer
+  renderSkill();
   if (!f || !run || !variable) return;
-  if (variable === "time-of-arrival") renderToa(f, run, pct, note, token);
+  if (state.liveForced) renderLive(f, run, variable, pct, layer, note);
+  else if (variable === "time-of-arrival") renderToa(f, run, pct, note, token);
   else if (variable === "isochrones") renderIsochrones(f, run, pct, note, token);
   else renderProduct(f, run, variable, pct, note, token);
 }
@@ -934,7 +1276,10 @@ function missingNote(f, run, pct, what, have) {
     return `the ${pct}th percentile ${what} isn't archived for this run — try the ` +
       have.map(p => `${p}th`).join(" or ");
   }
-  return f.live[run] !== false
+  // a live run only gets here when its live tiles failed
+  return f.live[run] === true
+    ? `Pyrecast's live tiles for this run aren't loading and its ${what} isn't archived yet — try again in a few minutes`
+    : f.live[run] !== false
     ? `this run's ${what} isn't archived yet — forecasts are archived within about an hour of appearing on Pyrecast`
     : `no ${what} was archived for this run before Pyrecast removed it — pick another run`;
 }
@@ -950,7 +1295,8 @@ function configureTimeSlider(variable) {
     row.title = "this variable is an hourly snapshot — slide through the forecast";
     const run = document.getElementById("selRun").value;
     if (run) labelForecastHour(run);
-  } else if (variable === "time-of-arrival") {
+  } else if (variable === "time-of-arrival" && !state.liveForced) {
+    // (live tiles come as images, so there are no hours to filter)
     row.hidden = false;
     s.min = 1; s.max = 336; s.value = state.toaMaxH;
     prefix.textContent = "show arrival within:";
@@ -958,6 +1304,41 @@ function configureTimeSlider(variable) {
   } else {
     row.hidden = true;
   }
+}
+
+const liveTime = run => forecastTime(run, state.granIdx).toISOString().replace(".000", "");
+
+function renderLive(f, run, variable, pct, layer, note) {
+  const fc = state.fc = { kind: "live", layer, run, variable, toaMax: null };
+  liveOn(wmsTile(layer, TIMED_VARS.has(variable) ? liveTime(run) : null), (loaded, failed) => {
+    // nothing comes back (Pyrecast refuses for a while after a run lands, or it has
+    // dropped the run): fall back to the archive
+    if (state.fc !== fc || loaded || failed < 4) return;
+    deadLive.set(layer, Date.now());
+    refreshWms();
+  });
+  note.innerHTML = styleLegendHtml(variable);
+  if (variable === "time-of-arrival" && f.pcts[run].has(pct)) {
+    // the timeline's arrival bar runs to the forecast's last arrival, read off the archived tif
+    loadGeoraster(`forecast_archive/${f.slug}/${run}/${pct}.tif`).then(geo => {
+      if (state.fc !== fc || !geo) return;
+      fc.toaMax = geo.maxs[0];
+      renderHotMarks();
+    });
+  }
+}
+
+let liveHourTimer = 0;
+function setLiveHour() {
+  // a live hourly variable reloads its tiles for the slider's hour, once it rests
+  // (held arrow keys fire "change" on every step)
+  clearTimeout(liveHourTimer);
+  liveHourTimer = setTimeout(() => {
+    const fc = state.fc;
+    if (!fc || fc.kind !== "live" || !TIMED_VARS.has(fc.variable) || !live.wms) return;
+    live.wms.setUrl(wmsTile(fc.layer, liveTime(fc.run)));
+    syncLive();
+  }, 250);
 }
 
 // ------------------------------------------------- archived raster rendering
@@ -1148,47 +1529,78 @@ async function renderToa(f, run, pct, note, token) {
   note.innerHTML = toaLegendHtml(state.toaMaxH);
 }
 
-// hourly variables, colored as Incibrief colors them, by the tif's byte value (nodata 0)
-const PRODUCTS = {
-  "spread-rate": { unit: "ch/hr", stops: [[1, "#ffdc50"], [10, "#ff9628"], [25, "#e63c32"], [50, "#aa2882"], [100, "#6e1450"]] },
-  "flame-length": { unit: "ft", stops: [[1, "#ffdc50"], [4, "#ff9628"], [8, "#e63c32"], [11, "#aa2882"], [25, "#6e1450"]] },
-  "hours-since-burned": { unit: "h", stops: [[1, "#d4572e"], [24, "#c05de1"], [96, "#6e4bd0"], [168, "#3f2d7d"]] },
-  "crown-fire": { stops: [[1, "#ffdc50"], [2, "#ff9628"], [3, "#e63c32"]],
-                  labels: ["surface", "passive crown", "active crown"] },
+// Pyrecast's own styles, from its GetLegendGraphic JSON (the same for every run and
+// percentile): [value, color, opacity]. A "ramp" blends color and opacity between
+// entries and holds the end ones past them; "values" colors exact values only. The
+// live tiles come styled this way, and the archived hourly variables are drawn with
+// the same styles so a run looks alike either way. Ticks label the legend.
+const PYRECAST_STYLES = {
+  "time-of-arrival": { title: "hours to arrival", type: "ramp", entries: [[0, "#000000", 0],
+    [4, "#2C83B9"], [8, "#4595B6"], [12, "#5EA7B0"], [16, "#77B9AD"], [20, "#92CBA8"], [24, "#ACDDA5"],
+    [28, "#BCE4A8"], [32, "#CDEBAF"], [36, "#DDF1B4"], [40, "#EEF8BB"], [44, "#FFFFBF"], [48, "#FEEFAC"],
+    [52, "#FDDF99"], [56, "#FECE86"], [60, "#FDBD73"], [64, "#FDAE61"], [68, "#F49052"], [72, "#EF7246"]],
+    ticks: { 4: "4", 24: "24", 48: "48", 72: "72+" } },
+  "spread-rate": { title: "spread rate (ft/min)", type: "ramp", entries: [[0, "#FFFFFF", 0],
+    [1e-4, "#009900"], [10, "#33AA00"], [20, "#99AA00"], [50, "#DD9900"], [75, "#DD7700"],
+    [100, "#DD5500"], [125, "#DD0000"], [150, "#AA0000"]],
+    ticks: { 1e-4: "<1", 10: "10", 20: "20", 50: "50", 75: "75", 100: "100", 150: "150+" } },
+  "flame-length": { title: "flame length (ft)", type: "ramp", entries: [[0, "#000000", 0],
+    [1, "#009900"], [5, "#559900"], [10, "#999900"], [15, "#AA5500"], [20, "#AA0000"], [25, "#990000"]],
+    ticks: { 1: "1", 5: "5", 10: "10", 15: "15", 20: "20", 25: "25+" } },
+  "crown-fire": { title: "crown fire", type: "values", entries: [[255, "#000000", 0],
+    [0, "#DD9900"], [1, "#DD5500"], [2, "#AA0000"]],
+    ticks: { 0: "surface", 1: "passive", 2: "active" },
+    tips: { 0: "surface fire", 1: "passive crown fire", 2: "active crown fire" } },
+  "hours-since-burned": { title: "hours since burned", type: "ramp", discrete: true, entries: [[0, "#000000", 0],
+    [1, "#B10026"], [2, "#F03B20"], [3, "#FD8D3C"], [4, "#FECC5C"], [5, "#CCCCCC"],
+    [334, "#000000", 0.5], [400, "#0000FF", 0.5], [401, "#440044", 0.5]],
+    ticks: { 1: "1", 3: "3", 5: "5", 334: "5+", 400: "pre", 401: "start" },
+    tips: { 334: "burned more than 5 hours before the slider time", 400: "burned before the forecast started",
+            401: "burning when the forecast started" } },
 };
 const hexRgb = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16));
+const rgba = (c, a = 1) => `rgba(${hexRgb(c).join(",")},${a})`;
+const LUT_SIZE = 1024;   // covers every archived variable's values (hours since burned reach 401)
 
-function productLut(variable) {
-  // RGBA for each byte value: 0 is transparent; a ramp is linear between its stops and
-  // clamps past its ends, and a categorical variable colors only its exact values
-  const { stops, labels } = PRODUCTS[variable], lut = new Uint8ClampedArray(256 * 4);
-  const put = (v, rgb) => { lut.set(rgb, 4 * v); lut[4 * v + 3] = 255; };
-  const pts = stops.map(([v, c]) => [v, hexRgb(c)]);
-  if (labels) { for (const [v, rgb] of pts) put(v, rgb); return lut; }
-  for (let v = 1; v < 256; v++) {
-    const j = pts.findIndex(([sv]) => sv >= v);   // the first stop at or above v
-    if (j <= 0) { put(v, pts[j < 0 ? pts.length - 1 : 0][1]); continue; }
-    const [va, a] = pts[j - 1], [vb, b] = pts[j], t = (v - va) / (vb - va);
-    put(v, a.map((x, n) => Math.round(x + (b[n] - x) * t)));
+function styleLut(style) {
+  // RGBA for each integer value, as Pyrecast's geoserver colors it
+  const lut = new Uint8ClampedArray(LUT_SIZE * 4);
+  const es = style.entries.map(([q, c, a = 1]) => [q, hexRgb(c), 255 * a]).sort((x, y) => x[0] - y[0]);
+  const put = (v, rgb, a) => { lut.set(rgb, 4 * v); lut[4 * v + 3] = a; };
+  for (let v = 0; v < LUT_SIZE; v++) {
+    if (style.type === "values") {
+      const e = es.find(x => x[0] === v);
+      if (e) put(v, e[1], e[2]);
+      continue;
+    }
+    const j = es.findIndex(x => x[0] >= v);   // the first entry at or above v
+    if (j <= 0) { const e = es[j < 0 ? es.length - 1 : 0]; put(v, e[1], e[2]); continue; }
+    const [qa, a, aa] = es[j - 1], [qb, b, ab] = es[j], t = (v - qa) / (qb - qa);
+    put(v, a.map((x, k) => x + (b[k] - x) * t), aa + (ab - aa) * t);
   }
   return lut;
 }
 
-function productLegendHtml(variable) {
-  const { unit, stops, labels } = PRODUCTS[variable], n = stops.length;
-  const title = varLabel(variable) + (unit ? ` (${unit})` : "");
-  if (labels) {
-    return `<div class="toa-key" role="img" aria-label="${title}: ${labels.join(", ")}"><span>${title}</span>` +
-      `<span class="toa-bar">${stops.map(([, c]) => `<i style="background:${c};flex:1"></i>`).join("")}</span>` +
-      `<span class="toa-ticks">${labels.map((l, i) =>
-        `<span style="left:${(100 * (i + 0.5) / n).toFixed(2)}%">${l}</span>`).join("")}</span></div>`;
-  }
-  const at = i => (100 * i / (n - 1)).toFixed(2);
-  const ticks = stops.map(([v], i) => (i === 0 ? `<span style="left:0;transform:none">${v}</span>`
-    : i === n - 1 ? `<span class="last">${v}+</span>` : `<span style="left:${at(i)}%">${v}</span>`)).join("");
-  return `<div class="toa-key" role="img" aria-label="${title}: ${stops.map(s => s[0]).join(", ")}">` +
-    `<span>${title}</span><span class="toa-bar ramp" style="background:linear-gradient(to right, ` +
-    `${stops.map(([, c], i) => `${c} ${at(i)}%`).join(", ")})"></span><span class="toa-ticks">${ticks}</span></div>`;
+function styleLegendHtml(variable) {
+  // a one-line key in Pyrecast's colors; ramps blend, classes are blocks
+  if (variable === "isochrones") return '<i class="iso-key"></i>arrival-time contours (isochrones)';
+  const { title, type, discrete, entries, ticks, tips = {} } = PYRECAST_STYLES[variable];
+  const shown = entries.filter(([, , a = 1]) => a > 0), n = shown.length;
+  const blocks = type === "values" || discrete;
+  const at = i => (blocks ? (100 * (i + 0.5) / n) : (100 * i / (n - 1))).toFixed(2);
+  const bar = blocks
+    ? `<span class="toa-bar">${shown.map(([q, c, a = 1]) =>
+        `<i style="background:${rgba(c, a)};flex:1"${tips[q] ? ` title="${tips[q]}"` : ""}></i>`).join("")}</span>`
+    : `<span class="toa-bar ramp" style="background:linear-gradient(to right, ${shown.map(([, c, a = 1], i) =>
+        `${rgba(c, a)} ${at(i)}%`).join(", ")})"></span>`;
+  const tick = (q, i) => {
+    const pos = !blocks && i === 0 ? 'style="left:0;transform:none"' : !blocks && i === n - 1 ? 'class="last"'
+      : `style="left:${at(i)}%"`;
+    return `<span ${pos}>${ticks[q]}</span>`;
+  };
+  const labels = shown.map(([q], i) => (q in ticks ? tick(q, i) : "")).join("");
+  return `<div class="toa-key" role="img" aria-label="${title}: ${shown.filter(([q]) => q in ticks)
+    .map(([q]) => tips[q] || ticks[q]).join(", ")}"><span>${title}</span>${bar}<span class="toa-ticks">${labels}</span></div>`;
 }
 
 function untar(buf) {
@@ -1230,30 +1642,29 @@ function loadTar(key) {
 }
 
 function memberGeo(bundle, i) {
-  // one hour's tif, parsed and flattened to a byte per cell; the 8 most recent kept
+  // one hour's tif, parsed; the 8 most recent kept
   let p = bundle.decoded.get(i);
   if (p) { bundle.decoded.delete(i); bundle.decoded.set(i, p); return p; }
   const b = bundle.members[i].bytes;
-  p = parseGeoraster(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)).then(geo => {
-    const flat = new Uint8Array(geo.width * geo.height);
-    geo.values[0].forEach((row, r) => flat.set(row, r * geo.width));
-    return { geo, flat };
-  });
+  p = parseGeoraster(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
   bundle.decoded.set(i, p);
   p.catch(() => bundle.decoded.delete(i));
   if (bundle.decoded.size > 8) bundle.decoded.delete(bundle.decoded.keys().next().value);
   return p;
 }
 
-async function productGrid(f, run, pct, bundle) {
-  // a variable only ever lights cells inside the time-of-arrival footprint on the same
-  // run grid, so it borrows that canvas grid: this percentile's, else the highest one
-  // archived; with none, the variable gets a grid of its own over the whole tif
-  const { geo: first } = await memberGeo(bundle, 0);
-  const have = f.pcts[run];
-  for (const p of [pct, ...[...have].filter(p => p !== pct).sort((a, b) => b - a)]) {
-    if (!have.has(p)) continue;
-    const geo = await loadGeoraster(`forecast_archive/${f.slug}/${run}/${p}.tif`);
+async function productGrid(f, run, variable, pct, bundle) {
+  // hours since burned only ever grows, so its last hour covers every cell it lights
+  // (the area burned before the run included, which time of arrival leaves out)
+  if (variable === "hours-since-burned") {
+    return bundle.grid || (bundle.grid = mercGrid(await memberGeo(bundle, bundle.members.length - 1), v => v > 0));
+  }
+  // the others only light cells inside the same percentile's time-of-arrival footprint
+  // on the run grid, so they borrow its canvas grid; without it (another percentile's
+  // footprint differs), the variable gets a grid of its own over the whole tif
+  const first = await memberGeo(bundle, 0);
+  if (f.pcts[run].has(pct)) {
+    const geo = await loadGeoraster(`forecast_archive/${f.slug}/${run}/${pct}.tif`);
     if (geo && geo.width === first.width && geo.height === first.height &&
         geo.xmin === first.xmin && geo.ymax === first.ymax) return toaGrid(geo);
   }
@@ -1266,11 +1677,14 @@ async function paintProduct(fc) {
   let i = times.length - 1;
   while (i >= 0 && times[i] > t) i--;
   if (i === fc.shown) return false;
-  const m = i < 0 ? null : await memberGeo(fc.bundle, i);
+  const geo = i < 0 ? null : await memberGeo(fc.bundle, i);
   if (state.fc !== fc) return false;
-  const { idx, img, ctx } = fc.grid, d = img.data, lut = fc.lut, flat = m && m.flat;
+  const { idx, img, ctx, W } = fc.grid, d = img.data, lut = fc.lut, rows = geo && geo.values[0];
   for (let o = 0, q = 0; o < idx.length; o++, q += 4) {
-    const s = idx[o], l = s < 0 || !flat ? 0 : 4 * flat[s];
+    const s = idx[o];
+    if (s < 0 || !rows) { d[q + 3] = 0; continue; }
+    const r = (s / W) | 0, v = rows[r][s - r * W];
+    const l = 4 * (v > 0 ? Math.min(v | 0, LUT_SIZE - 1) : 0);
     d[q] = lut[l]; d[q + 1] = lut[l + 1]; d[q + 2] = lut[l + 2]; d[q + 3] = lut[l + 3];
   }
   ctx.putImageData(img, 0, 0);
@@ -1304,7 +1718,7 @@ async function renderProduct(f, run, variable, pct, note, token) {
     return;
   }
   let grid;
-  try { grid = await productGrid(f, run, pct, bundle); }
+  try { grid = await productGrid(f, run, variable, pct, bundle); }
   catch (e) { grid = null; }
   if (token !== state.wmsSeq) return;
   if (!grid) {
@@ -1312,8 +1726,8 @@ async function renderProduct(f, run, variable, pct, note, token) {
     note.className = "warn";
     return;
   }
-  const fc = state.fc = { kind: "product", grid, bundle, run, lut: productLut(variable), shown: undefined };
-  note.innerHTML = productLegendHtml(variable);
+  const fc = state.fc = { kind: "product", grid, bundle, run, lut: styleLut(PYRECAST_STYLES[variable]), shown: undefined };
+  note.innerHTML = styleLegendHtml(variable);
   try { await paintProduct(fc); } catch (e) { /* drawn blank; the slider retries */ }
   if (state.fc !== fc) return;
   showCanvas("fc", grid, "iso", forecastOpacity());
@@ -1362,7 +1776,7 @@ async function renderIsochrones(f, run, pct, note, token) {
                                  geometry: { type: "MultiLineString", coordinates: lines } });
   map.setPaintProperty("iso", "line-opacity", forecastOpacity());
   state.fc = { kind: "isochrones" };
-  note.innerHTML = '<i class="iso-key"></i>arrival-time contours (isochrones)';
+  note.innerHTML = styleLegendHtml("isochrones");
 }
 
 // ---------------------------------------------------------------- forecast metrics
@@ -1592,11 +2006,20 @@ function layoutHotTimeline(span) {
   el.value = el.max;
   document.getElementById("hotEndLabel").textContent =
     span.contained ? `contained ${fmtDay(span.end)}` : "now";
+  layoutTimelineAxis();
+  renderHotMarks();
+}
+
+function layoutTimelineAxis() {
+  // the ticks and dates under the playhead track, for the span and the track's width
+  const span = state.hotSpan, el = document.getElementById("hotTime");
+  if (!span) return;
+  const docked = document.body.classList.contains("tl-docked");
   // ticks on calendar boundaries (UTC midnights; Mondays for weekly steps),
-  // coarsening from 12h/24h until minor ticks stay at least 3.5px apart
+  // coarsening from 12h/24h until minor ticks stay at least 3.5px (docked: 5px) apart
   const ticks = document.getElementById("hotTicks");
   const [minorH, majorH] = [[12, 24], [24, 168], [168, 672]]
-    .find(([m]) => (ticks.clientWidth || 260) * m / +el.max >= 3.5) || [168, 672];
+    .find(([m]) => (ticks.clientWidth || 260) * m / +el.max >= (docked ? 5 : 3.5)) || [168, 672];
   const offset = h => (h >= 168 ? MONDAY0 : 0);
   const step = minorH * HOUR, frac = t => (t - span.start) / (el.max * HOUR);
   const majors = [];
@@ -1608,14 +2031,15 @@ function layoutHotTimeline(span) {
     tick.style.left = `${100 * frac(t)}%`;
     ticks.appendChild(tick);
   }
-  // M/D under every major tick, or every 2nd, 3rd... so the slanted labels stay 16px apart
+  // M/D under every major tick, or every 2nd, 3rd... so the labels don't touch: slanted
+  // ones (in the panel) 16px apart, level ones (docked) 40px
   const width = ticks.clientWidth || 260;
-  const every = Math.max(1, Math.ceil(16 / (width * majorH * HOUR / (el.max * HOUR))));
+  const every = Math.max(1, Math.ceil((docked ? 40 : 16) / (width * majorH * HOUR / (el.max * HOUR))));
   document.getElementById("hotDates").innerHTML = majors.filter((t, i) => i % every === 0).map(t => {
     const d = new Date(t);
-    return `<span style="right:${(100 * (1 - frac(t))).toFixed(3)}%">${d.getUTCMonth() + 1}/${d.getUTCDate()}</span>`;
+    const at = docked ? `left:${(100 * frac(t)).toFixed(3)}%` : `right:${(100 * (1 - frac(t))).toFixed(3)}%`;
+    return `<span style="${at}">${d.getUTCMonth() + 1}/${d.getUTCDate()}</span>`;
   }).join("");
-  renderHotMarks();
 }
 
 const RUN_PIN = "#2166ac";
@@ -1686,7 +2110,22 @@ function renderHotMarks() {
 function renderArrivalBar(bar, run) {
   // each time-of-arrival band at run time + its hours, in the map's colors, up to the
   // "show arrival within" setting or the forecast's latest arrival, whichever is first
-  if (document.getElementById("selVar").value !== "time-of-arrival" || !state.toaGrid) return;
+  if (document.getElementById("selVar").value !== "time-of-arrival") return;
+  const fc = state.fc;
+  if (fc && fc.kind === "live" && fc.toaMax) {
+    // live tiles: Pyrecast's ramp, which holds its last color to the last arrival; the
+    // bar keeps its true length and #fcBar clips what runs past the track's end
+    const total = +document.getElementById("hotTime").max * HOUR, span = fc.toaMax;
+    const u0 = (run.t - state.hotSpan.start) / total, u1 = (run.t + span * HOUR - state.hotSpan.start) / total;
+    if (u1 <= u0) return;
+    const stops = PYRECAST_STYLES["time-of-arrival"].entries.filter(([, , a = 1]) => a > 0)
+      .map(([q, c]) => `${c} ${(100 * q / span).toFixed(2)}%`).join(", ");
+    bar.innerHTML = `<i style="left:${(100 * u0).toFixed(3)}%;width:${(100 * (u1 - u0)).toFixed(3)}%;` +
+      `background:linear-gradient(to right, ${stops})"></i>`;
+    bar.title = `forecast arrival from ${fmtShort(run.t)}, up to +${Math.round(span)}h (Pyrecast's colors)`;
+    return;
+  }
+  if (!state.toaGrid) return;
   const until = Math.min(state.toaMaxH, state.toaGrid.maxHours);
   const edges = Palette.TOA_EDGES, colors = Palette.toaColors();
   let html = "", h0 = 0;
@@ -1733,7 +2172,7 @@ function wireLanes() {
   for (const lane of document.querySelectorAll(".lane")) {
     lane.addEventListener("pointerdown", ev => startLaneDrag(lane, ev));
   }
-  window.addEventListener("resize", renderHotMarks);   // guides are placed in px
+  window.addEventListener("resize", () => { layoutTimelineAxis(); renderHotMarks(); });   // guides are placed in px
 }
 
 function startLaneDrag(lane, ev) {
@@ -2033,10 +2472,47 @@ function applyPalette() {
   if (state.hotSpan) renderHotspots();
 }
 
+// ---------------------------------------------------------------- timeline placement
+
+// the playhead and the run and perimeter lanes sit in the side panel (the default), or
+// dock along the bottom of the map with more room and larger type (Settings → Timeline)
+const TL_PLACES = { panel: "In the side panel", map: "Along the bottom of the map" };
+const tlSetting = document.createElement("div");
+tlSetting.className = "palette-choices";
+tlSetting.innerHTML = Object.entries(TL_PLACES).map(([value, label]) =>
+  `<label class="palette-check"><input type="radio" name="tlPlace" value="${value}">${label}</label>`).join("");
+tlSetting.addEventListener("change", ev => placeTimeline(ev.target.value));
+Palette.addSection("Timeline", tlSetting);
+
+function placeTimeline(where) {
+  const docked = where === "map";
+  document.getElementById(docked ? "tlDock" : "tlSlot").append(document.getElementById("tlBlock"));
+  document.body.classList.toggle("tl-docked", docked);
+  for (const r of tlSetting.querySelectorAll("input")) r.checked = r.value === where;
+  remember("cornea-timeline", docked ? "map" : "panel");
+  layoutTimelineAxis();   // tick density and date labels follow the new width
+  renderHotMarks();
+  fitDock();
+}
+
+let dockPad = 0;
+function fitDock() {
+  // keep the map's centre and its bottom controls clear of the dock; a padding change
+  // stops camera animations, so it waits for one in progress (e.g. 3D easing out)
+  const dock = document.getElementById("tlDock");
+  const h = document.body.classList.contains("tl-docked") ? dock.offsetHeight : 0;
+  document.body.style.setProperty("--dock-h", `${h}px`);
+  if (h === dockPad) return;
+  if (map.isMoving()) { map.once("moveend", fitDock); return; }
+  dockPad = h;
+  map.setPadding({ top: 0, right: 0, bottom: h, left: 0 });
+}
+new ResizeObserver(fitDock).observe(document.getElementById("tlDock"));
+
 document.querySelector(".brandrow").append(Palette.gearButton());
 Palette.onChange(applyPalette);
 renderHotLegend();
-renderHotMarks();
+placeTimeline(remembered("cornea-timeline", "panel"));
 init();
 </script>
 </body>

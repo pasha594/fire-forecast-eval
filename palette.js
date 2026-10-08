@@ -213,6 +213,13 @@
   const grid = rows => el("div", { class: "palette-grid" }, ...rows.map(r => r.row));
   const section = (title, ...kids) => el("section", { class: "palette-sec" }, el("h3", {}, title), ...kids);
 
+  // a page's own settings (e.g. the map's layout), shown after the colors
+  const extraSections = [];
+  function addSection(title, node) {
+    extraSections.push(section(title, node));
+    if (panel) panel.insertBefore(extraSections[extraSections.length - 1], panel.querySelector(".palette-foot"));
+  }
+
   function build() {
     const toaLabels = TOA_EDGES.map((e, i) => e === Infinity ? `>${TOA_EDGES[i - 1]}h` : `${LE}${e}h`);
     const toa = toaLabels.map((lab, i) => colorRow(lab, "Time of arrival", "toa", i));
@@ -224,7 +231,7 @@
     const toaRev = reverseBox("toaReversed"), hotRev = reverseBox("hotspotReversed");
 
     const close = el("button", { type: "button", class: "palette-close",
-                                 "aria-label": "Close color settings", title: "Close" }, "×");
+                                 "aria-label": "Close settings", title: "Close" }, "×");
     close.addEventListener("click", () => closeSettings(true));
     const resetBtn = el("button", { type: "button", class: "palette-btn" }, "Reset to defaults");
     resetBtn.addEventListener("click", reset);
@@ -244,16 +251,17 @@
     };
 
     panel = el("div", { class: "palette-panel", role: "dialog", "aria-labelledby": "palette-title" },
-      el("div", { class: "palette-head" }, el("h2", { id: "palette-title" }, "Color settings"), close),
+      el("div", { class: "palette-head" }, el("h2", { id: "palette-title" }, "Settings"), close),
       section("Time of arrival", ui.toaStrip, grid(toa), toaRev.row),
       section("Hotspots (detection age)", ui.hotBar,
         el("div", { class: "palette-ends", "aria-hidden": "true" }, el("span", {}, "7d"), el("span", {}, "0h")),
         grid(hot), hotRev.row, grid([scar])),
       section("Boundaries", grid([perimeter, contained])),
+      ...extraSections,
       el("div", { class: "palette-foot" },
         el("div", { class: "palette-actions" }, resetBtn, copyBtn), copyBox,
         el("p", { class: "palette-note" },
-          "Saved in this browser only — copy settings to share a palette.")));
+          "Saved in this browser only — copy settings to share the colors.")));
     panel.hidden = true;
     document.body.append(panel);
 
@@ -319,7 +327,7 @@
 
   function gearButton() {
     const b = el("button", { type: "button", class: "palette-gear",
-                             "aria-label": "Color settings", title: "Color settings" });
+                             "aria-label": "Settings", title: "Settings" });
     b.innerHTML = GEAR_SVG;
     b.addEventListener("click", () => openSettings());
     return b;
@@ -329,6 +337,6 @@
     TOA_EDGES, HOT_STOPS_H, DEFAULTS,
     get, set, reset, onChange,
     toaColors, toaColor, hotspotColor, hotspotGradient,
-    openSettings, gearButton,
+    openSettings, gearButton, addSection,
   };
 })();

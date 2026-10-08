@@ -19,7 +19,7 @@ which retains dated perimeter snapshots per fire (~2–3/day for active fires).
 | `.github/workflows/analyze.yml` | cron 2x daily: syncs ToA+perimeters on the runner, recomputes and publishes `metrics.csv` + per-fire `skill/*.json` to the bucket — no laptop needed; `report.html` falls back to the bucket copy |
 | `analyze.py` | local: syncs the archive, computes growth-only P/R → `data/metrics.csv` |
 | `report.html` | static Plotly report over `data/metrics.csv` |
-| `map.html` | interactive MapLibre map, flat or over 3D terrain: pyrecast forecast layers decoded in the browser from the archive (all variables/percentiles; pyrecast's geoserver refuses cross-origin WebGL reads) over Cornea perimeter history + hotspots |
+| `map.html` | interactive MapLibre map, flat or over 3D terrain, over Cornea perimeter history + hotspots: runs still on pyrecast show its live WMS tiles (as `<img>` tiles under the map canvas: its geoserver refuses the cross-origin reads WebGL needs, so these are 2D only); every other run, and those in 3D, is decoded in the browser from the archive (all variables/percentiles, in pyrecast's own colors) |
 | `overrides.json` | manual slug→cornea_id match overrides (string forces, null skips) |
 
 Archive layout (bucket or local `raw/`):
