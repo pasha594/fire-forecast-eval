@@ -5,8 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="favicon.png">
 <title>Fire forecast map</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.css">
 <script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script>
 <script src="https://unpkg.com/proj4@2.11.0/dist/proj4.js"></script>
 <script src="palette.js"></script>
@@ -25,7 +24,7 @@
     width: 320px; min-width: 320px; overflow-y: auto; padding: 10px 14px;
     background: var(--surface); border-right: 1px solid var(--grid);
   }
-  #map { flex: 1; }
+  #map { flex: 1; position: relative; }
   /* no fire selected: the overview replaces the per-fire sections */
   #side.nosel .fire-only, #side:not(.nosel) #overview { display: none; }
   .brandrow { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
@@ -98,12 +97,13 @@
   .warn { color: var(--warn); font-size: 11.5px; margin: 3px 0; }
   /* as tall as the arrival legend, so loading/warning lines don't shift the lanes below */
   #wmsnote { min-height: 32px; }
-  #legendimg { max-width: 100%; margin-top: 6px; background: #fff;
-               border: 1px solid var(--grid); border-radius: 4px; }
   .toa-key { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; align-items: center;
              margin-top: 3px; }
   .toa-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; }
   .toa-bar i.dim { opacity: .25; }
+  .toa-bar.ramp { display: block; }
+  .iso-key { display: inline-block; width: 18px; height: 0; margin: 0 5px 3px 0; vertical-align: middle;
+             border-top: 1.5px solid var(--ink); }
   .toa-ticks { grid-column: 2; position: relative; height: 13px; font-size: 10px; line-height: 13px; }
   .toa-ticks span { position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap; }
   .toa-ticks span.last { right: 0; transform: none; }
@@ -164,11 +164,20 @@
   .lane-cap { height: 12px; margin: 2px 3px 0; color: var(--ink-2); font-size: 10px; line-height: 12px;
               white-space: nowrap; }
   .lane-cap b { color: var(--c); font-weight: 700; }
+  .view-toggles.maplibregl-ctrl { display: flex; gap: 6px; }
   .base-toggle { display: flex; overflow: hidden; border-radius: 6px; box-shadow: 0 1px 4px rgba(59, 29, 41, 0.3); }
   .base-toggle button { padding: 6px 10px; border: 0; background: var(--surface); color: var(--ink-2);
                         font: 600 12px/1 var(--font-sans); cursor: pointer; }
   .base-toggle button + button { border-left: 1px solid var(--grid); }
   .base-toggle button.on { background: var(--accent); color: var(--on-accent); }
+  /* over MapLibre's own control-button hover and press shading */
+  .view-toggles .base-toggle button:not(.on):hover { background: var(--hover); color: var(--ink); }
+  .view-toggles .base-toggle button.on:hover, .view-toggles .base-toggle button.on:active { background: var(--accent); }
+  /* hover labels on the map; they never take the pointer from what's under them */
+  .map-tip { pointer-events: none; }
+  .map-tip .maplibregl-popup-content { padding: 4px 8px; border-radius: 4px; color: var(--ink);
+                                       font: 12px/1.35 var(--font-sans); box-shadow: 0 1px 4px rgba(59, 29, 41, 0.3); }
+  .maplibregl-ctrl-attrib { font: 11px/1.4 var(--font-sans); }
   .tl-guides { position: absolute; inset: 0; pointer-events: none; }
   .tl-guides i { position: absolute; width: 1px; margin-left: -0.5px; background: var(--c); opacity: .6; }
   .hot-legend { display: flex; align-items: center; gap: 8px; margin: 1px 0 2px;
@@ -231,7 +240,7 @@
     <a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><img src="cornea-logo-on-light.webp" alt="Cornea"></a>
   </div>
   <h1>Fire forecast map</h1>
-  <p class="sub">Pyrecast ELMFIRE layers (live WMS) over Cornea perimeters &amp; hotspots ·
+  <p class="sub">Pyrecast ELMFIRE layers over Cornea perimeters &amp; hotspots ·
   <a href="report.html">metrics report</a></p>
 
   <button type="button" id="allFires" class="linkbtn fire-only">&larr; All fires</button>
@@ -280,7 +289,6 @@
     </div>
     <label class="row">opacity <input type="range" id="opacity" min="10" max="100" value="70"></label>
     <div class="note" id="wmsnote"></div>
-    <img id="legendimg" alt="" hidden>
   </div>
 
   <div class="sec fire-only" id="skillSec">
@@ -336,75 +344,222 @@
 </div>
 <div id="map"></div>
 
-<script>
-"use strict";
+<script type="module">
+import * as maplibregl from "https://unpkg.com/maplibre-gl@6.11.2/dist/maplibre-gl.mjs";
+
 const CORNEA = "https://fire-api-prod.web.app";
-const WMS = "https://geoserver-usw1.pyrecast.org/geoserver02/wms";
 const BUCKET = "https://f005.backblazeb2.com/file/fire-forecast-archive";
 
-const OVERVIEW_VIEW = [[41, -114], 5];
+const OVERVIEW_VIEW = { center: [-114, 41], zoom: 4 };
+const FIRE_ZOOM = 10;
 if (new URLSearchParams(location.search).get("fire")) document.getElementById("side").classList.remove("nosel");
 
-const map = L.map("map").setView(...OVERVIEW_VIEW);
+// ---------------------------------------------------------------- the map
+
+// MapLibre (WebGL) so the map can tilt over 3D terrain. Every data layer is drawn
+// here: forecasts are decoded from our archive copy of each run onto canvases
+// pinned to the map, and perimeters and hotspots are GeoJSON layers
 const DATA_CREDIT = "forecasts: Pyregence · perimeters: NIFC · hotspots: NASA VIIRS";
 const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services";
-const BASEMAPS = {
-  map: L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-    { maxZoom: 16, attribution: `OSM · ${DATA_CREDIT}` }),
-  // imagery plus Esri's place names and boundaries, so the view stays readable
-  satellite: L.layerGroup([
-    L.tileLayer(`${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`,
-      { maxZoom: 16, attribution: `Imagery © Esri, Maxar, Earthstar Geographics · ${DATA_CREDIT}` }),
-    L.tileLayer(`${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`, { maxZoom: 16 }),
-  ]),
-};
+const EMPTY = { type: "FeatureCollection", features: [] };
+const tiles = (url, extra) => ({ type: "raster", tiles: [url], tileSize: 256, maxzoom: 18, ...extra });
+// keyless Mapzen/AWS Open Data elevation tiles; terrain and hillshade each get their
+// own source, as MapLibre recommends
+const dem = () => ({ type: "raster-dem", tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
+                     encoding: "terrarium", tileSize: 256, maxzoom: 15, attribution: "Terrain: Mapzen, AWS Open Data" });
+const OLD_PERIM = "#52514e";
 
-function setBasemap(name) {
-  for (const [key, layer] of Object.entries(BASEMAPS)) {
-    if (key === name) { if (!map.hasLayer(layer)) layer.addTo(map); }
-    else if (map.hasLayer(layer)) map.removeLayer(layer);
-  }
-  for (const b of document.querySelectorAll(".base-toggle button")) b.classList.toggle("on", b.dataset.base === name);
-  try { localStorage.setItem("cornea-basemap", name); } catch (e) { /* the choice just isn't remembered */ }
-}
-
-const BaseToggle = L.Control.extend({
-  options: { position: "topright" },
-  onAdd() {
-    const el = L.DomUtil.create("div", "base-toggle");
-    el.innerHTML = '<button type="button" data-base="map">Map</button>' +
-                   '<button type="button" data-base="satellite">Satellite</button>';
-    L.DomEvent.disableClickPropagation(el);
-    el.addEventListener("click", ev => { const b = ev.target.closest("button"); if (b) setBasemap(b.dataset.base); });
-    return el;
+const map = new maplibregl.Map({
+  container: "map",
+  ...OVERVIEW_VIEW,
+  maxZoom: 16,
+  attributionControl: { compact: true, customAttribution: DATA_CREDIT },
+  style: {
+    version: 8,
+    sources: {
+      osm: tiles("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxzoom: 19, attribution: "© OpenStreetMap contributors" }),
+      imagery: tiles(`${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`, { attribution: "Imagery © Esri, Maxar, Earthstar Geographics" }),
+      // Esri's place names and boundaries over the imagery, so the view stays readable
+      places: tiles(`${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`),
+      dem: dem(),
+      shade: dem(),
+      iso: { type: "geojson", data: EMPTY },
+      perims: { type: "geojson", data: EMPTY },
+      hot: { type: "geojson", data: EMPTY },
+      fires: { type: "geojson", data: EMPTY },
+    },
+    sky: { "sky-color": "#c4d9e8", "horizon-color": "#f3eee6", "fog-color": "#f3eee6",
+           "sky-horizon-blend": 0.6, "horizon-fog-blend": 0.5, "fog-ground-blend": 0.85, "atmosphere-blend": 0 },
+    // bottom to top; the forecast canvas goes in under "iso", and the burn scar over the
+    // perimeters' fill but under their outlines, so they stay readable over a big scar
+    layers: [
+      { id: "bg", type: "background", paint: { "background-color": "#f2efe9" } },
+      { id: "osm", type: "raster", source: "osm" },
+      { id: "imagery", type: "raster", source: "imagery", layout: { visibility: "none" } },
+      { id: "places", type: "raster", source: "places", layout: { visibility: "none" } },
+      { id: "shade", type: "hillshade", source: "shade", layout: { visibility: "none" },
+        paint: { "hillshade-exaggeration": 0.45, "hillshade-shadow-color": "rgba(59, 29, 41, 0.5)",
+                 "hillshade-highlight-color": "rgba(255, 255, 255, 0.35)", "hillshade-accent-color": "rgba(59, 29, 41, 0.25)" } },
+      { id: "iso", type: "line", source: "iso", paint: { "line-color": "#3b1d29", "line-width": 1.2 } },
+      // the newest perimeter shown takes the palette color, any older ones gray dashed
+      { id: "perim-fill", type: "fill", source: "perims",
+        paint: { "fill-color": OLD_PERIM, "fill-opacity": ["case", ["get", "cur"], 0.08, 0] } },
+      { id: "perim-old", type: "line", source: "perims", filter: ["!", ["get", "cur"]],
+        paint: { "line-color": OLD_PERIM, "line-width": 1.5, "line-dasharray": [2.67, 2] } },
+      { id: "perim-cur", type: "line", source: "perims", filter: ["get", "cur"],
+        paint: { "line-color": OLD_PERIM, "line-width": 2.5 } },
+      // newest detections on top
+      { id: "hot", type: "circle", source: "hot", layout: { "circle-sort-key": ["get", "t"] },
+        paint: { "circle-radius": 3, "circle-color": ["get", "c"], "circle-opacity": 0.55,
+                 "circle-stroke-width": 0.5, "circle-stroke-color": ["get", "c"], "circle-stroke-opacity": 0.9 } },
+      { id: "fires", type: "circle", source: "fires",
+        paint: { "circle-radius": 5, "circle-color": "#eb6834", "circle-opacity": 0.8,
+                 "circle-stroke-width": 1.5, "circle-stroke-color": "#52514e" } },
+    ],
   },
 });
-new BaseToggle().addTo(map);
-{
-  let saved = "map";
-  try { saved = localStorage.getItem("cornea-basemap") || "map"; } catch (e) { /* default */ }
-  setBasemap(BASEMAPS[saved] ? saved : "map");
+map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "top-left");
+const mapReady = new Promise(resolve => map.once("style.load", resolve));
+// a debugging handle for local runs (serve.py)
+if (["localhost", "127.0.0.1"].includes(location.hostname)) window.__map = map;
+
+const view = { base: "map", is3d: false };
+const remembered = (key, fallback) => { try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; } };
+const remember = (key, value) => { try { localStorage.setItem(key, value); } catch (e) { /* the choice just isn't remembered */ } };
+
+function setBasemap(name) {
+  view.base = name;
+  const vis = on => (on ? "visible" : "none");
+  map.setLayoutProperty("osm", "visibility", vis(name === "map"));
+  map.setLayoutProperty("imagery", "visibility", vis(name === "satellite"));
+  map.setLayoutProperty("places", "visibility", vis(name === "satellite"));
+  // relief shading only where it helps: on the street map in 3D (imagery has its own)
+  map.setLayoutProperty("shade", "visibility", vis(name === "map" && view.is3d));
+  for (const b of document.querySelectorAll(".base-toggle button[data-base]")) b.classList.toggle("on", b.dataset.base === name);
+  remember("cornea-basemap", name);
 }
-// burn scar above the forecast raster and perimeters (overlayPane, 400) and under
-// the active hotspots; the scar is display-only, so its canvas never takes the pointer
-const scarPane = map.createPane("scar");
-scarPane.style.zIndex = 420;
-scarPane.style.pointerEvents = "none";
-map.createPane("hotspots").style.zIndex = 430;
-// fire markers above the hotspot canvas, which would otherwise take their clicks;
-// Leaflet's per-pane SVG root is pointer-events none, so it doesn't block the canvas
-map.createPane("fires").style.zIndex = 440;
+
+function set3d(on, animate = true) {
+  // 3D drapes everything over the terrain and lets the map tilt and turn; 2D keeps
+  // the flat, north-up map
+  view.is3d = on;
+  const duration = animate ? 900 : 0;
+  for (const h of [map.dragRotate, map.touchPitch]) on ? h.enable() : h.disable();
+  on ? map.touchZoomRotate.enableRotation() : map.touchZoomRotate.disableRotation();
+  on ? map.keyboard.enableRotation() : map.keyboard.disableRotation();
+  if (on) {
+    map.setMaxPitch(75);
+    map.setTerrain({ source: "dem", exaggeration: 1.3 });
+    map.easeTo({ pitch: 60, duration });
+  } else {
+    map.setTerrain(null);
+    map.easeTo({ pitch: 0, bearing: 0, duration });
+    map.once("moveend", () => { if (!view.is3d) map.setMaxPitch(0); });
+  }
+  setBasemap(view.base);
+  for (const b of document.querySelectorAll(".base-toggle button[data-dim]")) b.classList.toggle("on", (b.dataset.dim === "3d") === on);
+  remember("cornea-3d", on ? "1" : "0");
+}
+
+class ViewToggles {
+  onAdd() {
+    const el = this.el = document.createElement("div");
+    el.className = "maplibregl-ctrl view-toggles";
+    el.innerHTML =
+      '<div class="base-toggle" role="group" aria-label="basemap"><button type="button" data-base="map">Map</button>' +
+      '<button type="button" data-base="satellite">Satellite</button></div>' +
+      '<div class="base-toggle" role="group" aria-label="terrain"><button type="button" data-dim="2d">2D</button>' +
+      '<button type="button" data-dim="3d" title="tilt the map over 3D terrain (right-drag or two fingers to tilt and turn)">3D</button></div>';
+    el.addEventListener("click", ev => {
+      const b = ev.target.closest("button");
+      if (!b) return;
+      if (b.dataset.base) setBasemap(b.dataset.base);
+      else if ((b.dataset.dim === "3d") !== view.is3d) set3d(b.dataset.dim === "3d");
+    });
+    return el;
+  }
+  onRemove() { this.el.remove(); }
+}
+map.addControl(new ViewToggles(), "top-right");
+mapReady.then(() => {
+  const base = remembered("cornea-basemap", "map");
+  view.base = base === "satellite" ? "satellite" : "map";
+  set3d(remembered("cornea-3d", "0") === "1", false);
+});
+
+// Canvas layers (the forecast and the burn scar). A paused canvas source re-reads
+// its canvas only when told to, and 3D terrain keeps what it drapes cached until the
+// style changes, so after a repaint 3D also gets a paint change too small to see
+let terrainNudge = 0;
+function pushCanvas(id) {
+  const src = map.getSource(id);
+  if (!src) return;
+  src.play();
+  src.pause();
+  if (view.is3d) map.setPaintProperty("bg", "background-opacity", (terrainNudge ^= 1) ? 0.999 : 1);
+}
+
+function showCanvas(id, grid, before, opacity) {
+  // pin grid.canvas to grid.corners as raster layer `id`, under layer `before`
+  const src = map.getSource(id);
+  if (src && src.getCanvas() === grid.canvas && JSON.stringify(src.coordinates) === JSON.stringify(grid.corners)) {
+    map.setPaintProperty(id, "raster-opacity", opacity);
+    pushCanvas(id);
+    return;
+  }
+  dropCanvas(id);
+  map.addSource(id, { type: "canvas", canvas: grid.canvas, coordinates: grid.corners, animate: false });
+  map.addLayer({ id, type: "raster", source: id, paint: {
+    "raster-opacity": opacity, "raster-resampling": "nearest", "raster-fade-duration": 0 } }, before);
+}
+
+function dropCanvas(id) {
+  if (map.getLayer(id)) map.removeLayer(id);
+  if (map.getSource(id)) map.removeSource(id);
+}
+
+// hover labels for fires, detections and perimeters, and a click on a fire selects it
+const tip = new maplibregl.Popup({ closeButton: false, closeOnClick: false, className: "map-tip", offset: 8, maxWidth: "340px" });
+function featureAt(point) {
+  const pad = 3;
+  const feats = map.queryRenderedFeatures([[point.x - pad, point.y - pad], [point.x + pad, point.y + pad]],
+    { layers: ["fires", "hot", "perim-fill"] });
+  for (const layer of ["fires", "hot", "perim-fill"]) {
+    const of = feats.filter(f => f.layer.id === layer);
+    // the newest detection is the one drawn on top
+    if (of.length) return layer === "hot" ? of.reduce((a, b) => (b.properties.t > a.properties.t ? b : a)) : of[0];
+  }
+  return null;
+}
+function tipText(feat) {
+  const p = feat.properties;
+  if (feat.layer.id === "fires") return p.name;
+  if (feat.layer.id === "perim-fill") return p.tip;
+  const r = state.hot && state.hot.recs[p.id];
+  return r ? `${r.src || "?"} ${r.date || ""} ${String(r.time || "").replace(".0", "")}Z · FRP ${r.frp ?? "?"} · conf ${r.conf ?? "?"}` : "";
+}
+map.on("mousemove", ev => {
+  const feat = featureAt(ev.point);
+  map.getCanvas().style.cursor = feat && feat.layer.id === "fires" ? "pointer" : "";
+  const text = feat && tipText(feat);
+  if (text) tip.setLngLat(ev.lngLat).setText(text).addTo(map);
+  else tip.remove();
+});
+map.on("mouseout", () => tip.remove());
+map.on("click", ev => {
+  const feat = featureAt(ev.point);
+  if (feat && feat.layer.id === "fires") select(feat.properties.slug);
+});
 
 const state = {
   fires: [],            // [{slug, title, cornea_id, centroid:[lon,lat], runs:[ts...]}]
   sel: null,
   searchDirty: false,   // true once the user types; until then the fire list is unfiltered
-  wmsLayer: null,
-  toaGeo: null,         // georaster behind wmsLayer when it is the archived ToA raster
+  fc: null,             // the forecast on the map: {kind, grid, ...} (see refreshWms)
+  toaGrid: null,        // its time-of-arrival grid, when that's what is shown
   wmsSeq: 0,
-  perimLayers: new Map(),   // epochms -> L.geoJSON
+  perimLayers: new Map(),   // ems -> {features, bbox, tip} for each perimeter on the map
   perimIndex: [],           // [{ems, date}]
-  hotLayer: null,
   hot: null,           // hotspot timeline for the selected fire (see refreshHotspots)
   hotSeq: 0,
   hotSpan: null,       // {start, end, contained} the playhead slider spans
@@ -437,19 +592,21 @@ async function init() {
   state.skillIndex = getJson(`${BUCKET}/skill/index.json`)
     .then(j => (j && j.slugs && typeof j.slugs === "object" ? j.slugs : {}), () => ({}));
   const [matches, manifest] = await Promise.all([
-    loadLocalOrBucket("fire_matches.json"), loadLocalOrBucket("manifest.json")]);
+    loadLocalOrBucket("fire_matches.json"), loadLocalOrBucket("manifest.json"), mapReady]);
   const bySlug = {};
   const gen = Date.parse(manifest.generated || 0);
   // manifests from collectors that stamp last_seen let us tell expired runs apart;
   // in those, a missing last_seen itself means "absent from the latest scrape"
   const stamped = Object.values(manifest.runs).some(e => e.last_seen);
   for (const [runKey, e] of Object.entries(manifest.runs)) {
-    const f = bySlug[e.slug] = bySlug[e.slug] || { slug: e.slug, runs: [], live: {}, pcts: {}, centroid: null };
+    const f = bySlug[e.slug] = bySlug[e.slug] || { slug: e.slug, runs: [], live: {}, pcts: {}, vars: {}, centroid: null };
     f.runs.push(e.run_ts);
+    // {pct: {variable: {ok, ...}}} for the hourly variables and isochrones archived as tars
+    f.vars[e.run_ts] = e.vars || {};
     // percentiles whose time-of-arrival tif made it into the archive
     f.pcts[e.run_ts] = new Set(Object.entries(e.files || {}).filter(([, x]) => x.ok).map(([p]) => p));
     // live = seen in the most recent scrape (within 2h of manifest generation);
-    // anything older has aged off pyrecast's geoserver -> no WMS tiles exist
+    // anything older has aged off Pyrecast
     f.live[e.run_ts] = e.last_seen ? gen - Date.parse(e.last_seen) < 2 * 3600e3
       : (stamped ? false : null);
     if (e.centroid) f.centroid = e.centroid;
@@ -461,13 +618,10 @@ async function init() {
     f.title = m ? (m.post_title || f.slug) : null;
     f.cornea_id = m ? m.cornea_id : null;
   }
-  const fires = Object.values(bySlug).sort((a, b) => a.slug.localeCompare(b.slug));
-  for (const f of fires) {
-    if (!f.centroid) continue;
-    f.marker = L.circleMarker([f.centroid[1], f.centroid[0]],
-      { pane: "fires", radius: 5, color: "#52514e", weight: 1.5, fillColor: "#eb6834", fillOpacity: 0.8 })
-      .addTo(map).bindTooltip(`${f.title || f.slug}`).on("click", () => select(f.slug));
-  }
+  const fires = Object.values(bySlug);
+  map.getSource("fires").setData({ type: "FeatureCollection", features: fires.filter(f => f.centroid).map(f => ({
+    type: "Feature", geometry: { type: "Point", coordinates: f.centroid },
+    properties: { slug: f.slug, name: f.title || f.slug } })) });
   state.fires = fires.sort((a, b) => b.latest - a.latest || fireName(a).localeCompare(fireName(b)));
   renderList();
   const want = new URLSearchParams(location.search).get("fire");
@@ -477,28 +631,24 @@ async function init() {
   wireLanes();
   for (const id of ["selRun", "selVar", "selPct"])
     document.getElementById(id).addEventListener("change", refreshWms);
-  document.getElementById("opacity").addEventListener("input", () =>
-    state.wmsLayer && state.wmsLayer.setOpacity(+document.getElementById("opacity").value / 100));
+  document.getElementById("opacity").addEventListener("input", () => {
+    const o = forecastOpacity();
+    if (map.getLayer("fc")) map.setPaintProperty("fc", "raster-opacity", o);
+    map.setPaintProperty("iso", "line-opacity", o);
+  });
   const slider = document.getElementById("timeslider");
   slider.addEventListener("input", () => {           // live label while dragging
     const variable = document.getElementById("selVar").value;
     const run = document.getElementById("selRun").value;
     if (TIMED_VARS.has(variable)) {
       state.granIdx = +slider.value;
-      if (run) timeParam(run);
+      if (run) labelForecastHour(run);
+      scheduleProductPaint();
     } else if (variable === "time-of-arrival") {
       state.toaMaxH = +slider.value;
       document.getElementById("timelabel").textContent = `+${slider.value}h`;
       renderToaLegend();
       scheduleToaPaint();
-    }
-  });
-  slider.addEventListener("change", () => {          // apply on release
-    const variable = document.getElementById("selVar").value;
-    const run = document.getElementById("selRun").value;
-    if (!run) return;
-    if (TIMED_VARS.has(variable) && state.wmsLayer && state.wmsLayer.setParams) {
-      state.wmsLayer.setParams({ time: timeParam(run) });
     }
   });
   document.getElementById("chkHot").addEventListener("change", refreshHotspots);
@@ -685,7 +835,7 @@ function deselect() {
   showSelectedName();
   renderList();
   setMode();
-  map.setView(...OVERVIEW_VIEW);
+  map.jumpTo(OVERVIEW_VIEW);
 }
 
 async function select(slug) {
@@ -698,7 +848,7 @@ async function select(slug) {
   setMode();
   renderList();
   showSelectedName();
-  if (f.centroid) map.setView([f.centroid[1], f.centroid[0]], 11);
+  if (f.centroid) map.jumpTo({ center: f.centroid, zoom: FIRE_ZOOM });
 
   const selRun = document.getElementById("selRun");
   // runs that expired upstream before any file was archived can't draw anything;
@@ -721,11 +871,15 @@ function fmtRun(ts) {
   return `${ts.slice(0, 4)}-${ts.slice(4, 6)}-${ts.slice(6, 8)} ${ts.slice(9, 11)}:${ts.slice(11, 13)}Z`;
 }
 
-// ---------------------------------------------------------------- WMS layer
+// ---------------------------------------------------------------- forecast layer
 
-// these variables are hourly image mosaics on a TIME dimension (one granule per
-// forecast hour, run time -> +168h); without TIME geoserver serves the last,
-// near-empty granule. time-of-arrival and isochrones are single static layers.
+// WebGL can only draw images whose server shares them across origins, and Pyrecast's
+// geoserver refuses every origin but its own. So, as Incibrief does, each forecast is
+// drawn here from our archive copy of the run: the time-of-arrival tif, the hourly
+// variables' tars and the isochrones' shapefile tar, decoded in the browser.
+
+// these variables are hourly snapshots (one granule per forecast hour, run time ->
+// +168h), archived as one tar of tifs per run, percentile and variable
 const TIMED_VARS = new Set(["spread-rate", "flame-length", "crown-fire", "hours-since-burned"]);
 
 function runDate(ts) {
@@ -741,13 +895,16 @@ function forecastTime(run, hourIdx) {
   return h1;
 }
 
-function timeParam(run) {
+function labelForecastHour(run) {
   const idx = +document.getElementById("timeslider").value;
   const t = forecastTime(run, idx);
   document.getElementById("timelabel").textContent =
     `+${idx}h · ${t.toISOString().slice(0, 16).replace("T", " ")}Z`;
-  return t.toISOString().replace(".000", "");
 }
+
+const forecastOpacity = () => +document.getElementById("opacity").value / 100;
+const varLabel = v => document.querySelector(`#selVar option[value="${v}"]`).textContent;
+const byNumber = (a, b) => a - b;
 
 function refreshWms() {
   const token = ++state.wmsSeq;
@@ -756,50 +913,30 @@ function refreshWms() {
   const variable = document.getElementById("selVar").value;
   const pct = document.getElementById("selPct").value;
   const note = document.getElementById("wmsnote");
-  const legend = document.getElementById("legendimg");
   renderHotMarks();   // the forecast-run marker follows the selected run and layer
   renderSkill();
-  if (state.wmsLayer) { map.removeLayer(state.wmsLayer); state.wmsLayer = null; }
-  state.toaGeo = null;
-  legend.hidden = true;
+  dropCanvas("fc");
+  map.getSource("iso").setData(EMPTY);
+  state.fc = state.toaGrid = null;
   note.textContent = "";
   note.className = "note";
-  const timed = TIMED_VARS.has(variable);
   configureTimeSlider(variable);
   if (!f || !run || !variable) return;
-  if (variable === "time-of-arrival") {
-    // always client-rendered from our archive: the threshold slider needs pixel
-    // access, and pyrecast's geoserver rejects SLD_BODY restyling
-    renderArchivedToa(f, run, pct, note, f.live[run] === false, token);
-    return;
+  if (variable === "time-of-arrival") renderToa(f, run, pct, note, token);
+  else if (variable === "isochrones") renderIsochrones(f, run, pct, note, token);
+  else renderProduct(f, run, variable, pct, note, token);
+}
+
+function missingNote(f, run, pct, what, have) {
+  // why the archive has no `what` at this percentile; `have` lists those it does have
+  if (have.includes(pct)) return `couldn't load the archived ${what} — try reloading the page`;
+  if (have.length) {
+    return `the ${pct}th percentile ${what} isn't archived for this run — try the ` +
+      have.map(p => `${p}th`).join(" or ");
   }
-  if (f.live[run] === false) {
-    document.getElementById("timerow").hidden = true;
-    note.textContent = "this run has aged off Pyrecast's geoserver — live tiles no longer " +
-      "exist. This variable is archived as hourly tars " +
-      `(forecast_archive/${f.slug}/${run}/${pct}_${variable}.tar in the bucket, if it was ` +
-      "captured before Pyrecast purged the granules); extract locally to view. " +
-      "Time-of-arrival renders from the archive — select it above.";
-    note.className = "warn";
-    return;
-  }
-  const layer = `fire-spread-forecast_${f.slug}_${run}:elmfire_landfire_${pct}_${variable}`;
-  const params = {
-    layers: layer, format: "image/png", transparent: true, version: "1.1.1",
-    opacity: +document.getElementById("opacity").value / 100,
-  };
-  if (timed) params.time = timeParam(run);
-  state.wmsLayer = L.tileLayer.wms(WMS, params).addTo(map);
-  let errored = 0;
-  state.wmsLayer.on("tileerror", () => {
-    if (++errored === 3) {
-      note.textContent = "tiles failing — this run may have expired off Pyrecast's geoserver; try the other run";
-      note.className = "warn";
-    }
-  });
-  note.textContent = layer;
-  legend.src = `${WMS}?REQUEST=GetLegendGraphic&VERSION=1.1.1&FORMAT=image/png&LAYER=${encodeURIComponent(layer)}&transparent=true`;
-  legend.hidden = false;
+  return f.live[run] !== false
+    ? `this run's ${what} isn't archived yet — forecasts are archived within about an hour of appearing on Pyrecast`
+    : `no ${what} was archived for this run before Pyrecast removed it — pick another run`;
 }
 
 function configureTimeSlider(variable) {
@@ -811,6 +948,8 @@ function configureTimeSlider(variable) {
     s.min = 0; s.max = 168; s.value = state.granIdx;
     prefix.textContent = "forecast hour:";
     row.title = "this variable is an hourly snapshot — slide through the forecast";
+    const run = document.getElementById("selRun").value;
+    if (run) labelForecastHour(run);
   } else if (variable === "time-of-arrival") {
     row.hidden = false;
     s.min = 1; s.max = 336; s.value = state.toaMaxH;
@@ -847,39 +986,58 @@ function renderToaLegend() {
   if (key) key.outerHTML = toaLegendHtml(state.toaMaxH);
 }
 
-// an ImageOverlay whose element is a canvas we repaint in place
-const CanvasOverlay = L.ImageOverlay.extend({
-  _initImage() {
-    const el = this._image = this._url;
-    L.DomUtil.addClass(el, "leaflet-image-layer");
-    if (this._zoomAnimated) L.DomUtil.addClass(el, "leaflet-zoom-animated");
-    el.onselectstart = L.Util.falseFn;
-    el.onmousemove = L.Util.falseFn;
-  },
-});
+async function fetchArchive(key) {
+  // the local capture first (serve.py), then the bucket
+  for (const url of [`raw/${key}`, `${BUCKET}/${key}`]) {
+    try {
+      const r = await fetch(url);
+      if (r.ok) return await r.arrayBuffer();
+    } catch (e) { /* local 404 or bucket CORS -> try next */ }
+  }
+  return null;
+}
 
-const TOA_MAX_PX = 4096;   // longest side of the resampled image
+function loadGeoraster(key) {
+  // a parsed archive tif, or null; ~2MB each, the 12 most recent kept
+  let p = state.georasterCache.get(key);
+  if (p) return p;
+  p = fetchArchive(key).then(buf => buf && parseGeoraster(buf)).catch(() => null);
+  state.georasterCache.set(key, p);
+  p.then(geo => { if (!geo && state.georasterCache.get(key) === p) state.georasterCache.delete(key); });
+  if (state.georasterCache.size > 12) state.georasterCache.delete(state.georasterCache.keys().next().value);
+  return p;
+}
 
-function toaGrid(georaster) {
-  // resample the forecast's UTM raster once onto the Web Mercator grid the overlay is
-  // stretched over, keeping each pixel's hours and band: the arrival slider and palette
-  // changes then only repaint this canvas instead of re-rendering map tiles
-  if (georaster._toaGrid) return georaster._toaGrid;
-  const epsg = georaster.projection;
-  const utm = proj4("EPSG:4326", `+proj=utm +zone=${epsg % 100}${epsg >= 32701 ? " +south" : ""} +datum=WGS84 +units=m +no_defs`);
-  const { xmin, ymax, pixelWidth: pw, pixelHeight: ph, width: W, height: Ht } = georaster;
-  const src = georaster.values[0];
-  const merc = L.Projection.SphericalMercator;
-  // most of a forecast tif is nodata: crop to the cells that arrive at all, so the
-  // canvas can keep the native 30m cells (a downsampled one blurs when zoomed in)
-  let r0 = Ht, r1 = -1, c0 = W, c1 = -1, maxHours = 0;
+// spherical (Web) Mercator meters, north up
+const R_EARTH = 6378137, D2R = Math.PI / 180;
+const mercX = lon => R_EARTH * lon * D2R;
+const mercY = lat => R_EARTH * Math.log(Math.tan(Math.PI / 4 + lat * D2R / 2));
+const lonOf = x => x / R_EARTH / D2R;
+const latOf = y => (2 * Math.atan(Math.exp(y / R_EARTH)) - Math.PI / 2) / D2R;
+// MapLibre's corner pins (TL, TR, BR, BL) for a canvas covering a mercator box
+const boxCorners = (x0, y0, x1, y1) =>
+  [[lonOf(x0), latOf(y1)], [lonOf(x1), latOf(y1)], [lonOf(x1), latOf(y0)], [lonOf(x0), latOf(y0)]];
+const utmOf = epsg => proj4("EPSG:4326",
+  `+proj=utm +zone=${epsg % 100}${epsg >= 32701 ? " +south" : ""} +datum=WGS84 +units=m +no_defs`);
+
+const TOA_MAX_PX = 4096;   // longest side of a resampled forecast canvas
+
+function mercGrid(geo, keep) {
+  // resample a forecast's UTM raster once onto the Web Mercator grid of a canvas pinned
+  // to the map. idx holds each canvas pixel's source cell (row * width + col, -1 for
+  // none), so a repaint (the arrival slider, a palette change, another hour of a
+  // variable on the same run grid) only rewrites the canvas
+  const utm = utmOf(geo.projection);
+  const { xmin, ymax, pixelWidth: pw, pixelHeight: ph, width: W, height: Ht } = geo;
+  const src = geo.values[0];
+  // most of a forecast tif is nodata: crop to the cells kept, so the canvas can keep
+  // the native 30m cells (a downsampled one blurs when zoomed in)
+  let r0 = Ht, r1 = -1, c0 = W, c1 = -1;
   for (let r = 0; r < Ht; r++) {
     const row = src[r];
     for (let c = 0; c < W; c++) {
-      const v = row[c];
-      if (v > 0) {
+      if (keep(row[c])) {
         if (r < r0) r0 = r; if (r > r1) r1 = r; if (c < c0) c0 = c; if (c > c1) c1 = c;
-        if (v > maxHours) maxHours = v;
       }
     }
   }
@@ -891,26 +1049,26 @@ function toaGrid(georaster) {
     const x = bx0 + (bx1 - bx0) * i / 16, y = by1 - (by1 - by0) * i / 16;
     for (const [X, Y] of [[x, by1], [x, by0], [bx0, y], [bx1, y]]) {
       const [lon, lat] = utm.inverse([X, Y]);
-      const m = merc.project(L.latLng(lat, lon));
-      mx0 = Math.min(mx0, m.x); mx1 = Math.max(mx1, m.x);
-      my0 = Math.min(my0, m.y); my1 = Math.max(my1, m.y);
+      const mx = mercX(lon), my = mercY(lat);
+      mx0 = Math.min(mx0, mx); mx1 = Math.max(mx1, mx);
+      my0 = Math.min(my0, my); my1 = Math.max(my1, my);
     }
   }
   // a few % over the cell count: the mercator box around the slightly rotated UTM grid is wider
-  const w = Math.min(TOA_MAX_PX, Math.ceil((c1 - c0 + 1) * 1.05));
-  const h = Math.max(1, Math.round(w * (my1 - my0) / (mx1 - mx0)));
+  const wn = (c1 - c0 + 1) * 1.05, hn = wn * (my1 - my0) / (mx1 - mx0);
+  const k = Math.min(1, TOA_MAX_PX / Math.max(wn, hn));
+  const w = Math.max(1, Math.ceil(wn * k)), h = Math.max(1, Math.round(hn * k));
   // UTM coordinates are projected exactly on a 16px lattice and interpolated in
   // between (the projection is smooth at this scale; per-pixel proj4 takes seconds)
   const S = 16, nx = Math.ceil(w / S) + 1, ny = Math.ceil(h / S) + 1;
   const NX = new Float64Array(nx * ny), NY = new Float64Array(nx * ny);
   for (let j = 0; j < ny; j++) {
     for (let i = 0; i < nx; i++) {
-      const ll = merc.unproject(L.point(mx0 + i * S / w * (mx1 - mx0), my1 - j * S / h * (my1 - my0)));
-      [NX[j * nx + i], NY[j * nx + i]] = utm.forward([ll.lng, ll.lat]);
+      const lon = lonOf(mx0 + i * S / w * (mx1 - mx0)), lat = latOf(my1 - j * S / h * (my1 - my0));
+      [NX[j * nx + i], NY[j * nx + i]] = utm.forward([lon, lat]);
     }
   }
-  const edges = Palette.TOA_EDGES;
-  const hours = new Float32Array(w * h), band = new Uint8Array(w * h);   // band 0 = no arrival
+  const idx = new Int32Array(w * h).fill(-1);
   for (let py = 0; py < h; py++) {
     const fy = (py + 0.5) / S, j = Math.min(Math.floor(fy), ny - 2), ty = fy - j;
     for (let px = 0; px < w; px++) {
@@ -919,21 +1077,35 @@ function toaGrid(georaster) {
       const X = (NX[a] + (NX[a + 1] - NX[a]) * tx) * (1 - ty) + (NX[c] + (NX[c + 1] - NX[c]) * tx) * ty;
       const Y = (NY[a] + (NY[a + 1] - NY[a]) * tx) * (1 - ty) + (NY[c] + (NY[c + 1] - NY[c]) * tx) * ty;
       const r = Math.floor((ymax - Y) / ph), q = Math.floor((X - xmin) / pw);
-      if (r < 0 || r >= Ht || q < 0 || q >= W) continue;
-      const v = src[r][q];
-      if (!(v > 0)) continue;   // nodata=0 = not forecast to burn
-      let k = 0;
-      while (v > edges[k]) k++;
-      hours[py * w + px] = v;
-      band[py * w + px] = k + 1;
+      if (r < 0 || r >= Ht || q < 0 || q >= W || !keep(src[r][q])) continue;
+      idx[py * w + px] = r * W + q;
     }
   }
   const canvas = document.createElement("canvas");
   canvas.width = w; canvas.height = h;
-  canvas.style.imageRendering = "pixelated";   // crisp 30m cells when zoomed in
   const ctx = canvas.getContext("2d");
-  const bounds = L.latLngBounds(merc.unproject(L.point(mx0, my0)), merc.unproject(L.point(mx1, my1)));
-  return (georaster._toaGrid = { canvas, ctx, img: ctx.createImageData(w, h), hours, band, bounds, maxHours });
+  return { W, Ht, xmin, ymax, w, h, idx, canvas, ctx, img: ctx.createImageData(w, h),
+           corners: boxCorners(mx0, my0, mx1, my1) };
+}
+
+function toaGrid(geo) {
+  // the time-of-arrival grid, with each pixel's hours and arrival band (0 = none)
+  if (geo._toaGrid) return geo._toaGrid;
+  const grid = mercGrid(geo, v => v > 0), { idx, W } = grid, src = geo.values[0];
+  const edges = Palette.TOA_EDGES;
+  const hours = new Float32Array(idx.length), band = new Uint8Array(idx.length);
+  let maxHours = 0;
+  for (let o = 0; o < idx.length; o++) {
+    const s = idx[o];
+    if (s < 0) continue;   // nodata=0 = not forecast to burn
+    const v = src[(s / W) | 0][s % W];
+    let k = 0;
+    while (v > edges[k]) k++;
+    hours[o] = v;
+    band[o] = k + 1;
+    if (v > maxHours) maxHours = v;
+  }
+  return (geo._toaGrid = Object.assign(grid, { hours, band, maxHours }));
 }
 
 function paintToa(grid) {
@@ -950,73 +1122,247 @@ function paintToa(grid) {
 
 let toaPaintTimer = 0;
 function scheduleToaPaint() {   // setTimeout, not rAF — rAF pauses in hidden tabs
-  if (toaPaintTimer || !state.toaGeo) return;
+  if (toaPaintTimer || !state.toaGrid) return;
   toaPaintTimer = setTimeout(() => {
     toaPaintTimer = 0;
-    if (state.toaGeo) { paintToa(toaGrid(state.toaGeo)); renderHotMarks(); }
+    if (state.toaGrid) { paintToa(state.toaGrid); pushCanvas("fc"); renderHotMarks(); }
   }, 16);
 }
 
-function drawToaRaster(georaster) {
-  if (state.wmsLayer) map.removeLayer(state.wmsLayer);
-  const grid = toaGrid(georaster);
-  paintToa(grid);
-  state.wmsLayer = new CanvasOverlay(grid.canvas, grid.bounds,
-    { opacity: +document.getElementById("opacity").value / 100 }).addTo(map);
-  state.toaGeo = georaster;
-  renderHotMarks();
-}
-
-async function renderArchivedToa(f, run, pct, note, expired, token) {
+async function renderToa(f, run, pct, note, token) {
   note.textContent = "loading time-of-arrival raster…";
-  const key = `forecast_archive/${f.slug}/${run}/${pct}.tif`;
-  let georaster = state.georasterCache.get(key);
-  if (!georaster) {
-    let buf = null;
-    for (const url of [`raw/${key}`, `${BUCKET}/${key}`]) {
-      try {
-        const r = await fetch(url);
-        if (r.ok) { buf = await r.arrayBuffer(); break; }
-      } catch (e) { /* local 404 or bucket CORS -> try next */ }
-    }
-    if (!buf) {
-      if (token !== state.wmsSeq) return;
-      if (!expired) {
-        // too fresh to be archived yet (collector runs every 2h) — fall back to
-        // pyrecast's live tiles; the arrival slider needs pixel access, so hide it
-        document.getElementById("timerow").hidden = true;
-        const layer = `fire-spread-forecast_${f.slug}_${run}:elmfire_landfire_${pct}_time-of-arrival`;
-        state.toaGeo = null;
-        state.wmsLayer = L.tileLayer.wms(WMS, {
-          layers: layer, format: "image/png", transparent: true, version: "1.1.1",
-          opacity: +document.getElementById("opacity").value / 100,
-        }).addTo(map);
-        note.textContent = layer + " (live tiles — not yet archived, arrival slider unavailable)";
-        const legend = document.getElementById("legendimg");
-        legend.src = `${WMS}?REQUEST=GetLegendGraphic&VERSION=1.1.1&FORMAT=image/png&LAYER=${encodeURIComponent(layer)}&transparent=true`;
-        legend.hidden = false;
-        return;
-      }
-      const got = f.pcts[run];
-      note.textContent = !got.size
-        ? "no forecast files were captured for this run before Pyrecast removed it — pick another run"
-        : !got.has(pct) ? `the ${pct}th percentile wasn't captured for this run — try another percentile`
-        : "couldn't load the archived time-of-arrival raster — try reloading the page";
-      note.className = "warn";
-      return;
-    }
-    georaster = await parseGeoraster(buf);
-    state.georasterCache.set(key, georaster);
-    if (state.georasterCache.size > 12) {  // ~2MB each; drop the oldest
-      state.georasterCache.delete(state.georasterCache.keys().next().value);
-    }
-  }
+  const geo = await loadGeoraster(`forecast_archive/${f.slug}/${run}/${pct}.tif`);
   // selection may have moved on while the tif downloaded
   if (token !== state.wmsSeq) return;
-  drawToaRaster(georaster);   // raster replaces WMS slot
+  if (!geo) {
+    note.textContent = missingNote(f, run, pct, "time of arrival", [...f.pcts[run]].sort(byNumber));
+    note.className = "warn";
+    return;
+  }
+  const grid = state.toaGrid = toaGrid(geo);
+  state.fc = { kind: "toa", grid };
+  paintToa(grid);
+  showCanvas("fc", grid, "iso", forecastOpacity());
+  renderHotMarks();
   document.getElementById("timelabel").textContent = `+${state.toaMaxH}h`;
   note.innerHTML = toaLegendHtml(state.toaMaxH);
-  note.className = "note";
+}
+
+// hourly variables, colored as Incibrief colors them, by the tif's byte value (nodata 0)
+const PRODUCTS = {
+  "spread-rate": { unit: "ch/hr", stops: [[1, "#ffdc50"], [10, "#ff9628"], [25, "#e63c32"], [50, "#aa2882"], [100, "#6e1450"]] },
+  "flame-length": { unit: "ft", stops: [[1, "#ffdc50"], [4, "#ff9628"], [8, "#e63c32"], [11, "#aa2882"], [25, "#6e1450"]] },
+  "hours-since-burned": { unit: "h", stops: [[1, "#d4572e"], [24, "#c05de1"], [96, "#6e4bd0"], [168, "#3f2d7d"]] },
+  "crown-fire": { stops: [[1, "#ffdc50"], [2, "#ff9628"], [3, "#e63c32"]],
+                  labels: ["surface", "passive crown", "active crown"] },
+};
+const hexRgb = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16));
+
+function productLut(variable) {
+  // RGBA for each byte value: 0 is transparent; a ramp is linear between its stops and
+  // clamps past its ends, and a categorical variable colors only its exact values
+  const { stops, labels } = PRODUCTS[variable], lut = new Uint8ClampedArray(256 * 4);
+  const put = (v, rgb) => { lut.set(rgb, 4 * v); lut[4 * v + 3] = 255; };
+  const pts = stops.map(([v, c]) => [v, hexRgb(c)]);
+  if (labels) { for (const [v, rgb] of pts) put(v, rgb); return lut; }
+  for (let v = 1; v < 256; v++) {
+    const j = pts.findIndex(([sv]) => sv >= v);   // the first stop at or above v
+    if (j <= 0) { put(v, pts[j < 0 ? pts.length - 1 : 0][1]); continue; }
+    const [va, a] = pts[j - 1], [vb, b] = pts[j], t = (v - va) / (vb - va);
+    put(v, a.map((x, n) => Math.round(x + (b[n] - x) * t)));
+  }
+  return lut;
+}
+
+function productLegendHtml(variable) {
+  const { unit, stops, labels } = PRODUCTS[variable], n = stops.length;
+  const title = varLabel(variable) + (unit ? ` (${unit})` : "");
+  if (labels) {
+    return `<div class="toa-key" role="img" aria-label="${title}: ${labels.join(", ")}"><span>${title}</span>` +
+      `<span class="toa-bar">${stops.map(([, c]) => `<i style="background:${c};flex:1"></i>`).join("")}</span>` +
+      `<span class="toa-ticks">${labels.map((l, i) =>
+        `<span style="left:${(100 * (i + 0.5) / n).toFixed(2)}%">${l}</span>`).join("")}</span></div>`;
+  }
+  const at = i => (100 * i / (n - 1)).toFixed(2);
+  const ticks = stops.map(([v], i) => (i === 0 ? `<span style="left:0;transform:none">${v}</span>`
+    : i === n - 1 ? `<span class="last">${v}+</span>` : `<span style="left:${at(i)}%">${v}</span>`)).join("");
+  return `<div class="toa-key" role="img" aria-label="${title}: ${stops.map(s => s[0]).join(", ")}">` +
+    `<span>${title}</span><span class="toa-bar ramp" style="background:linear-gradient(to right, ` +
+    `${stops.map(([, c], i) => `${c} ${at(i)}%`).join(", ")})"></span><span class="toa-ticks">${ticks}</span></div>`;
+}
+
+function untar(buf) {
+  // the archive's tars: plain USTAR (as Python writes it); regular files only
+  const u8 = new Uint8Array(buf), files = [];
+  const str = (o, n) => { let s = ""; for (let i = o; i < o + n && u8[i]; i++) s += String.fromCharCode(u8[i]); return s; };
+  for (let off = 0; off + 512 <= u8.length;) {
+    const name = str(off, 100);
+    if (!name) break;   // the zero blocks that end the archive
+    const size = parseInt(str(off + 124, 12).trim() || "0", 8);
+    if (!(size >= 0)) throw new Error(`bad tar header at ${off}`);
+    const type = u8[off + 156], prefix = str(off + 345, 155);
+    off += 512;
+    if (type === 0 || type === 0x30) files.push({ name: prefix ? `${prefix}/${name}` : name, bytes: u8.subarray(off, off + size) });
+    off += Math.ceil(size / 512) * 512;
+  }
+  return files;
+}
+
+const memberTime = name => {   // "{variable}_YYYYMMDD_HHMMSS.tif" -> epoch ms
+  const m = /_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.tif$/.exec(name);
+  return m ? Date.UTC(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]) : null;
+};
+
+const tarCache = new Map();   // key -> promise of {members, times, decoded}, the 3 most recent
+function loadTar(key) {
+  let p = tarCache.get(key);
+  if (p) { tarCache.delete(key); tarCache.set(key, p); return p; }
+  p = fetchArchive(key).then(buf => {
+    if (!buf) return null;
+    const members = untar(buf).map(m => ({ ...m, t: memberTime(m.name) }))
+      .filter(m => m.t !== null).sort((a, b) => a.t - b.t);
+    return members.length ? { members, times: members.map(m => m.t), decoded: new Map() } : null;
+  }).catch(() => null);
+  tarCache.set(key, p);
+  p.then(b => { if (!b && tarCache.get(key) === p) tarCache.delete(key); });
+  while (tarCache.size > 3) tarCache.delete(tarCache.keys().next().value);
+  return p;
+}
+
+function memberGeo(bundle, i) {
+  // one hour's tif, parsed and flattened to a byte per cell; the 8 most recent kept
+  let p = bundle.decoded.get(i);
+  if (p) { bundle.decoded.delete(i); bundle.decoded.set(i, p); return p; }
+  const b = bundle.members[i].bytes;
+  p = parseGeoraster(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)).then(geo => {
+    const flat = new Uint8Array(geo.width * geo.height);
+    geo.values[0].forEach((row, r) => flat.set(row, r * geo.width));
+    return { geo, flat };
+  });
+  bundle.decoded.set(i, p);
+  p.catch(() => bundle.decoded.delete(i));
+  if (bundle.decoded.size > 8) bundle.decoded.delete(bundle.decoded.keys().next().value);
+  return p;
+}
+
+async function productGrid(f, run, pct, bundle) {
+  // a variable only ever lights cells inside the time-of-arrival footprint on the same
+  // run grid, so it borrows that canvas grid: this percentile's, else the highest one
+  // archived; with none, the variable gets a grid of its own over the whole tif
+  const { geo: first } = await memberGeo(bundle, 0);
+  const have = f.pcts[run];
+  for (const p of [pct, ...[...have].filter(p => p !== pct).sort((a, b) => b - a)]) {
+    if (!have.has(p)) continue;
+    const geo = await loadGeoraster(`forecast_archive/${f.slug}/${run}/${p}.tif`);
+    if (geo && geo.width === first.width && geo.height === first.height &&
+        geo.xmin === first.xmin && geo.ymax === first.ymax) return toaGrid(geo);
+  }
+  return bundle.grid || (bundle.grid = mercGrid(first, () => true));
+}
+
+async function paintProduct(fc) {
+  // the snapshot at or before the forecast-hour slider's time; false if nothing changed
+  const t = forecastTime(fc.run, state.granIdx).getTime(), times = fc.bundle.times;
+  let i = times.length - 1;
+  while (i >= 0 && times[i] > t) i--;
+  if (i === fc.shown) return false;
+  const m = i < 0 ? null : await memberGeo(fc.bundle, i);
+  if (state.fc !== fc) return false;
+  const { idx, img, ctx } = fc.grid, d = img.data, lut = fc.lut, flat = m && m.flat;
+  for (let o = 0, q = 0; o < idx.length; o++, q += 4) {
+    const s = idx[o], l = s < 0 || !flat ? 0 : 4 * flat[s];
+    d[q] = lut[l]; d[q + 1] = lut[l + 1]; d[q + 2] = lut[l + 2]; d[q + 3] = lut[l + 3];
+  }
+  ctx.putImageData(img, 0, 0);
+  fc.shown = i;
+  return true;
+}
+
+let productPainting = false, productRepaint = false;
+function scheduleProductPaint() {   // one paint at a time; the latest slider value wins
+  const fc = state.fc;
+  if (!fc || fc.kind !== "product") return;
+  if (productPainting) { productRepaint = true; return; }
+  productPainting = true;
+  paintProduct(fc).then(did => { if (did && state.fc === fc) pushCanvas("fc"); }, () => {})
+    .finally(() => {
+      productPainting = false;
+      if (productRepaint) { productRepaint = false; scheduleProductPaint(); }
+    });
+}
+
+async function renderProduct(f, run, variable, pct, note, token) {
+  const what = varLabel(variable);
+  note.textContent = `loading ${what}…`;
+  const bundle = await loadTar(`forecast_archive/${f.slug}/${run}/${pct}_${variable}.tar`);
+  if (token !== state.wmsSeq) return;
+  const vars = f.vars[run] || {};
+  if (!bundle) {
+    note.textContent = missingNote(f, run, pct, what,
+      Object.keys(vars).filter(p => vars[p][variable] && vars[p][variable].ok).sort(byNumber));
+    note.className = "warn";
+    return;
+  }
+  let grid;
+  try { grid = await productGrid(f, run, pct, bundle); }
+  catch (e) { grid = null; }
+  if (token !== state.wmsSeq) return;
+  if (!grid) {
+    note.textContent = `couldn't read the archived ${what} — try reloading the page`;
+    note.className = "warn";
+    return;
+  }
+  const fc = state.fc = { kind: "product", grid, bundle, run, lut: productLut(variable), shown: undefined };
+  note.innerHTML = productLegendHtml(variable);
+  try { await paintProduct(fc); } catch (e) { /* drawn blank; the slider retries */ }
+  if (state.fc !== fc) return;
+  showCanvas("fc", grid, "iso", forecastOpacity());
+}
+
+function shpLines(bytes, utm) {
+  // the rings / parts of a polygon or polyline shapefile, as [lon, lat] lines
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), lines = [];
+  for (let o = 100; o + 8 <= dv.byteLength;) {
+    const c = o + 8, len = 2 * dv.getInt32(o + 4);   // big-endian, in 16-bit words
+    const type = dv.getInt32(c, true);
+    if (type === 3 || type === 5) {
+      const parts = dv.getInt32(c + 36, true), n = dv.getInt32(c + 40, true), pts = c + 44 + 4 * parts;
+      for (let k = 0; k < parts; k++) {
+        const a = dv.getInt32(c + 44 + 4 * k, true), b = k + 1 < parts ? dv.getInt32(c + 48 + 4 * k, true) : n;
+        const line = [];
+        for (let i = a; i < b; i++) {
+          line.push(utm.inverse([dv.getFloat64(pts + 16 * i, true), dv.getFloat64(pts + 16 * i + 8, true)]));
+        }
+        if (line.length > 1) lines.push(line);
+      }
+    }
+    o = c + len;
+  }
+  return lines;
+}
+
+async function renderIsochrones(f, run, pct, note, token) {
+  note.textContent = "loading isochrones…";
+  const buf = await fetchArchive(`forecast_archive/${f.slug}/${run}/${pct}_isochrones.tar`);
+  if (token !== state.wmsSeq) return;
+  let lines = null;
+  try {
+    const files = Object.fromEntries(untar(buf).map(m => [m.name.split("/").pop(), m.bytes]));
+    const zone = /UTM_Zone_(\d+)([NS]?)/i.exec(new TextDecoder().decode(files["isochrones.prj"]));
+    lines = shpLines(files["isochrones.shp"], utmOf((/s/i.test(zone[2]) ? 32700 : 32600) + +zone[1]));
+  } catch (e) { /* no tar, or not a UTM shapefile */ }
+  if (!lines) {
+    const vars = f.vars[run] || {};
+    note.textContent = missingNote(f, run, pct, "isochrones",
+      Object.keys(vars).filter(p => vars[p].isochrones && vars[p].isochrones.ok).sort(byNumber));
+    note.className = "warn";
+    return;
+  }
+  map.getSource("iso").setData({ type: "Feature", properties: {},
+                                 geometry: { type: "MultiLineString", coordinates: lines } });
+  map.setPaintProperty("iso", "line-opacity", forecastOpacity());
+  state.fc = { kind: "isochrones" };
+  note.innerHTML = '<i class="iso-key"></i>arrival-time contours (isochrones)';
 }
 
 // ---------------------------------------------------------------- forecast metrics
@@ -1066,9 +1412,9 @@ function clearPerims() {
   el.innerHTML = "";
   btn.disabled = true;
   btn.textContent = "select a fire";
-  for (const l of state.perimLayers.values()) map.removeLayer(l);
   state.perimLayers.clear();
   state.perimIndex = [];
+  stylePerims();
 }
 
 async function loadPerims(f, seq) {
@@ -1129,20 +1475,45 @@ function rememberPerim(path, gj) {
 }
 
 function stylePerims() {
-  // the newest perimeter on the map takes the perimeter color, any older ones gray dashed
+  // the perimeters shown, to the map: the newest takes the perimeter color, any older
+  // ones gray dashed (the layer styles key on "cur")
   let newest = null;
   for (const p of state.perimIndex) if (state.perimLayers.has(p.ems)) newest = p;   // sorted oldest first
-  for (const [ems, layer] of state.perimLayers) {
-    layer.setStyle(newest && ems === newest.ems
-      ? { color: Palette.get().perimeter, weight: 2.5, dashArray: null, fillOpacity: 0.08 }
-      : { color: "#52514e", weight: 1.5, dashArray: "4 3", fillOpacity: 0 });
+  const features = [];
+  for (const [ems, l] of state.perimLayers) {
+    const props = { cur: !!newest && ems === newest.ems, tip: l.tip };
+    for (const geometry of l.geometries) features.push({ type: "Feature", geometry, properties: props });
   }
+  map.getSource("perims").setData({ type: "FeatureCollection", features });
+  const color = Palette.get().perimeter;
+  map.setPaintProperty("perim-fill", "fill-color", ["case", ["get", "cur"], color, OLD_PERIM]);
+  map.setPaintProperty("perim-cur", "line-color", color);
+}
+
+function geometriesOf(gj) {
+  // a FeatureCollection, Feature or bare geometry -> its geometries
+  if (!gj) return [];
+  if (gj.type === "FeatureCollection") return gj.features.flatMap(geometriesOf);
+  if (gj.type === "Feature") return gj.geometry ? [gj.geometry] : [];
+  return gj.coordinates || gj.geometries ? [gj] : [];
+}
+
+function bboxOf(geometries) {
+  // [west, south, east, north]
+  const b = [Infinity, Infinity, -Infinity, -Infinity];
+  const walk = c => {
+    if (typeof c[0] === "number") {
+      b[0] = Math.min(b[0], c[0]); b[1] = Math.min(b[1], c[1]);
+      b[2] = Math.max(b[2], c[0]); b[3] = Math.max(b[3], c[1]);
+    } else c.forEach(walk);
+  };
+  for (const g of geometries) (g.geometries || [g]).forEach(x => x.coordinates && walk(x.coordinates));
+  return b;
 }
 
 async function togglePerim(f, p, on) {
   if (!on) {
-    const l = state.perimLayers.get(p.ems);
-    if (l) { map.removeLayer(l); state.perimLayers.delete(p.ems); stylePerims(); }
+    if (state.perimLayers.delete(p.ems)) stylePerims();
     return;
   }
   if (state.perimLayers.has(p.ems)) return;
@@ -1161,8 +1532,8 @@ async function togglePerim(f, p, on) {
   if (state.seq !== seq || state.perimLayers.has(p.ems)) return;
   const box = document.querySelector(`#perimlist input[data-ems="${p.ems}"]`);
   if (box && !box.checked) return;
-  const layer = L.geoJSON(gj).addTo(map).bindTooltip(`perimeter ${p.date.slice(0, 16).replace("T", " ")}Z`);
-  state.perimLayers.set(p.ems, layer);
+  const geometries = geometriesOf(gj);
+  state.perimLayers.set(p.ems, { geometries, bbox: bboxOf(geometries), tip: `perimeter ${fmtPerim(p)}` });
   stylePerims();
 }
 
@@ -1187,7 +1558,7 @@ function hotColor(ageH) {
 // with no end-date filter, so one whole-fire query silently drops the newest
 // weeks. Instead, load the 7-day window behind the playhead on demand, in
 // day-aligned chunks, then the rest of the fire's history in the background for
-// the burn scar. Only the window's detections become Leaflet markers.
+// the burn scar. Only the window's detections are drawn as dots.
 const HOUR = 3600e3, DAY = 864e5;
 const HOT_LOOKBACK_H = 168;   // matches hotColor's 7-day ramp; older is burn scar
 const HOT_LIMIT = 20000;      // rows per request (~5 MB at most)
@@ -1315,8 +1686,8 @@ function renderHotMarks() {
 function renderArrivalBar(bar, run) {
   // each time-of-arrival band at run time + its hours, in the map's colors, up to the
   // "show arrival within" setting or the forecast's latest arrival, whichever is first
-  if (document.getElementById("selVar").value !== "time-of-arrival" || !state.toaGeo) return;
-  const until = Math.min(state.toaMaxH, toaGrid(state.toaGeo).maxHours);
+  if (document.getElementById("selVar").value !== "time-of-arrival" || !state.toaGrid) return;
+  const until = Math.min(state.toaMaxH, state.toaGrid.maxHours);
   const edges = Palette.TOA_EDGES, colors = Palette.toaColors();
   let html = "", h0 = 0;
   for (let k = 0; k < edges.length && h0 < until; k++) {
@@ -1407,93 +1778,49 @@ function startLaneDrag(lane, ev) {
   pick(ev);
 }
 
-// The burn scar: every detection older than the ramp, in one canvas. A big fire's
-// history is 100k+ points, far past what Leaflet markers can redraw while
-// scrubbing. Points arrive pre-projected at zoom 0 and sorted by time; the canvas
-// carries the translucency, so overlapping points don't darken each other.
-const ScarLayer = L.Layer.extend({
-  options: { pane: "scar", padding: 0.2, radius: 2, opacity: 0.55 },
+// The burn scar: every detection older than the ramp, drawn on one canvas pinned over
+// the hotspot query box (so 3D drapes it over the terrain like the forecast). A big
+// fire's history is 100k+ points; the layer carries the translucency, so overlapping
+// dots don't darken each other. Dots are about a VIIRS pixel across.
+const SCAR_M_PER_PX = 60, SCAR_DOT_M = 190, SCAR_OPACITY = 0.55;
+const scar = { grid: null, k: 0, r: 0, pts: null, lo: 0, hi: 0, color: null };
 
-  initialize(options) {
-    L.setOptions(this, options);
-    this._pts = null;
-    this._lo = this._hi = 0;
-    this._color = null;
-  },
+function scarCanvas(box) {
+  // a fresh canvas over box {s, w, n, e} for one hotspot session
+  const x0 = mercX(box.w), x1 = mercX(box.e), y0 = mercY(box.s), y1 = mercY(box.n);
+  const cos = Math.cos((box.s + box.n) / 2 * D2R);   // ground meters -> mercator meters
+  const k = Math.min(cos / SCAR_M_PER_PX, TOA_MAX_PX / Math.max(x1 - x0, y1 - y0));   // px per mercator meter
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil((x1 - x0) * k));
+  canvas.height = Math.max(1, Math.ceil((y1 - y0) * k));
+  Object.assign(scar, { grid: { canvas, corners: boxCorners(x0, y0, x1, y1), x0, y1 }, k,
+                        r: Math.max(1, SCAR_DOT_M / cos * k), pts: null, lo: 0, hi: 0, color: null });
+}
 
-  onAdd() {
-    this._canvas = L.DomUtil.create("canvas",
-      `leaflet-zoom-${this._zoomAnimated ? "animated" : "hide"}`, this.getPane());
-    this._canvas.style.opacity = this.options.opacity;
-    this._reset();
-  },
-
-  onRemove() { L.DomUtil.remove(this._canvas); },
-
-  getEvents() {
-    const ev = { moveend: this._reset };
-    if (this._zoomAnimated) ev.zoomanim = this._animateZoom;
-    return ev;
-  },
-
+function scarUpdate(pts, lo, hi, color) {
   // draws pts.x/pts.y[lo, hi); when only hi grew, just the new points are added
-  update(pts, lo, hi, color) {
-    const same = pts === this._pts && lo === this._lo && color === this._color;
-    if (same && hi === this._hi) return;
-    const from = same && hi > this._hi ? this._hi : lo;
-    this._pts = pts;
-    this._lo = lo;
-    this._hi = hi;
-    this._color = color;
-    if (this._map) this._draw(from, from === lo);
-  },
-
-  _reset() {
-    const map = this._map, size = map.getSize(), pad = size.multiplyBy(this.options.padding).round();
-    const topLeft = map.containerPointToLayerPoint(pad.multiplyBy(-1)).round();
-    const w = size.x + 2 * pad.x, h = size.y + 2 * pad.y, c = this._canvas;
-    this._dpr = window.devicePixelRatio || 1;
-    L.DomUtil.setPosition(c, topLeft);
-    c.width = Math.round(w * this._dpr);
-    c.height = Math.round(h * this._dpr);
-    c.style.width = `${w}px`;
-    c.style.height = `${h}px`;
-    this._nw = map.layerPointToLatLng(topLeft);
-    this._origin = map.getPixelOrigin().add(topLeft);
-    this._scale = map.getZoomScale(map.getZoom(), 0);
-    this._draw(this._lo, true);
-  },
-
-  _animateZoom(e) {
-    const map = this._map;
-    // the pixel origin the map will have at e.zoom (Leaflet's private _getNewPixelOrigin)
-    const origin = map.project(e.center, e.zoom).subtract(map.getSize().divideBy(2))
-      .add(L.DomUtil.getPosition(map.getPane("mapPane"))).round();
-    L.DomUtil.setTransform(this._canvas, map.project(this._nw, e.zoom).subtract(origin),
-                           map.getZoomScale(e.zoom));
-  },
-
-  _draw(from, clear) {
-    const c = this._canvas, ctx = c.getContext("2d"), P = this._pts;
-    if (clear) ctx.clearRect(0, 0, c.width, c.height);
-    if (!P || from >= this._hi) return;
-    const r = this.options.radius * this._dpr, k = this._scale * this._dpr;
-    const ox = this._origin.x * this._dpr, oy = this._origin.y * this._dpr;
-    const W = c.width + r, H = c.height + r, xs = P.x, ys = P.y;
-    // one path, one fill: per-point fillRect/drawImage calls are 5-50x slower to
-    // rasterize at 100k points
-    ctx.fillStyle = this._color;
+  const g = scar.grid;
+  if (!g) return;
+  const same = pts === scar.pts && lo === scar.lo && color === scar.color;
+  if (same && hi === scar.hi) return;
+  const from = same && hi > scar.hi ? scar.hi : lo;
+  Object.assign(scar, { pts, lo, hi, color });
+  const ctx = g.canvas.getContext("2d"), r = scar.r, k = scar.k;
+  if (from === lo) ctx.clearRect(0, 0, g.canvas.width, g.canvas.height);
+  if (pts && from < hi) {
+    // one path, one fill: per-point fills are 5-50x slower to rasterize at 100k points
+    ctx.fillStyle = color;
     ctx.beginPath();
-    for (let i = from, hi = this._hi; i < hi; i++) {
-      const x = xs[i] * k - ox, y = ys[i] * k - oy;
-      if (x < -r || y < -r || x > W || y > H) continue;
+    for (let i = from; i < hi; i++) {
+      const x = (pts.x[i] - g.x0) * k, y = (g.y1 - pts.y[i]) * k;
       ctx.moveTo(x + r, y);
       ctx.arc(x, y, r, 0, 2 * Math.PI);
     }
     ctx.fill();
-  },
-});
-const scarLayer = new ScarLayer().addTo(map);
+  }
+  if (map.getSource("scar")) pushCanvas("scar");
+  else showCanvas("scar", g, "perim-old", SCAR_OPACITY);
+}
 
 function lowerBound(a, v) {   // first index with a[i] >= v, a ascending
   let lo = 0, hi = a.length;
@@ -1505,7 +1832,8 @@ function lowerBound(a, v) {   // first index with a[i] >= v, a ascending
 }
 
 function hotFlat(H) {
-  // every loaded detection as time-sorted typed arrays, rebuilt after a load adds rows
+  // every loaded detection as time-sorted typed arrays (mercator x/y), rebuilt after a
+  // load adds rows
   if (H.flat) return H.flat;
   const days = [...H.days.keys()].sort((a, b) => a - b);
   let n = 0;
@@ -1513,8 +1841,8 @@ function hotFlat(H) {
   const t = new Float64Array(n), x = new Float64Array(n), y = new Float64Array(n);
   let i = 0;
   for (const d of days) {
-    for (const r of H.days.get(d).sort((a, b) => a[2] - b[2])) {
-      t[i] = r[2]; x[i] = r[3]; y[i] = r[4]; i++;
+    for (const r of H.days.get(d).sort((a, b) => a.t - b.t)) {
+      t[i] = r.t; x[i] = mercX(r.lon); y[i] = mercY(r.lat); i++;
     }
   }
   return (H.flat = { t, x, y });
@@ -1525,19 +1853,8 @@ function renderScar(H, p) {
   const F = hotFlat(H);
   const lo = lowerBound(F.t, H.span.start);
   const hi = Math.max(lo, lowerBound(F.t, p - HOT_LOOKBACK_H * HOUR));
-  scarLayer.update(F, lo, hi, Palette.get().scar);
+  scarUpdate(F, lo, hi, Palette.get().scar);
   return hi - lo;
-}
-
-function hotMarker(r, renderer) {
-  const m = L.circleMarker([r[0], r[1]], { renderer, radius: 3, weight: 0.5 });
-  m._r = r;
-  return m;
-}
-
-function dropHotMarks(H, d) {
-  for (const m of H.marks.get(d) || []) state.hotLayer.removeLayer(m);
-  H.marks.delete(d);
 }
 
 function clearHotspots() {
@@ -1545,14 +1862,10 @@ function clearHotspots() {
   clearTimeout(hotFetchTimer);
   const H = state.hot;
   if (H && H.req) H.req.ctl.abort();
-  if (state.hotLayer) { map.removeLayer(state.hotLayer); state.hotLayer = null; }
-  // Leaflet never removes a renderer itself, and its full-viewport canvas would keep
-  // taking the pointer from the fire markers below. A removed canvas renderer also
-  // keeps its cancelled redraw request and never repaints until the map moves, so
-  // every session gets a fresh one (refreshHotspots)
-  if (H && map.hasLayer(H.renderer)) map.removeLayer(H.renderer);
+  map.getSource("hot").setData(EMPTY);
+  dropCanvas("scar");
+  scar.grid = null;
   state.hot = null;
-  scarLayer.update(null, 0, 0, null);
 }
 
 async function refreshHotspots() {
@@ -1570,21 +1883,19 @@ async function refreshHotspots() {
   const [lon, lat] = f.centroid;
   // size the query box from the latest perimeter (megafires dwarf a fixed radius —
   // a fixed box visibly clips the dot cloud along straight lines); centroid fallback
-  // NB: the API's bbox is lat-first (min_lat,min_lon,max_lat,max_lon)
-  let bbox = `${lat - 0.4},${lon - 0.4},${lat + 0.4},${lon + 0.4}`;
+  let box = { s: lat - 0.4, w: lon - 0.4, n: lat + 0.4, e: lon + 0.4 };
   const cur = [...state.perimIndex].reverse().find(p => state.perimLayers.has(p.ems));
   const latestPerim = cur && state.perimLayers.get(cur.ems);
-  if (latestPerim) {
-    const b = latestPerim.getBounds();
-    bbox = `${b.getSouth() - 0.2},${b.getWest() - 0.2},${b.getNorth() + 0.2},${b.getEast() + 0.2}`;
+  if (latestPerim && latestPerim.bbox[0] <= latestPerim.bbox[2]) {
+    const [w, s, e, n] = latestPerim.bbox;
+    box = { s: s - 0.2, w: w - 0.2, n: n + 0.2, e: e + 0.2 };
   }
-  state.hotLayer = L.layerGroup().addTo(map);
-  // days: day -> detections, each [lat, lon, t, x0, y0, source, acq_date, acq_time,
-  // frp, confidence] with (x0, y0) its zoom-0 map pixel; marks: day -> markers,
-  // only for the days in the window behind the playhead; req: the request in flight
-  state.hot = { bbox, span, days: new Map(), marks: new Map(), keys: new Set(), covered: new Set(),
-                capped: false, req: null, flat: null, histError: "", topT: -Infinity,
-                renderer: L.canvas({ padding: 0.2, pane: "hotspots" }) };   // thousands of points -> canvas
+  scarCanvas(box);
+  // days: day -> detections {lat, lon, t, src, date, time, frp, conf, id}; recs: every
+  // detection by id (for the hover labels); req: the request in flight
+  // NB: the API's bbox is lat-first (min_lat,min_lon,max_lat,max_lon)
+  state.hot = { bbox: `${box.s},${box.w},${box.n},${box.e}`, span, days: new Map(), recs: [], keys: new Set(),
+                covered: new Set(), capped: false, req: null, flat: null, histError: "" };
   renderHotspots();
   ensureHotCoverage();
 }
@@ -1619,8 +1930,7 @@ async function ensureHotCoverage(historyOnly) {
   if (H.req === req) H.req = null;
   if (state.hot !== H) return;
   const feats = gj.features || [];
-  let last = d;
-  const grown = new Set();
+  let last = d, grown = false;
   for (const feat of feats) {
     const props = feat.properties || {}, c = feat.geometry && feat.geometry.coordinates;
     const t = parseAcq(props);
@@ -1629,14 +1939,14 @@ async function ensureHotCoverage(historyOnly) {
     const key = `${props.acq_date}|${props.acq_time}|${c[0]}|${c[1]}|${props.source}`;
     if (H.keys.has(key)) continue;
     H.keys.add(key);
-    const day = dayOf(t), xy = map.project([c[1], c[0]], 0);
+    const day = dayOf(t), r = { lat: c[1], lon: c[0], t, src: props.source, date: props.acq_date,
+                                time: props.acq_time, frp: props.frp, conf: props.confidence, id: H.recs.length };
+    H.recs.push(r);
     if (!H.days.has(day)) H.days.set(day, []);
-    H.days.get(day).push([c[1], c[0], t, xy.x, xy.y,
-                          props.source, props.acq_date, props.acq_time, props.frp, props.confidence]);
-    grown.add(day);
+    H.days.get(day).push(r);
+    grown = true;
   }
-  for (const day of grown) dropHotMarks(H, day);   // remade with the new rows on render
-  if (grown.size) H.flat = null;
+  if (grown) H.flat = null;
   // rows come oldest-first: an uncapped reply is complete through today; a capped
   // one only up to its last day, which may be partial (and is refetched next)
   const full = feats.length < HOT_LIMIT;
@@ -1666,44 +1976,21 @@ function renderHotspots() {
     +el.value < +el.max || state.hotSpan.contained ? fmtTs(p) : "now";
   const H = state.hot;
   if (!H) return;
+  // the detections in the 7 days behind the playhead, colored by their age at it
   const d0 = dayOf(p - HOT_LOOKBACK_H * HOUR), d1 = dayOf(p);
-  for (const d of H.marks.keys()) {   // days that slid out of the window leave the map
-    if (d < d0 || d > d1) dropHotMarks(H, d);
-  }
-  let vis = 0, pending = false, restack = false;
+  const features = [];
+  let pending = false;
   for (let d = d0; d <= d1; d++) {
     if (!H.covered.has(d)) pending = true;
-    const recs = H.days.get(d);
-    if (!recs) continue;
-    if (!H.marks.has(d)) {
-      H.marks.set(d, recs.slice().sort((a, b) => a[2] - b[2]).map(r => hotMarker(r, H.renderer)));
-    }
-    for (const m of H.marks.get(d)) {
-      const col = hotColor((p - m._r[2]) / HOUR);
-      if (!col) { state.hotLayer.removeLayer(m); continue; }
-      vis++;
-      m.setStyle({ color: col, fillColor: col, opacity: 0.9, fillOpacity: 0.55 });
-      if (!m.getTooltip()) {
-        const [, , , , , source, date, time, frp, conf] = m._r;
-        m.bindTooltip(`${source || "?"} ${date || ""} ${String(time || "").replace(".0", "")}Z · FRP ${frp ?? "?"} · conf ${conf ?? "?"}`);
-      }
-      if (!state.hotLayer.hasLayer(m)) {
-        state.hotLayer.addLayer(m);
-        if (m._r[2] < H.topT) restack = true;
-        else H.topT = m._r[2];
-      }
+    for (const r of H.days.get(d) || []) {
+      const col = hotColor((p - r.t) / HOUR);
+      if (!col) continue;
+      r.geometry = r.geometry || { type: "Point", coordinates: [r.lon, r.lat] };
+      features.push({ type: "Feature", geometry: r.geometry, properties: { c: col, t: r.t / HOUR, id: r.id } });
     }
   }
-  if (restack) {
-    // the canvas paints in insertion order, so an older dot added after newer ones
-    // (scrubbing back, or a day re-made by a late load) would cover them: re-stack
-    // every visible dot oldest -> newest so the freshest detections stay on top
-    for (let d = d0; d <= d1; d++) {
-      for (const m of H.marks.get(d) || []) {
-        if (state.hotLayer.hasLayer(m)) { m.bringToFront(); H.topT = m._r[2]; }
-      }
-    }
-  }
+  map.getSource("hot").setData({ type: "FeatureCollection", features });
+  const vis = features.length;
   const scar = renderScar(H, p);
   const first = dayOf(H.span.start), today = dayOf(Date.now());
   let have = 0;
@@ -1737,7 +2024,7 @@ function renderHotLegend() {
 
 function applyPalette() {
   const pal = Palette.get();
-  if (state.toaGeo) paintToa(toaGrid(state.toaGeo));
+  if (state.toaGrid) { paintToa(state.toaGrid); pushCanvas("fc"); }
   renderToaLegend();
   stylePerims();
   for (const dot of document.querySelectorAll("#perimlist .dot.cur")) dot.style.background = pal.perimeter;
