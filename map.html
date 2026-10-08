@@ -164,6 +164,11 @@
   .lane-cap { height: 12px; margin: 2px 3px 0; color: var(--ink-2); font-size: 10px; line-height: 12px;
               white-space: nowrap; }
   .lane-cap b { color: var(--c); font-weight: 700; }
+  .base-toggle { display: flex; overflow: hidden; border-radius: 6px; box-shadow: 0 1px 4px rgba(59, 29, 41, 0.3); }
+  .base-toggle button { padding: 6px 10px; border: 0; background: var(--surface); color: var(--ink-2);
+                        font: 600 12px/1 var(--font-sans); cursor: pointer; }
+  .base-toggle button + button { border-left: 1px solid var(--grid); }
+  .base-toggle button.on { background: var(--accent); color: var(--on-accent); }
   .tl-guides { position: absolute; inset: 0; pointer-events: none; }
   .tl-guides i { position: absolute; width: 1px; margin-left: -0.5px; background: var(--c); opacity: .6; }
   .hot-legend { display: flex; align-items: center; gap: 8px; margin: 1px 0 2px;
@@ -341,8 +346,45 @@ const OVERVIEW_VIEW = [[41, -114], 5];
 if (new URLSearchParams(location.search).get("fire")) document.getElementById("side").classList.remove("nosel");
 
 const map = L.map("map").setView(...OVERVIEW_VIEW);
-L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-  { maxZoom: 16, attribution: "OSM · forecasts: Pyregence · perimeters: NIFC · hotspots: NASA VIIRS" }).addTo(map);
+const DATA_CREDIT = "forecasts: Pyregence · perimeters: NIFC · hotspots: NASA VIIRS";
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services";
+const BASEMAPS = {
+  map: L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    { maxZoom: 16, attribution: `OSM · ${DATA_CREDIT}` }),
+  // imagery plus Esri's place names and boundaries, so the view stays readable
+  satellite: L.layerGroup([
+    L.tileLayer(`${ESRI}/World_Imagery/MapServer/tile/{z}/{y}/{x}`,
+      { maxZoom: 16, attribution: `Imagery © Esri, Maxar, Earthstar Geographics · ${DATA_CREDIT}` }),
+    L.tileLayer(`${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`, { maxZoom: 16 }),
+  ]),
+};
+
+function setBasemap(name) {
+  for (const [key, layer] of Object.entries(BASEMAPS)) {
+    if (key === name) { if (!map.hasLayer(layer)) layer.addTo(map); }
+    else if (map.hasLayer(layer)) map.removeLayer(layer);
+  }
+  for (const b of document.querySelectorAll(".base-toggle button")) b.classList.toggle("on", b.dataset.base === name);
+  try { localStorage.setItem("cornea-basemap", name); } catch (e) { /* the choice just isn't remembered */ }
+}
+
+const BaseToggle = L.Control.extend({
+  options: { position: "topright" },
+  onAdd() {
+    const el = L.DomUtil.create("div", "base-toggle");
+    el.innerHTML = '<button type="button" data-base="map">Map</button>' +
+                   '<button type="button" data-base="satellite">Satellite</button>';
+    L.DomEvent.disableClickPropagation(el);
+    el.addEventListener("click", ev => { const b = ev.target.closest("button"); if (b) setBasemap(b.dataset.base); });
+    return el;
+  },
+});
+new BaseToggle().addTo(map);
+{
+  let saved = "map";
+  try { saved = localStorage.getItem("cornea-basemap") || "map"; } catch (e) { /* default */ }
+  setBasemap(BASEMAPS[saved] ? saved : "map");
+}
 // burn scar above the forecast raster and perimeters (overlayPane, 400) and under
 // the active hotspots; the scar is display-only, so its canvas never takes the pointer
 const scarPane = map.createPane("scar");
