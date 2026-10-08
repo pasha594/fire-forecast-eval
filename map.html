@@ -153,11 +153,12 @@
   .lane { position: relative; height: 12px; margin: 0 3px; cursor: ew-resize; touch-action: none; }
   .lane::before { content: ""; position: absolute; left: 0; right: 0; top: 8px; height: 1px; background: var(--grid); }
   /* the other runs/snapshots are solid light dots, so overlaps don't darken into what
-     looks like an active mark; the active one is a slim bar under a small triangle */
+     looks like an active mark; the active one is a full-color dot with a small triangle
+     resting on it, and its guide line leaves from the dot's bottom */
   .lane i { position: absolute; top: 5.5px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%;
             background: color-mix(in srgb, var(--c) 35%, var(--surface)); }
-  .lane i.on { top: 4px; width: 2px; height: 8px; margin-left: -1px; border-radius: 0; background: var(--c); }
-  .lane i.on::before { content: ""; position: absolute; left: -3.5px; top: -4px;
+  .lane i.on { background: var(--c); }
+  .lane i.on::before { content: ""; position: absolute; left: -2px; top: -5.5px;
                        border: solid transparent; border-width: 5px 4.5px 0; border-top-color: var(--c); }
   /* the selected run / snapshot, named at the left of its lane so it never moves */
   .lane-cap { height: 12px; margin: 2px 3px 0; color: var(--ink-2); font-size: 10px; line-height: 12px;
@@ -1263,7 +1264,8 @@ function renderHotMarks() {
       (act ? `<i class="on" style="${at(act)}"></i>` : "");
     if (!act) continue;
     if (kind === "run") renderArrivalBar(bar, act);
-    guide(act.t, color, lane.offsetTop + lane.offsetHeight, mid);
+    const dot = lane.lastElementChild;
+    guide(act.t, color, lane.offsetTop + dot.offsetTop + dot.offsetHeight, mid);
   }
   if (span.contained) guide(span.end, pal.contained, track.offsetTop, track.offsetTop + track.offsetHeight + 4);
 }
