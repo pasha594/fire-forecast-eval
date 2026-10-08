@@ -109,26 +109,28 @@
   .toa-ticks span.last { right: 0; transform: none; }
   input[type=range] { width: 100%; }
   #timeslider { display: block; margin: 0; }
-  /* hotspot playhead: own track and thumb so the 12h ticks under it line up with
-     the thumb's travel (native thumbs differ in width between browsers); the tick
-     row is inset by half the 14px thumb on each side */
-  #hotTime { -webkit-appearance: none; appearance: none; display: block; height: 18px;
-             margin: 2px 0 0; padding: 0; border: 0; background: transparent; }
-  #hotTime::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--axis); }
-  #hotTime::-moz-range-track { height: 4px; border-radius: 2px; background: var(--axis); }
-  /* a slim bar drawn inside the 14px thumb box (the box width sets the tick inset) */
-  #hotTime::-webkit-slider-thumb { -webkit-appearance: none; box-sizing: border-box; width: 14px;
-             height: 18px; margin-top: -7px; border: 0; border-radius: 2px;
-             background: linear-gradient(to right, transparent 4px, var(--ink) 4px 5px,
-               var(--accent) 5px 9px, var(--ink) 9px 10px, transparent 10px); }
-  #hotTime::-moz-range-thumb { box-sizing: border-box; width: 14px; height: 18px; border: 0; border-radius: 2px;
-             background: linear-gradient(to right, transparent 4px, var(--ink) 4px 5px,
-               var(--accent) 5px 9px, var(--ink) 9px 10px, transparent 10px); }
-  #hotTicks { position: relative; height: 8px; margin: 3px 7px 0; }
+  /* hotspot playhead: the track line is ours, drawn under a transparent slider so the
+     forecast's arrival bands can sit on it; the thumb is a 6px bar, and every row on
+     this time axis is inset by half of it (3px) to line up with the thumb's travel */
+  .track { position: relative; height: 16px; margin-top: 3px; }
+  .track-line { position: absolute; left: 0; right: 0; top: 6px; height: 4px; border-radius: 2px;
+                background: var(--axis); }
+  #fcBar { position: absolute; left: 3px; right: 3px; top: 6px; height: 4px; }
+  #fcBar i { position: absolute; top: 0; height: 4px; }
+  #hotTime { -webkit-appearance: none; appearance: none; position: relative; display: block; width: 100%;
+             height: 16px; margin: 0; padding: 0; border: 0; background: transparent; }
+  #hotTime::-webkit-slider-runnable-track { height: 16px; background: transparent; }
+  #hotTime::-moz-range-track { height: 16px; background: transparent; }
+  #hotTime::-webkit-slider-thumb { -webkit-appearance: none; width: 6px; height: 16px; border: 0;
+             border-radius: 3px; background: #ffc53d; box-shadow: 0 1px 3px rgba(59, 29, 41, 0.35); }
+  #hotTime::-moz-range-thumb { width: 6px; height: 16px; border: 0; border-radius: 3px;
+             background: #ffc53d; box-shadow: 0 1px 3px rgba(59, 29, 41, 0.35); }
+  /* notches hang from the bottom of the track line */
+  #hotTicks { position: relative; height: 8px; margin: -6px 3px 0; pointer-events: none; }
   #hotTicks span { position: absolute; top: 0; width: 1px; height: 4px; margin-left: -0.5px;
                    background: var(--axis); }
   #hotTicks span.major { height: 8px; background: var(--muted); }
-  #hotDates { position: relative; height: 17px; margin: 1px 7px 0; }
+  #hotDates { position: relative; height: 17px; margin: 1px 3px 0; }
   /* right end at the tick, slanting down-left */
   #hotDates span { position: absolute; top: 0; color: var(--muted); font-size: 8.5px; line-height: 9px;
                    white-space: nowrap; transform-origin: 100% 0; transform: rotate(-35deg); }
@@ -146,21 +148,23 @@
   .hot-key .lk { display: inline-block; width: 3px; height: 10px; margin: 0 4px -1px 8px;
                  border-radius: 1px; background: var(--c); }
   .hot-key :first-child { margin-left: 0; }
-  /* perimeter / run lanes share the playhead track's time axis (same 7px inset) */
+  /* perimeter / run lanes share the playhead track's time axis (same 3px inset) */
   .tl { position: relative; }
-  .lane { position: relative; height: 10px; margin: 0 7px; cursor: ew-resize; touch-action: none; }
+  .lane { position: relative; height: 10px; margin: 0 3px; cursor: ew-resize; touch-action: none; }
   .lane::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; height: 1px; background: var(--grid); }
-  .lane i { position: absolute; top: 2px; width: 2px; height: 7px; margin-left: -1px; border-radius: 1px;
-            background: var(--c); opacity: .22; }
-  .lane i.on { top: 0; height: 10px; width: 3px; margin-left: -1.5px; border-radius: 0 0 1px 1px; opacity: 1; }
-  /* the active tick's label flies as a flag from the top of the tick, above the lane */
-  .flags { position: relative; height: 12px; margin: 2px 7px 0; pointer-events: none; }
-  .flag { position: absolute; top: 0; height: 12px; padding: 0 4px; background: var(--c); color: #fff;
-          font: 600 9.5px/12px var(--font-sans); white-space: nowrap; border-radius: 0 3px 3px 0; }
-  .flag.flip { border-radius: 3px 0 0 3px; }
-  /* the selected run's arrival bands laid on the time axis (run time + band hours) */
-  .fc-bar { position: relative; height: 4px; margin: 1px 7px 0; }
-  .fc-bar i { position: absolute; top: 0; height: 4px; }
+  /* the other runs/snapshots are faint dots; the active one is a bar topped by its flag */
+  .lane i { position: absolute; top: 2.5px; width: 5px; height: 5px; margin-left: -2.5px; border-radius: 50%;
+            background: var(--c); opacity: .3; }
+  .lane i.on { top: 0; width: 3px; height: 10px; margin-left: -1.5px; border-radius: 0 0 1px 1px; opacity: 1; }
+  /* the flag keeps the bar's color as its edge (3px on the side it flies from, so it
+     continues the bar) with a lighter fill; it drags its lane */
+  .flags { position: relative; height: 12px; margin: 2px 3px 0; pointer-events: none; }
+  .flag { position: absolute; top: 0; box-sizing: border-box; height: 12px; padding: 0 4px;
+          border: 1px solid var(--c); border-left-width: 3px; border-radius: 0 3px 3px 0;
+          background: color-mix(in srgb, var(--c) 14%, var(--surface)); color: var(--c);
+          font: 600 9.5px/10px var(--font-sans); white-space: nowrap;
+          pointer-events: auto; cursor: ew-resize; touch-action: none; }
+  .flag.flip { border-left-width: 1px; border-right-width: 3px; border-radius: 3px 0 0 3px; }
   .tl-guides { position: absolute; inset: 0; pointer-events: none; }
   .tl-guides i { position: absolute; width: 1px; margin-left: -0.5px; background: var(--c); opacity: .6; }
   .hot-legend { display: flex; align-items: center; gap: 8px; margin: 1px 0 2px;
@@ -312,10 +316,10 @@
     <div class="tl" id="tl">
       <div class="flags" data-kind="run"></div>
       <div class="lane" data-kind="run" title="Forecast runs: press or drag to show one"></div>
-      <div class="fc-bar" id="fcBar"></div>
       <div class="flags" data-kind="perimeter"></div>
       <div class="lane" data-kind="perimeter" title="Perimeter snapshots: press or drag to show one"></div>
-      <input type="range" id="hotTime" min="0" max="336" value="336" aria-label="hotspot playhead">
+      <div class="track"><div class="track-line"></div><div id="fcBar"></div>
+        <input type="range" id="hotTime" min="0" max="336" value="336" aria-label="hotspot playhead"></div>
       <div id="hotTicks" aria-hidden="true"></div>
       <div id="hotDates" aria-hidden="true"></div>
       <div class="tl-guides" id="tlGuides" aria-hidden="true"></div>
@@ -1229,8 +1233,8 @@ function renderHotMarks() {
   // line across the track
   const span = state.hotSpan, pal = Palette.get();
   document.getElementById("hotEndLabel").style.color = span && span.contained ? pal.contained : "";
-  const key = [[pal.perimeter, "perimeter", "lk"], [RUN_PIN, "forecast run", "lk"]];
-  if (span && span.contained) key.push([pal.contained, "contained", "mk"]);
+  const key = [[pal.perimeter, "Perimeter", "lk"], [RUN_PIN, "Forecast run", "lk"]];
+  if (span && span.contained) key.push([pal.contained, "Contained", "mk"]);
   document.getElementById("hotKey").innerHTML =
     key.map(([c, what, cls]) => `<i class="${cls}" style="--c:${c}"></i>${what}`).join("");
   const guides = document.getElementById("tlGuides"), lanes = document.querySelectorAll(".lane");
@@ -1240,10 +1244,10 @@ function renderHotMarks() {
   for (const lane of lanes) lane.innerHTML = "";
   for (const row of document.querySelectorAll(".flags")) row.innerHTML = "";
   if (!span || !state.sel) return;
-  const tl = document.getElementById("tl"), track = document.getElementById("hotTime");
+  const tl = document.getElementById("tl"), track = tl.querySelector(".track");
   const guide = (t, color, top, bottom) => {
     const g = document.createElement("i");
-    g.style.cssText = `left:${7 + pinFrac(t) * (tl.clientWidth - 14)}px;top:${top}px;` +
+    g.style.cssText = `left:${3 + pinFrac(t) * (tl.clientWidth - 6)}px;top:${top}px;` +
       `height:${Math.max(0, bottom - top)}px;--c:${color}`;
     guides.appendChild(g);
   };
@@ -1259,17 +1263,16 @@ function renderHotMarks() {
     const flag = document.createElement("b");
     flag.className = "flag";
     flag.style.setProperty("--c", color);
-    flag.textContent = `${kind === "run" ? "forecast" : "perimeter"} ${fmtShort(act.t)}`;
+    flag.textContent = `${kind === "run" ? "Forecast" : "Perimeter"} ${fmtShort(act.t)}`;
     flags.appendChild(flag);
     // the flag's edge continues the 3px tick below it; it flies left near the right end
     const x = pinFrac(act.t) * flags.clientWidth, w = flag.offsetWidth;
-    if (x - 1.5 + w <= flags.clientWidth + 7) flag.style.left = `${x - 1.5}px`;
+    if (x - 1.5 + w <= flags.clientWidth + 3) flag.style.left = `${x - 1.5}px`;
     else { flag.classList.add("flip"); flag.style.left = `${x + 1.5 - w}px`; }
     if (kind === "run") renderArrivalBar(bar, act);
-    const below = kind === "run" ? bar : lane;
-    guide(act.t, color, below.offsetTop + below.offsetHeight, mid);
+    guide(act.t, color, lane.offsetTop + lane.offsetHeight, mid);
   }
-  if (span.contained) guide(span.end, pal.contained, track.offsetTop, track.offsetTop + track.offsetHeight + 8);
+  if (span.contained) guide(span.end, pal.contained, track.offsetTop, track.offsetTop + track.offsetHeight + 4);
 }
 
 function renderArrivalBar(bar, run) {
@@ -1319,50 +1322,61 @@ function applyPin(kind, target) {
 }
 
 function wireLanes() {
-  // press anywhere on a lane to jump to the nearest tick; drag to move between ticks.
-  // The highlight follows the pointer at once, the map after a 120ms rest and on release
   for (const lane of document.querySelectorAll(".lane")) {
-    const kind = lane.dataset.kind;
-    lane.addEventListener("pointerdown", ev => {
-      if (ev.button !== 0 || !state.sel) return;
-      const items = pinTargets(kind);
-      if (!items.length) return;
-      ev.preventDefault();
-      lane.setPointerCapture(ev.pointerId);
-      let cur = null, timer = 0;
-      const pick = e => {
-        const r = lane.getBoundingClientRect();
-        const fx = Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1);
-        const t = state.hotSpan.start + fx * +document.getElementById("hotTime").max * HOUR;
-        // nearest on screen; among ticks stacked at a clamped edge, nearest in time
-        let best = null, bd = Infinity, bt = Infinity;
-        for (const c of items) {
-          const d = Math.abs(pinFrac(c.t) - fx), dt = Math.abs(c.t - t);
-          if (d < bd - 1e-9 || (d < bd + 1e-9 && dt < bt)) { best = c; bd = d; bt = dt; }
-        }
-        if (best === cur) return;
-        cur = best;
-        state.lanePreview = { kind, item: cur };
-        renderHotMarks();
-        clearTimeout(timer);
-        timer = setTimeout(() => applyPin(kind, cur), 120);
-      };
-      const up = () => {
-        lane.removeEventListener("pointermove", pick);
-        lane.removeEventListener("pointerup", up);
-        lane.removeEventListener("pointercancel", up);
-        clearTimeout(timer);
-        state.lanePreview = null;
-        if (cur) applyPin(kind, cur);
-        renderHotMarks();
-      };
-      lane.addEventListener("pointermove", pick);
-      lane.addEventListener("pointerup", up);
-      lane.addEventListener("pointercancel", up);
-      pick(ev);
+    lane.addEventListener("pointerdown", ev => startLaneDrag(lane, ev, false));
+  }
+  for (const row of document.querySelectorAll(".flags")) {
+    row.addEventListener("pointerdown", ev => {
+      if (ev.target.closest(".flag")) startLaneDrag(document.querySelector(`.lane[data-kind="${row.dataset.kind}"]`), ev, true);
     });
   }
-  window.addEventListener("resize", renderHotMarks);   // labels and guides are placed in px
+  window.addEventListener("resize", renderHotMarks);   // flags and guides are placed in px
+}
+
+function startLaneDrag(lane, ev, fromFlag) {
+  // press a lane to jump to the nearest tick, or grab its flag; dragging moves between
+  // ticks. The highlight follows the pointer at once, the map after a 120ms rest and on
+  // release. Capture goes to the lane: flags are rebuilt on every render
+  const kind = lane.dataset.kind;
+  if (ev.button !== 0 || !state.sel) return;
+  const items = pinTargets(kind);
+  if (!items.length) return;
+  ev.preventDefault();
+  lane.setPointerCapture(ev.pointerId);
+  const r0 = lane.getBoundingClientRect(), act = laneActive(kind, items);
+  // a grabbed flag keeps its tick under the same offset from the pointer
+  const grab = fromFlag && act ? r0.left + pinFrac(act.t) * r0.width - ev.clientX : 0;
+  let cur = null, timer = 0;
+  const pick = e => {
+    const r = lane.getBoundingClientRect();
+    const fx = Math.min(Math.max((e.clientX + grab - r.left) / r.width, 0), 1);
+    const t = state.hotSpan.start + fx * +document.getElementById("hotTime").max * HOUR;
+    // nearest on screen; among ticks stacked at a clamped edge, nearest in time
+    let best = null, bd = Infinity, bt = Infinity;
+    for (const c of items) {
+      const d = Math.abs(pinFrac(c.t) - fx), dt = Math.abs(c.t - t);
+      if (d < bd - 1e-9 || (d < bd + 1e-9 && dt < bt)) { best = c; bd = d; bt = dt; }
+    }
+    if (best === cur) return;
+    cur = best;
+    state.lanePreview = { kind, item: cur };
+    renderHotMarks();
+    clearTimeout(timer);
+    timer = setTimeout(() => applyPin(kind, cur), 120);
+  };
+  const up = () => {
+    lane.removeEventListener("pointermove", pick);
+    lane.removeEventListener("pointerup", up);
+    lane.removeEventListener("pointercancel", up);
+    clearTimeout(timer);
+    state.lanePreview = null;
+    if (cur) applyPin(kind, cur);
+    renderHotMarks();
+  };
+  lane.addEventListener("pointermove", pick);
+  lane.addEventListener("pointerup", up);
+  lane.addEventListener("pointercancel", up);
+  pick(ev);
 }
 
 // The burn scar: every detection older than the ramp, in one canvas. A big fire's
