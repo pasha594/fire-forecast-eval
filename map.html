@@ -52,10 +52,16 @@
   .brandrow .palette-gear { margin: -3px 0; }
   h1 { font: 800 19px/24px var(--font-serif); margin: 0 0 var(--sp-1); }
   .sub { color: var(--ink-2); font-size: var(--fs-label); line-height: var(--lh-label); margin: 0 0 var(--sp-4); }
-  .linkbtn { display: block; padding: 0; margin: 0 0 var(--sp-2); border: 0; background: none; cursor: pointer;
-             font: var(--fs-label)/var(--lh-label) var(--font-sans); color: var(--link); text-decoration: underline;
-             text-decoration-color: var(--accent); text-underline-offset: 2px; }
-  a:hover, .linkbtn:hover { text-decoration-color: var(--ink); }
+  a:hover { text-decoration-color: var(--ink); }
+  /* a long fire name ends in an ellipsis (the heading's tooltip has it whole) */
+  #pageTitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* with a fire selected, a back button to all fires leads the search row */
+  .searchrow { display: flex; gap: var(--sp-3); }
+  .searchrow .picker { flex: 1; min-width: 0; }
+  .iconbtn { flex: none; width: var(--ctl-h); height: var(--ctl-h); padding: 0; cursor: pointer;
+             border: 1px solid var(--axis); border-radius: var(--ctl-r); background: var(--surface);
+             color: var(--ink-2); font: 15px/1 var(--font-sans); }
+  .iconbtn:hover { border-color: var(--muted); background: var(--hover); color: var(--ink); }
   /* one section rhythm: 8px, the rule, 4px, a 16px header row, then items 4px apart (the
      flex gap; hidden items take none). Keep ".sec > *" ahead of the component rules below */
   .sec { display: flex; flex-direction: column; gap: var(--sp-2);
@@ -76,7 +82,8 @@
           letter-spacing: 0; cursor: pointer; }
   .help:hover, .help[aria-expanded="true"] { color: var(--ink); border-color: var(--ink-2); background: var(--hover); }
   #skillSec { position: relative; }
-  .help-pop { display: none; position: absolute; left: 0; right: 0; top: 24px; z-index: 1100;
+  /* the metrics section is the panel's last, so its explainer opens upward */
+  .help-pop { display: none; position: absolute; left: 0; right: 0; bottom: calc(100% - 4px); z-index: 1100;
               padding: 8px 10px; background: var(--surface); color: var(--ink);
               border: 1px solid var(--axis); border-radius: 8px;
               box-shadow: 0 6px 18px rgba(59, 29, 41, 0.16); font-size: var(--fs-meta); line-height: 1.45; }
@@ -237,7 +244,6 @@
   /* over MapLibre's own control-button hover and press shading */
   .view-toggles .base-toggle button:not(.on):hover { background: var(--hover); color: var(--ink); }
   .view-toggles .base-toggle button.on:hover, .view-toggles .base-toggle button.on:active { background: var(--accent); }
-  #fcLive { cursor: help; }
   /* hover labels on the map; they never take the pointer from what's under them */
   .map-tip { pointer-events: none; }
   .map-tip .maplibregl-popup-content { padding: 4px 8px; border-radius: 4px; color: var(--ink);
@@ -253,7 +259,13 @@
   body.tl-docked .maplibregl-ctrl-bottom-left,
   body.tl-docked .maplibregl-ctrl-bottom-right { bottom: var(--dock-h, 0px); }
   /* the dock: the panel's scale one step up (13 / 12 / 11) */
-  #tlDock .hot-head { height: var(--lh-body); margin: 0; font-size: var(--fs-body); line-height: var(--lh-body); }
+  #tlDock .hot-head { height: auto; min-height: var(--lh-body); margin: 0; font-size: var(--fs-body); line-height: var(--lh-body);
+                      align-items: center; }
+  /* docked, the detection legend and count sit in the head, between the playhead and the axis end */
+  .tl-legend:empty { display: none; }
+  .tl-legend { display: flex; align-items: center; gap: 14px; min-width: 0; margin-left: auto; }
+  #tlDock #hotEndLabel { margin-left: 0; }
+  .tl-legend #hotnote { min-width: 0; max-width: 360px; font-weight: 400; }
   #tlDock #hotEndLabel { font-size: var(--fs-label); }
   #tlDock .lane-cap { height: 16px; margin-top: 3px; font-size: var(--fs-label); line-height: 16px; }
   #tlDock .lane { height: 15px; }
@@ -325,14 +337,16 @@
   <div class="brandrow">
     <div class="lockup"><a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><img src="cornea-logo-on-light.webp" alt="Cornea"></a><span class="product">Projector</span></div>
   </div>
-  <h1>Fire forecast map</h1>
-  <p class="sub">Pyrecast ELMFIRE layers over Cornea perimeters &amp; hotspots ·
-  <a href="report.html">Metrics report</a></p>
+  <!-- the page's title, or with a fire selected, the fire (see setMode) -->
+  <h1 id="pageTitle">Fire forecast map</h1>
+  <p class="sub" id="pageSub">Pyrecast fire-spread forecasts · <a href="report.html">Metrics report</a></p>
 
-  <button type="button" id="allFires" class="linkbtn fire-only">&larr; All fires</button>
-  <div class="picker">
-    <input type="text" id="search" placeholder="Search fires" autocomplete="off" spellcheck="false">
-    <div id="firelist" class="dropdown" hidden></div>
+  <div class="searchrow">
+    <button type="button" id="allFires" class="iconbtn fire-only" aria-label="All fires" title="All fires">&larr;</button>
+    <div class="picker">
+      <input type="text" id="search" placeholder="Search fires" autocomplete="off" spellcheck="false">
+      <div id="firelist" class="dropdown" hidden></div>
+    </div>
   </div>
 
   <div class="sec" id="overview">
@@ -347,9 +361,9 @@
   </div>
 
   <div class="sec fire-only">
-    <h2>Forecast layer <a class="src-logo" href="https://www.pyregence.org/" target="_blank"
-      rel="noopener" title="Forecasts by Pyregence"><img src="pyregence-logo.svg" alt="by Pyregence"></a>
-      <span class="live" id="fcLive" hidden title="The newest run, still on Pyrecast: read live from it">LIVE</span></h2>
+    <div class="sec-head"><h2>Forecast layer <a class="src-logo" href="https://www.pyregence.org/" target="_blank"
+      rel="noopener" title="Forecasts by Pyregence"><img src="pyregence-logo.svg" alt="by Pyregence"></a></h2>
+      <label class="row"><input type="checkbox" id="chkFc" checked>Show</label></div>
     <select id="selRun"></select>
     <div class="pair">
       <select id="selVar">
@@ -359,7 +373,6 @@
         <option value="crown-fire">Crown fire</option>
         <option value="hours-since-burned">Hours since burned</option>
         <option value="isochrones">Isochrones</option>
-        <option value="">None</option>
       </select>
       <select id="selPct">
         <option value="10">10th percentile</option>
@@ -373,9 +386,38 @@
       <label class="ctl"><span class="ctl-head"><span id="timePrefix">Forecast hour</span><b id="timelabel"></b></span>
         <input type="range" id="timeslider" min="0" max="168" value="12"></label>
     </div>
-    <label class="ctl"><span class="ctl-head"><span>Opacity</span><b id="opacityVal">70%</b></span>
-      <input type="range" id="opacity" min="10" max="100" value="70"></label>
     <div class="note" id="wmsnote"></div>
+  </div>
+
+  <div class="sec fire-only">
+    <div class="sec-head"><h2>Perimeters <span class="src">NIFC</span></h2>
+      <label class="row"><input type="checkbox" id="chkPerim" checked>Show</label></div>
+    <div class="picker" id="perimPicker">
+      <button type="button" id="perimBtn" class="dropbtn" disabled>Select a fire</button>
+      <div id="perimlist" class="dropdown" hidden></div>
+    </div>
+  </div>
+
+  <div class="sec fire-only">
+    <div class="sec-head"><h2>Hotspots <span class="src">NASA VIIRS</span></h2>
+      <label class="row"><input type="checkbox" id="chkHot" checked>Show</label></div>
+    <div id="tlSlot"><div id="tlBlock">
+    <div class="hot-head ctl-head"><span>Playhead</span><b id="hotTimeLabel">now</b><span class="tl-legend" id="tlLegend"></span><span id="hotEndLabel" hidden>now</span></div>
+    <div class="tl" id="tl">
+      <div class="lane-cap" data-kind="run"></div>
+      <div class="lane" data-kind="run" title="Forecast runs: press or drag to show one"></div>
+      <div class="lane-cap" data-kind="perimeter"></div>
+      <div class="lane" data-kind="perimeter" title="Perimeter snapshots: press or drag to show one"></div>
+      <div class="track"><div class="track-line"></div><div id="fcBar"></div>
+        <input type="range" id="hotTime" min="0" max="336" value="336" aria-label="hotspot playhead"></div>
+      <div id="hotTicks" aria-hidden="true"></div>
+      <div id="hotDates" aria-hidden="true"></div>
+      <div class="tl-guides" id="tlGuides" aria-hidden="true"></div>
+    </div>
+    </div></div>
+    <div class="hot-key" id="hotKey"></div>
+    <!-- the detection legend and count; with the timeline docked they ride along in its head -->
+    <div id="hotSlot"><div class="hot-legend" id="hotLegend"></div><div class="note" id="hotnote"></div></div>
   </div>
 
   <div class="sec fire-only" id="skillSec">
@@ -398,36 +440,6 @@
     </div>
     <div class="skill-box"><table class="skill" id="skillTable"></table>
       <p class="skill-empty" id="skillEmpty" hidden></p></div>
-  </div>
-
-  <div class="sec fire-only">
-    <h2>Perimeters <span class="src">NIFC</span></h2>
-    <div class="picker" id="perimPicker">
-      <button type="button" id="perimBtn" class="dropbtn" disabled>Select a fire</button>
-      <div id="perimlist" class="dropdown" hidden></div>
-    </div>
-  </div>
-
-  <div class="sec fire-only">
-    <div class="sec-head"><h2>Hotspots <span class="src">NASA VIIRS</span></h2>
-      <label class="row"><input type="checkbox" id="chkHot" checked>Show detections</label></div>
-    <div id="tlSlot"><div id="tlBlock">
-    <div class="hot-head ctl-head"><span>Playhead</span><b id="hotTimeLabel">now</b><span id="hotEndLabel" hidden>now</span></div>
-    <div class="tl" id="tl">
-      <div class="lane-cap" data-kind="run"></div>
-      <div class="lane" data-kind="run" title="Forecast runs: press or drag to show one"></div>
-      <div class="lane-cap" data-kind="perimeter"></div>
-      <div class="lane" data-kind="perimeter" title="Perimeter snapshots: press or drag to show one"></div>
-      <div class="track"><div class="track-line"></div><div id="fcBar"></div>
-        <input type="range" id="hotTime" min="0" max="336" value="336" aria-label="hotspot playhead"></div>
-      <div id="hotTicks" aria-hidden="true"></div>
-      <div id="hotDates" aria-hidden="true"></div>
-      <div class="tl-guides" id="tlGuides" aria-hidden="true"></div>
-    </div>
-    </div></div>
-    <div class="hot-key" id="hotKey"></div>
-    <div class="hot-legend" id="hotLegend"></div>
-    <div class="note" id="hotnote"></div>
   </div>
 </div>
 <div id="mapwrap"><div id="map"></div><div id="tlDock" role="group" aria-label="timeline"></div></div>
@@ -783,18 +795,9 @@ async function init() {
   wireLanes();
   for (const id of ["selRun", "selVar", "selPct"])
     document.getElementById(id).addEventListener("change", refreshWms);
-  document.getElementById("opacity").addEventListener("input", () => {
-    const o = forecastOpacity();
-    document.getElementById("opacityVal").textContent = `${Math.round(o * 100)}%`;
-    if (map.getLayer("fc")) map.setPaintProperty("fc", "raster-opacity", o);
-    map.setPaintProperty("iso", "line-opacity", o);
-    if (map.getLayer("fclive")) map.setPaintProperty("fclive", "raster-opacity", o);
-  });
-  // a reload or Back can restore the slider's value: show it
-  document.getElementById("opacityVal").textContent = `${Math.round(forecastOpacity() * 100)}%`;
   const slider = document.getElementById("timeslider");
   slider.addEventListener("input", () => {           // live label while dragging
-    const variable = document.getElementById("selVar").value;
+    const variable = forecastVar();
     const run = document.getElementById("selRun").value;
     if (TIMED_VARS.has(variable)) {
       state.granIdx = +slider.value;
@@ -809,6 +812,14 @@ async function init() {
   });
   slider.addEventListener("change", setLiveHour);    // live tiles reload on release
   document.getElementById("chkHot").addEventListener("change", refreshHotspots);
+  document.getElementById("chkFc").addEventListener("change", refreshWms);
+  document.getElementById("chkPerim").addEventListener("change", ev => {
+    // the snapshots stay picked; only the layers hide
+    for (const id of ["perim-fill", "perim-old", "perim-cur"]) {
+      map.setLayoutProperty(id, "visibility", ev.target.checked ? "visible" : "none");
+    }
+    renderHotMarks();
+  });
   layoutHotTimeline(defaultHotSpan());
   let hotPending = false;   // setTimeout, not rAF — rAF pauses in hidden tabs
   document.getElementById("hotTime").addEventListener("input", () => {
@@ -826,13 +837,13 @@ function openDropdown(list) {
 }
 
 function showSelectedName() {
-  const f = state.fires.find(x => x.slug === state.sel);
-  document.getElementById("search").value = f ? f.title || f.slug : "";
+  // the heading names the selected fire, so the box goes back to its placeholder
+  document.getElementById("search").value = "";
 }
 
 function wirePickers() {
-  // the search box doubles as the fire dropdown: it shows the selected fire, and
-  // focusing it opens the full list; typing filters it
+  // the search box doubles as the fire dropdown: focusing it opens the full list (the
+  // selected fire highlighted); typing filters it
   const search = document.getElementById("search"), list = document.getElementById("firelist");
   search.addEventListener("focus", () => {
     state.searchDirty = false;
@@ -911,9 +922,22 @@ const fmtRunShort = ts => fmtDT(runDate(ts).getTime());
 const plural = (n, word) => `${n.toLocaleString("en-US")} ${word}${n === 1 ? "" : "s"}`;
 
 function setMode() {
-  const none = !state.sel;
-  document.getElementById("side").classList.toggle("nosel", none);
-  if (none) renderOverview();
+  // with a fire selected, it is the panel's heading (its state and run count under it);
+  // without one, the page's title and the link to the metrics report
+  const f = state.fires.find(x => x.slug === state.sel);
+  const title = document.getElementById("pageTitle"), sub = document.getElementById("pageSub");
+  document.getElementById("side").classList.toggle("nosel", !f);
+  if (f) {
+    title.textContent = title.title = fireName(f);
+    sub.textContent = `${f.slug.split("-")[0].toUpperCase()} · ${plural(f.runs.length, "forecast run")}`;
+    document.title = `${fireName(f)} · Fire forecast map`;
+  } else {
+    title.textContent = "Fire forecast map";
+    title.title = "";
+    sub.innerHTML = 'Pyrecast fire-spread forecasts · <a href="report.html">Metrics report</a>';
+    document.title = "Fire forecast map";
+    renderOverview();
+  }
 }
 
 function renderOverview() {
@@ -1061,7 +1085,9 @@ function labelForecastHour(run) {
     `+${idx}h · ${fmtDT(t.getTime())}`;
 }
 
-const forecastOpacity = () => +document.getElementById("opacity").value / 100;
+const forecastOpacity = () => +opacityInput.value / 100;   // Settings → Forecast layer
+// the variable on the map: "" while the forecast is switched off
+const forecastVar = () => (document.getElementById("chkFc").checked ? document.getElementById("selVar").value : "");
 const varLabel = v => document.querySelector(`#selVar option[value="${v}"]`).textContent.toLowerCase();
 const byNumber = (a, b) => a - b;
 
@@ -1072,7 +1098,7 @@ function refreshWms() {
   const token = ++state.wmsSeq;
   const f = state.fires.find(x => x.slug === state.sel);
   const run = document.getElementById("selRun").value;
-  const variable = document.getElementById("selVar").value;
+  const variable = forecastVar();
   const pct = document.getElementById("selPct").value;
   const note = document.getElementById("wmsnote");
   // the newest runs (still on Pyrecast) are read live, through the relay: time of
@@ -1084,7 +1110,6 @@ function refreshWms() {
   dropCanvas("fclive");
   map.getSource("iso").setData(EMPTY);
   state.fc = state.toaGrid = null;
-  document.getElementById("fcLive").hidden = !layer || (variable !== "time-of-arrival" && isDead(layer));
   note.textContent = "";
   note.className = "note";
   configureTimeSlider(variable);
@@ -1338,7 +1363,6 @@ async function renderToa(f, run, pct, note, token) {
   // selection may have moved on while the tif downloaded
   if (token !== state.wmsSeq) return;
   if (!geo) {
-    document.getElementById("fcLive").hidden = true;
     note.textContent = missingNote(f, run, pct, "time of arrival", [...f.pcts[run]].sort(byNumber));
     note.className = "warn";
     return;
@@ -1895,8 +1919,9 @@ function laneActive(kind, items) {
   }
   if (kind === "run") {
     const run = document.getElementById("selRun").value;
-    return document.getElementById("selVar").value ? items.find(c => c.run === run) : null;
+    return forecastVar() ? items.find(c => c.run === run) : null;
   }
+  if (!document.getElementById("chkPerim").checked) return null;
   const shown = new Set([...document.querySelectorAll("#perimlist input:checked")].map(i => i.dataset.ems));
   let best = null;
   for (const c of items) if (shown.has(c.p.ems) && (!best || c.t > best.t)) best = c;
@@ -1951,7 +1976,7 @@ function renderHotMarks() {
 function renderArrivalBar(bar, run) {
   // each time-of-arrival band at run time + its hours, in the map's colors, up to the
   // "show arrival within" setting or the forecast's latest arrival, whichever is first
-  if (document.getElementById("selVar").value !== "time-of-arrival") return;
+  if (forecastVar() !== "time-of-arrival") return;
   if (!state.toaGrid) return;
   const until = Math.min(state.toaMaxH, state.toaGrid.maxHours);
   const edges = Palette.TOA_EDGES, colors = Palette.toaColors();
@@ -2297,6 +2322,25 @@ function applyPalette() {
   if (state.hotSpan) renderHotspots();
 }
 
+// ---------------------------------------------------------------- forecast opacity
+
+// a set-and-forget display preference, so it lives in Settings (and is remembered)
+const fcSetting = document.createElement("div");
+fcSetting.innerHTML = '<label class="ctl"><span class="ctl-head"><span>Opacity</span><b></b></span>' +
+  '<input type="range" id="opacity" min="10" max="100"></label>';
+const opacityInput = fcSetting.querySelector("input"), opacityVal = fcSetting.querySelector("b");
+opacityInput.value = remembered("cornea-forecast-opacity", "70");
+opacityVal.textContent = `${opacityInput.value}%`;
+opacityInput.addEventListener("input", () => {
+  const o = forecastOpacity();
+  opacityVal.textContent = `${opacityInput.value}%`;
+  remember("cornea-forecast-opacity", opacityInput.value);
+  if (map.getLayer("fc")) map.setPaintProperty("fc", "raster-opacity", o);
+  if (map.getLayer("fclive")) map.setPaintProperty("fclive", "raster-opacity", o);
+  map.setPaintProperty("iso", "line-opacity", o);
+});
+Palette.addSection("Forecast layer", fcSetting);
+
 // ---------------------------------------------------------------- timeline placement
 
 // the playhead and the run and perimeter lanes dock along the bottom of the map (the
@@ -2315,6 +2359,9 @@ Palette.addSection("Timeline", tlSetting);
 function placeTimeline(where) {
   const docked = where === "map";
   document.getElementById(docked ? "tlDock" : "tlSlot").append(document.getElementById("tlBlock"));
+  // the detection legend and count follow the playhead that drives them
+  document.getElementById(docked ? "tlLegend" : "hotSlot")
+    .append(document.getElementById("hotLegend"), document.getElementById("hotnote"));
   document.body.classList.toggle("tl-docked", docked);
   for (const r of tlSetting.querySelectorAll("input")) r.checked = r.value === where;
   layoutTimelineAxis();   // tick density and date labels follow the new width
