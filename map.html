@@ -37,7 +37,7 @@
   .linkbtn { display: block; padding: 0; margin: -2px 0 3px; border: 0; background: none; cursor: pointer;
              font: 12px/16px var(--font-sans); color: var(--link); text-decoration: underline;
              text-decoration-color: var(--accent); text-underline-offset: 2px; }
-  .sec { border-top: 1px solid var(--grid); margin-top: 7px; padding-top: 6px; }
+  .sec { border-top: 1px solid var(--grid); margin-top: 5px; padding-top: 6px; }
   .sec h2 { font: 700 11.5px/1.4 var(--font-sans); text-transform: uppercase;
             letter-spacing: .08em; color: var(--label); margin: 0 0 5px;
             display: flex; align-items: center; gap: 8px; }
@@ -125,14 +125,23 @@
   #hotTicks span.major { height: 8px; background: var(--muted); }
   /* timeline markers: downward triangles above the track, same inset as the ticks */
   .hot-head { margin: 3px 0 0; }
-  .hot-key { color: var(--muted); font-size: 11px; margin: 0 0 5px; white-space: nowrap; }
+  .legend-head { font: 700 10px/1.2 var(--font-sans); text-transform: uppercase; letter-spacing: .08em;
+                 color: var(--label); margin: 3px 0 1px; }
+  .hot-key { color: var(--muted); font-size: 11px; margin: 0 0 3px; white-space: nowrap; }
   .mk { display: inline-block; width: 0; height: 0; margin: 0 3px 0 8px;
         border: solid transparent; border-width: 7px 4px 0; border-top-color: var(--c); }
   .hot-key .mk:first-child { margin-left: 0; }
   #hotMarks { position: relative; height: 7px; margin: 4px 7px 0; }
   #hotMarks .mk { position: absolute; top: 0; margin: 0 0 0 -4px; cursor: pointer; }
   #hotMarks .mk.clamped { opacity: .45; }
-  .hot-legend { display: flex; align-items: center; gap: 8px; margin: 2px 0 4px;
+  #hotMarks .mk.drag { cursor: ew-resize; touch-action: none; }
+  /* the 8px triangle is too small to grab: a transparent hit area around it */
+  #hotMarks .mk.drag::before { content: ""; position: absolute; left: -10px; width: 20px; top: -12px; height: 16px; }
+  #hotMarks .mk.dragging { z-index: 2; }
+  .pin-tip { position: absolute; bottom: 9px; z-index: 3; padding: 1px 5px; white-space: nowrap;
+             background: var(--ink); color: var(--surface); border-radius: 4px; font-size: 10.5px;
+             pointer-events: none; }
+  .hot-legend { display: flex; align-items: center; gap: 8px; margin: 1px 0 2px;
                 color: var(--muted); font-size: 10.5px; }
   .hot-legend .days { display: grid; grid-template-columns: 30px repeat(7, 22px);
                       justify-items: center; row-gap: 2px; line-height: 12px; }
@@ -280,6 +289,7 @@
     <div id="hotTicks" aria-hidden="true"></div>
     <div class="note" style="display:flex;justify-content:space-between;margin-bottom:2px">
       <span id="hotStartLabel"></span><span id="hotEndLabel">now</span></div>
+    <div class="legend-head">Legend</div>
     <div class="hot-key" id="hotKey"></div>
     <div class="hot-legend" id="hotLegend"></div>
     <div class="note" id="hotnote"></div>
@@ -322,6 +332,7 @@ const state = {
   hot: null,           // hotspot timeline for the selected fire (see refreshHotspots)
   hotSeq: 0,
   hotSpan: null,       // {start, end, contained} the playhead slider spans
+  pinDrag: null,       // "perimeter" | "run" while that timeline pin is being dragged
   toaMaxH: 336,        // time-of-arrival threshold slider (show arrival <= this)
   granIdx: 12,         // hourly-mosaic forecast-hour slider
   georasterCache: new Map(),
@@ -1010,6 +1021,12 @@ function perimSummary() {
     : fmtPerim(shown[0]) + (shown[0] === current ? " (current)" : "");
 }
 
+const perimGj = new Map();   // path -> GeoJSON, most recent 60
+function rememberPerim(path, gj) {
+  perimGj.set(path, gj);
+  if (perimGj.size > 60) perimGj.delete(perimGj.keys().next().value);
+}
+
 async function togglePerim(f, p, on, latest) {
   if (!on) {
     const l = state.perimLayers.get(p.ems);
@@ -1018,11 +1035,14 @@ async function togglePerim(f, p, on, latest) {
   }
   if (state.perimLayers.has(p.ems)) return;
   const seq = state.seq;
-  let gj;
-  try { gj = await getJson(CORNEA + p.path); }
-  catch (e) {
-    try { gj = await loadLocalOrBucket(`perimeter_archive/${f.slug}/${p.ems}.geojson`); }
-    catch (e2) { return; }
+  let gj = perimGj.get(p.path);
+  if (!gj) {
+    try { gj = await getJson(CORNEA + p.path); }
+    catch (e) {
+      try { gj = await loadLocalOrBucket(`perimeter_archive/${f.slug}/${p.ems}.geojson`); }
+      catch (e2) { return; }
+    }
+    rememberPerim(p.path, gj);
   }
   // another fire was selected (or none), an overlapping toggle already loaded it,
   // or the box was unchecked while the fetch was in flight
@@ -1111,37 +1131,117 @@ function layoutHotTimeline(span) {
   renderHotMarks();
 }
 
+const RUN_PIN = "#2166ac";
+
 function renderHotMarks() {
-  // markers for the newest perimeter toggled on, the forecast run on the map and
-  // the containment; times outside the timeline pin to its edge, faded. Click to seek there.
+  // pins for the newest perimeter toggled on, the forecast run on the map and the
+  // containment; times outside the timeline sit at its edge, faded. The perimeter and
+  // run pins drag along the timeline (wirePin); a click on any pin seeks the playhead
+  if (state.pinDrag) return;   // the dragged pin keeps its own position until release
   const el = document.getElementById("hotMarks"), span = state.hotSpan, pal = Palette.get();
-  const key = [[pal.perimeter, "perimeter"], ["#2166ac", "forecast run"]];
+  const key = [[pal.perimeter, "perimeter"], [RUN_PIN, "forecast run"]];
   if (span && span.contained) key.push([pal.contained, "contained"]);
   document.getElementById("hotKey").innerHTML =
-    key.map(([c, what]) => `<i class="mk" style="--c:${c}"></i>${what}`).join("") + " · click to jump";
-  el.innerHTML = "";
+    key.map(([c, what]) => `<i class="mk" style="--c:${c}"></i>${what}`).join("");
+  el.innerHTML = '<div id="pinTip" class="pin-tip" hidden></div>';
   if (!span) return;
   const marks = [];
   const shown = [...document.querySelectorAll("#perimlist input:checked")]
     .map(i => state.perimIndex.find(p => p.ems === i.dataset.ems)).filter(Boolean);
-  if (shown.length) {
-    const t = Math.max(...shown.map(p => Date.parse(p.date)));
-    marks.push([pal.perimeter, t, "perimeter"]);
-  }
+  if (shown.length) marks.push([pal.perimeter, Math.max(...shown.map(p => Date.parse(p.date))), "perimeter", "perimeter"]);
   const run = document.getElementById("selRun").value;
-  if (run && document.getElementById("selVar").value) marks.push(["#2166ac", runDate(run).getTime(), "forecast run"]);
-  if (span.contained) marks.push([pal.contained, span.end, "contained"]);
-  const total = +document.getElementById("hotTime").max * HOUR;
-  for (const [color, t, what] of marks) {
+  if (run && document.getElementById("selVar").value) marks.push([RUN_PIN, runDate(run).getTime(), "forecast run", "run"]);
+  if (span.contained) marks.push([pal.contained, span.end, "contained", null]);
+  for (const [color, t, what, drag] of marks) {
     const outside = t < span.start ? " (before the timeline starts)" : t > span.end ? " (after the timeline ends)" : "";
     const mk = document.createElement("i");
-    mk.className = "mk" + (outside ? " clamped" : "");
+    mk.className = "mk" + (outside ? " clamped" : "") + (drag ? " drag" : "");
     mk.style.setProperty("--c", color);
-    mk.style.left = `${100 * Math.min(Math.max((t - span.start) / total, 0), 1)}%`;
-    mk.title = `${what} ${fmtTs(t)}${outside} — click to move the playhead here`;
-    mk.addEventListener("click", () => seekHot(t));
+    mk.style.left = `${100 * pinFrac(t)}%`;
+    mk.title = `${what} ${fmtTs(t)}${outside}` +
+      (drag ? " — drag to change it, click to move the playhead here" : " — click to move the playhead here");
+    wirePin(mk, drag, t);
     el.appendChild(mk);
   }
+}
+
+function pinFrac(t) {
+  const span = state.hotSpan, total = +document.getElementById("hotTime").max * HOUR;
+  return Math.min(Math.max((t - span.start) / total, 0), 1);
+}
+
+function pinTargets(kind) {
+  // where a dragged pin can land: real perimeter snapshots, or runs with something to draw
+  const f = state.fires.find(x => x.slug === state.sel);
+  if (!f) return [];
+  if (kind === "perimeter") return state.perimIndex.map(p => ({ t: Date.parse(p.date), p }));
+  return f.runs.filter(r => f.pcts[r].size || f.live[r] !== false).map(r => ({ t: runDate(r).getTime(), run: r }));
+}
+
+function applyPin(kind, target) {
+  if (kind === "run") {
+    const sel = document.getElementById("selRun");
+    if (sel.value !== target.run) { sel.value = target.run; refreshWms(); }
+    return;
+  }
+  // a dragged perimeter pin shows just the snapshot it rests on
+  const f = state.fires.find(x => x.slug === state.sel), n = state.perimIndex.length;
+  for (const box of document.querySelectorAll("#perimlist input")) {
+    const on = box.dataset.ems === target.p.ems;
+    if (box.checked === on) continue;
+    box.checked = on;
+    const i = state.perimIndex.findIndex(p => p.ems === box.dataset.ems);
+    togglePerim(f, state.perimIndex[i], on, i === n - 1);
+  }
+  perimSummary();
+}
+
+function wirePin(mk, kind, t0) {
+  mk.addEventListener("pointerdown", ev => {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    const targets = kind ? pinTargets(kind) : [];
+    const row = document.getElementById("hotMarks"), tip = document.getElementById("pinTip");
+    const x0 = ev.clientX;
+    let dragging = false, cur = null, timer = 0;
+    mk.setPointerCapture(ev.pointerId);
+    const move = e => {
+      if (!targets.length || (!dragging && Math.abs(e.clientX - x0) < 3)) return;
+      if (!dragging) { dragging = true; state.pinDrag = kind; mk.classList.add("dragging"); }
+      const r = row.getBoundingClientRect();
+      const fx = Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1);
+      const t = state.hotSpan.start + fx * +document.getElementById("hotTime").max * HOUR;
+      // nearest on screen; among targets stacked at a clamped edge, nearest in time
+      let best = null, bd = Infinity, bt = Infinity;
+      for (const c of targets) {
+        const d = Math.abs(pinFrac(c.t) - fx), dt = Math.abs(c.t - t);
+        if (d < bd - 1e-9 || (d < bd + 1e-9 && dt < bt)) { best = c; bd = d; bt = dt; }
+      }
+      if (best === cur) return;
+      cur = best;
+      mk.style.left = `${100 * pinFrac(cur.t)}%`;
+      tip.textContent = `${kind === "run" ? "forecast run" : "perimeter"} ${fmtTs(cur.t)}`;
+      tip.hidden = false;
+      const x = pinFrac(cur.t) * row.clientWidth, w = tip.offsetWidth;
+      tip.style.left = `${Math.min(Math.max(x - w / 2, -7), row.clientWidth + 7 - w)}px`;   // stay inside the panel
+      clearTimeout(timer);
+      timer = setTimeout(() => applyPin(kind, cur), 120);   // the map follows once the pin rests on a snap
+    };
+    const up = () => {
+      mk.removeEventListener("pointermove", move);
+      mk.removeEventListener("pointerup", up);
+      mk.removeEventListener("pointercancel", up);
+      clearTimeout(timer);
+      tip.hidden = true;
+      if (!dragging) { seekHot(t0); return; }
+      state.pinDrag = null;
+      if (cur) applyPin(kind, cur);
+      renderHotMarks();
+    };
+    mk.addEventListener("pointermove", move);
+    mk.addEventListener("pointerup", up);
+    mk.addEventListener("pointercancel", up);
+  });
 }
 
 function seekHot(t) {
@@ -1326,7 +1426,7 @@ async function refreshHotspots() {
   // frp, confidence] with (x0, y0) its zoom-0 map pixel; marks: day -> markers,
   // only for the days in the window behind the playhead; req: the request in flight
   state.hot = { bbox, span, days: new Map(), marks: new Map(), keys: new Set(), covered: new Set(),
-                capped: false, req: null, flat: null, histError: "",
+                capped: false, req: null, flat: null, histError: "", topT: -Infinity,
                 renderer: L.canvas({ padding: 0.2, pane: "hotspots" }) };   // thousands of points -> canvas
   renderHotspots();
   ensureHotCoverage();
@@ -1413,12 +1513,14 @@ function renderHotspots() {
   for (const d of H.marks.keys()) {   // days that slid out of the window leave the map
     if (d < d0 || d > d1) dropHotMarks(H, d);
   }
-  let vis = 0, pending = false;
+  let vis = 0, pending = false, restack = false;
   for (let d = d0; d <= d1; d++) {
     if (!H.covered.has(d)) pending = true;
     const recs = H.days.get(d);
     if (!recs) continue;
-    if (!H.marks.has(d)) H.marks.set(d, recs.map(r => hotMarker(r, H.renderer)));
+    if (!H.marks.has(d)) {
+      H.marks.set(d, recs.slice().sort((a, b) => a[2] - b[2]).map(r => hotMarker(r, H.renderer)));
+    }
     for (const m of H.marks.get(d)) {
       const col = hotColor((p - m._r[2]) / HOUR);
       if (!col) { state.hotLayer.removeLayer(m); continue; }
@@ -1428,7 +1530,21 @@ function renderHotspots() {
         const [, , , , , source, date, time, frp, conf] = m._r;
         m.bindTooltip(`${source || "?"} ${date || ""} ${String(time || "").replace(".0", "")}Z · FRP ${frp ?? "?"} · conf ${conf ?? "?"}`);
       }
-      if (!state.hotLayer.hasLayer(m)) state.hotLayer.addLayer(m);
+      if (!state.hotLayer.hasLayer(m)) {
+        state.hotLayer.addLayer(m);
+        if (m._r[2] < H.topT) restack = true;
+        else H.topT = m._r[2];
+      }
+    }
+  }
+  if (restack) {
+    // the canvas paints in insertion order, so an older dot added after newer ones
+    // (scrubbing back, or a day re-made by a late load) would cover them: re-stack
+    // every visible dot oldest -> newest so the freshest detections stay on top
+    for (let d = d0; d <= d1; d++) {
+      for (const m of H.marks.get(d) || []) {
+        if (state.hotLayer.hasLayer(m)) { m.bringToFront(); H.topT = m._r[2]; }
+      }
     }
   }
   const scar = renderScar(H, p);
