@@ -19,7 +19,8 @@ which retains dated perimeter snapshots per fire (~2–3/day for active fires).
 | `.github/workflows/analyze.yml` | cron 2x daily: syncs ToA+perimeters on the runner, recomputes and publishes `metrics.csv` + per-fire `skill/*.json` to the bucket — no laptop needed; `report.html` falls back to the bucket copy |
 | `analyze.py` | local: syncs the archive, computes growth-only P/R → `data/metrics.csv` |
 | `report.html` | static Plotly report over `data/metrics.csv` |
-| `map.html` | interactive MapLibre map, flat or over 3D terrain, over Cornea perimeter history + hotspots: runs still on pyrecast show its live WMS tiles (as `<img>` tiles under the map canvas: its geoserver refuses the cross-origin reads WebGL needs, so these are 2D only); every other run, and those in 3D, is decoded in the browser from the archive (all variables/percentiles, in pyrecast's own colors) |
+| `map.html` | interactive MapLibre map, flat or over 3D terrain, over Cornea perimeter history + hotspots. Forecasts are decoded in the browser from the archive (all variables/percentiles); runs still on pyrecast are read live through `relay/` (its WMS tiles for the hourly variables, its raw time-of-arrival coverage until the archive has it) |
+| `relay/` | Cloudflare Worker (free plan) that passes pyrecast's geoserver through with CORS headers, which its geoserver refuses to send for any site but pyrecast.org; GetMap and GetCoverage only. Deploy with `cd relay && npx wrangler deploy` |
 | `overrides.json` | manual slug→cornea_id match overrides (string forces, null skips) |
 
 Archive layout (bucket or local `raw/`):
@@ -90,6 +91,10 @@ checked (`analyze.py --skill-only`, needs the `S3_*` env).
    - Optional variable `S3_BUCKET` (defaults to `fire-forecast-archive`).
    - Legacy `R2_*` secrets still work as a fallback (collect.py checks `S3_*` first).
 4. Trigger the workflow once manually (Actions → collect → Run workflow) and check the summary line + objects in the bucket.
+5. **Pyrecast relay** for `map.html`'s live runs: `cd relay && npx wrangler deploy` (wrangler logs in
+   to your Cloudflare account in a browser the first time), then set `RELAY` in `map.html` to the
+   printed `*.workers.dev` URL. The free plan allows 100k requests a day; the map makes one per tile
+   (only for runs still on pyrecast) and one per live time-of-arrival raster.
 
 ## Local usage
 
@@ -150,6 +155,7 @@ need them) to cut storage ~10x. GitHub Actions: free (public repo).
 ## Teardown after the survey
 
 - Disable the workflow (Actions → collect → ⋯ → Disable) or delete the cron block.
+- The relay can go too (`cd relay && npx wrangler delete`); the map then shows only archived runs.
 - Keep `data/metrics.csv` + `report.html` committed.
 - Bucket can sit free under 10GB, or archive a final `tar` of it and delete —
   **metrics are unrecomputable without the tifs**.

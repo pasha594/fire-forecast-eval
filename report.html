@@ -130,6 +130,12 @@
 "use strict";
 const BUCKET = "https://f005.backblazeb2.com/file/fire-forecast-archive";
 const CORNEA = "https://fire-api-prod.web.app";
+// every date and time shown: MM/DD/YY HH:MM, in the viewer's own time zone
+const pad2 = n => String(n).padStart(2, "0");
+const fmtDate = ms => { const d = new Date(ms); return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}/${pad2(d.getFullYear() % 100)}`; };
+const fmtDT = ms => { const d = new Date(ms); return `${fmtDate(ms)} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+// a run's "YYYYMMDD_HHMMSS" stamp (UTC) as a local time
+const runLabel = ts => fmtDT(Date.UTC(+ts.slice(0, 4), ts.slice(4, 6) - 1, +ts.slice(6, 8), +ts.slice(9, 11), +ts.slice(11, 13)));
 
 document.getElementById("topbar").append(Palette.gearButton());
 
@@ -181,7 +187,7 @@ function drawTiles(rows) {
     [rows.length, "scored rows (filtered)"],
     [fires, "fires"],
     [runs, "forecast runs"],
-    [dates.length ? dates[0].slice(0, 10) + " → " + dates[dates.length - 1].slice(0, 10) : "—", "run dates"],
+    [dates.length ? fmtDate(Date.parse(dates[0])) + " → " + fmtDate(Date.parse(dates[dates.length - 1])) : "—", "run dates"],
   ].map(([v, k]) => `<div class="tile"><div class="v">${v}</div><div class="k">${k}</div></div>`).join("");
 }
 
@@ -193,7 +199,7 @@ function makeSortable(containerId) {
     th.addEventListener("click", () => {
       const tb = container.querySelector("tbody");
       const dir = th.dataset.dir = th.dataset.dir === "asc" ? "desc" : "asc";
-      const val = tr => tr.cells[ci].innerText.replace(/,/g, "");
+      const val = tr => tr.cells[ci].dataset.sort ?? tr.cells[ci].innerText.replace(/,/g, "");
       const rows = [...tb.rows];
       const num = rows.every(tr => val(tr) === "" || !isNaN(parseFloat(val(tr))));
       rows.sort((a, b) => {
@@ -214,8 +220,10 @@ function drawTable(rows) {
     "hs_n", "hs_capture"];
   const top = rows.slice(0, 500);
   document.getElementById("rowsTbl").innerHTML =
-    `<table class="rows"><thead><tr>${cols.map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody>` +
-    top.map((r, i) => `<tr data-i="${i}" style="cursor:pointer">${cols.map(c => `<td>${r[c] == null ? "" : r[c]}</td>`).join("")}</tr>`).join("") +
+    `<table class="rows"><thead><tr>${cols.map(c => `<th>${c === "run_ts" ? "run" : c}</th>`).join("")}</tr></thead><tbody>` +
+    top.map((r, i) => `<tr data-i="${i}" style="cursor:pointer">${cols.map(c => (c === "run_ts"
+      ? `<td data-sort="${r.run_ts}">${runLabel(r.run_ts)}</td>`   // sorts by the stamp: MM/DD/YY doesn't
+      : `<td>${r[c] == null ? "" : r[c]}</td>`)).join("")}</tr>`).join("") +
     `</tbody></table>` + (rows.length > 500 ? `<p class="note">showing 500 of ${rows.length} rows</p>` : "");
   document.querySelectorAll("#rowsTbl tbody tr").forEach(tr =>
     tr.addEventListener("click", () => inspectRow(top[+tr.dataset.i])));
@@ -340,8 +348,7 @@ function acqMs(pr) {
 }
 
 function describeTimes(row) {
-  const fmt = x => (typeof x === "string" ? x : new Date(x).toISOString())
-    .replace("T", " ").slice(0, 16) + "Z";
+  const fmt = x => fmtDT(typeof x === "string" ? Date.parse(x) : x);
   const off = row.actual_offset_h;
   let t = `forecast run <b>${fmt(row.run_dt_utc)}</b> · +${row.horizon_h}h window ends ` +
     `<b>${fmt(row.valid_dt_utc)}</b> · scored against perimeter mapped ` +
@@ -360,7 +367,7 @@ async function renderInspection(row) {
   const stats = document.getElementById("insStats");
   try {
     document.getElementById("insTimes").innerHTML = describeTimes(row);
-    stats.innerHTML = `<p class="note">loading raster + perimeters for ${row.slug} ${row.run_ts} pct${row.percentile} H${row.horizon_h}…</p>`;
+    stats.innerHTML = `<p class="note">loading raster + perimeters for ${row.slug} ${runLabel(row.run_ts)} pct${row.percentile} H${row.horizon_h}…</p>`;
     const toaKey = BUCKET_KEYS.toa(row);
     let georaster = INS.cacheToa.get(toaKey);
     if (!georaster) {
@@ -437,7 +444,7 @@ async function renderInspection(row) {
           radius: 3.5, weight: 1.5, fillColor: "#fff", fillOpacity: 0.9,
           color: captured ? "#0a5c36" : "#7a1010",
         }).bindTooltip(`${(feat.properties || {}).source || "?"} ` +
-          `${new Date(tms).toISOString().slice(0, 16).replace("T", " ")}Z · ` +
+          `${fmtDT(tms)} · ` +
           `${captured ? "inside" : "outside"} prediction`).addTo(grp);
       }
       grp.addTo(INS.map);
@@ -489,14 +496,14 @@ function insSelected() {
 function populateInspector(level, render = true) {
   const rows = DATA.filter(r => r.actual_perim_ms);
   const sel = id => document.getElementById(id);
-  const fill = (id, vals, keep) => {
+  const fill = (id, vals, keep, label = v => v) => {
     const el = sel(id), prev = el.value;
-    el.innerHTML = vals.map(v => `<option>${v}</option>`).join("");
+    el.innerHTML = vals.map(v => `<option value="${v}">${label(v)}</option>`).join("");
     if (keep && vals.map(String).includes(prev)) el.value = prev;
   };
   if (level <= 0) fill("insFire", [...new Set(rows.map(r => r.slug))].sort(), true);
   const f = sel("insFire").value;
-  if (level <= 1) fill("insRun", [...new Set(rows.filter(r => r.slug === f).map(r => r.run_ts))].sort().reverse(), true);
+  if (level <= 1) fill("insRun", [...new Set(rows.filter(r => r.slug === f).map(r => r.run_ts))].sort().reverse(), true, runLabel);
   const run = sel("insRun").value;
   if (level <= 2) fill("insPct", [...new Set(rows.filter(r => r.slug === f && r.run_ts === run).map(r => r.percentile))].sort((a, b) => a - b), true);
   const pct = sel("insPct").value;
@@ -541,7 +548,7 @@ async function init() {
       text = await resp.text();
       const mod = resp.headers.get("Last-Modified");
       document.querySelector(".sub").innerHTML +=
-        ` <span style="color:var(--muted)">· metrics: ${label}${mod ? ", updated " + mod : ""}</span>`;
+        ` <span style="color:var(--muted)">· metrics: ${label}${mod && !isNaN(Date.parse(mod)) ? ", updated " + fmtDT(Date.parse(mod)) : ""}</span>`;
       break;
     } catch (e) { /* try next source */ }
   }

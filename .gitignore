@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 .DS_Store
 data/skill/
+
+# wrangler (relay/): local cache with the Cloudflare account id
+.wrangler/
+node_modules/

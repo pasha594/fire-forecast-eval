@@ -1,0 +1,6 @@
+# Cloudflare Worker relaying Pyrecast's geoserver to map.html (see src/index.js).
+# Deploy: cd relay && npx wrangler deploy
+name = "pyrecast-relay"
+main = "src/index.js"
+compatibility_date = "2026-09-24"
+workers_dev = true
