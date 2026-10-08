@@ -37,7 +37,7 @@
   .linkbtn { display: block; padding: 0; margin: -2px 0 3px; border: 0; background: none; cursor: pointer;
              font: 12px/16px var(--font-sans); color: var(--link); text-decoration: underline;
              text-decoration-color: var(--accent); text-underline-offset: 2px; }
-  .sec { border-top: 1px solid var(--grid); margin-top: 5px; padding-top: 6px; }
+  .sec { border-top: 1px solid var(--grid); margin-top: 5px; padding-top: 4px; }
   .sec h2 { font: 700 11.5px/1.4 var(--font-sans); text-transform: uppercase;
             letter-spacing: .08em; color: var(--label); margin: 0 0 5px;
             display: flex; align-items: center; gap: 8px; }
@@ -96,6 +96,8 @@
   #firelist .meta { color: var(--muted); font-size: 11px; font-weight: 400; }
   .note { color: var(--muted); font-size: 11.5px; margin: 3px 0; }
   .warn { color: var(--warn); font-size: 11.5px; margin: 3px 0; }
+  /* as tall as the arrival legend, so loading/warning lines don't shift the lanes below */
+  #wmsnote { min-height: 48px; }
   #legendimg { max-width: 100%; margin-top: 6px; background: #fff;
                border: 1px solid var(--grid); border-radius: 4px; }
   .toa-key { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; align-items: center;
@@ -124,23 +126,29 @@
                    background: var(--axis); }
   #hotTicks span.major { height: 8px; background: var(--muted); }
   /* timeline markers: downward triangles above the track, same inset as the ticks */
-  .hot-head { margin: 3px 0 0; }
+  .hot-head { margin: 1px 0 0; }
+  /* one line, full text on hover: the panel must not grow while history loads */
+  #hotnote { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .legend-head { font: 700 10px/1.2 var(--font-sans); text-transform: uppercase; letter-spacing: .08em;
                  color: var(--label); margin: 3px 0 1px; }
   .hot-key { color: var(--muted); font-size: 11px; margin: 0 0 3px; white-space: nowrap; }
   .mk { display: inline-block; width: 0; height: 0; margin: 0 3px 0 8px;
         border: solid transparent; border-width: 7px 4px 0; border-top-color: var(--c); }
   .hot-key .mk:first-child { margin-left: 0; }
-  #hotMarks { position: relative; height: 7px; margin: 4px 7px 0; }
-  #hotMarks .mk { position: absolute; top: 0; margin: 0 0 0 -4px; cursor: pointer; }
-  #hotMarks .mk.clamped { opacity: .45; }
-  #hotMarks .mk.drag { cursor: ew-resize; touch-action: none; }
-  /* the 8px triangle is too small to grab: a transparent hit area around it */
-  #hotMarks .mk.drag::before { content: ""; position: absolute; left: -10px; width: 20px; top: -12px; height: 16px; }
-  #hotMarks .mk.dragging { z-index: 2; }
-  .pin-tip { position: absolute; bottom: 9px; z-index: 3; padding: 1px 5px; white-space: nowrap;
-             background: var(--ink); color: var(--surface); border-radius: 4px; font-size: 10.5px;
-             pointer-events: none; }
+  .hot-key .lk { display: inline-block; width: 3px; height: 10px; margin: 0 4px -1px 8px;
+                 border-radius: 1px; background: var(--c); }
+  .hot-key :first-child { margin-left: 0; }
+  /* perimeter / run lanes share the playhead track's time axis (same 7px inset) */
+  .tl { position: relative; }
+  .lane { position: relative; height: 13px; margin: 1px 7px 0; cursor: ew-resize; touch-action: none; }
+  .lane::before { content: ""; position: absolute; left: 0; right: 0; top: 6px; height: 1px; background: var(--grid); }
+  .lane i { position: absolute; top: 2px; width: 2px; height: 9px; margin-left: -1px; border-radius: 1px;
+            background: var(--c); opacity: .22; }
+  .lane i.on { top: 0; height: 13px; width: 3px; margin-left: -1.5px; opacity: 1; }
+  .lane b { position: absolute; top: 0; padding: 0 3px; background: var(--surface); color: var(--c);
+            font: 600 10px/13px var(--font-sans); white-space: nowrap; pointer-events: none; }
+  .tl-guides { position: absolute; inset: 0; pointer-events: none; }
+  .tl-guides i { position: absolute; width: 1px; margin-left: -0.5px; background: var(--c); opacity: .6; }
   .hot-legend { display: flex; align-items: center; gap: 8px; margin: 1px 0 2px;
                 color: var(--muted); font-size: 10.5px; }
   .hot-legend .days { display: grid; grid-template-columns: 30px repeat(7, 22px);
@@ -148,6 +156,9 @@
   .hot-legend .dot { width: 10px; height: 10px; border-radius: 50%; }
   .hot-legend .cap { line-height: 13px; }
   /* forecast skill: 9 horizon columns have to fit the 292px content width */
+  /* fixed height (a full table): the section must not change size as runs change */
+  .skill-box { height: 58px; }
+  .skill-empty { margin: 0; padding-top: 6px; color: var(--muted); font-size: 11.5px; line-height: 1.4; }
   .skill { border-collapse: collapse; font-size: 11px; line-height: 13px;
            font-variant-numeric: tabular-nums; }
   .skill th, .skill td { width: 25.5px; padding: 0; text-align: center; font-weight: 400; }
@@ -251,7 +262,7 @@
     <img id="legendimg" alt="" hidden>
   </div>
 
-  <div class="sec fire-only" id="skillSec" hidden>
+  <div class="sec fire-only" id="skillSec">
     <div class="sec-head"><h2>Forecast skill <button type="button" class="help" id="skillHelpBtn"
         aria-label="How forecast skill is calculated" aria-controls="skillHelp" aria-expanded="false">?</button></h2>
       <a href="report.html">skill report</a></div>
@@ -269,7 +280,8 @@
         mapped within 6h of it, and at most 10% of the growth fell outside the forecast's area —
         the skill report's default filters.</p>
     </div>
-    <table class="skill" id="skillTable"></table>
+    <div class="skill-box"><table class="skill" id="skillTable"></table>
+      <p class="skill-empty" id="skillEmpty" hidden></p></div>
   </div>
 
   <div class="sec fire-only">
@@ -284,9 +296,13 @@
     <div class="sec-head"><h2>Hotspots (NASA VIIRS)</h2>
       <label class="row"><input type="checkbox" id="chkHot" checked>show detections</label></div>
     <div class="hot-head">playhead: <b id="hotTimeLabel">now</b></div>
-    <div id="hotMarks"></div>
-    <input type="range" id="hotTime" min="0" max="336" value="336" aria-label="hotspot playhead">
-    <div id="hotTicks" aria-hidden="true"></div>
+    <div class="tl" id="tl">
+      <input type="range" id="hotTime" min="0" max="336" value="336" aria-label="hotspot playhead">
+      <div id="hotTicks" aria-hidden="true"></div>
+      <div class="lane" data-kind="perimeter" title="Perimeter snapshots: press or drag to show one"></div>
+      <div class="lane" data-kind="run" title="Forecast runs: press or drag to show one"></div>
+      <div class="tl-guides" id="tlGuides" aria-hidden="true"></div>
+    </div>
     <div class="note" style="display:flex;justify-content:space-between;margin-bottom:2px">
       <span id="hotStartLabel"></span><span id="hotEndLabel">now</span></div>
     <div class="legend-head">Legend</div>
@@ -332,7 +348,7 @@ const state = {
   hot: null,           // hotspot timeline for the selected fire (see refreshHotspots)
   hotSeq: 0,
   hotSpan: null,       // {start, end, contained} the playhead slider spans
-  pinDrag: null,       // "perimeter" | "run" while that timeline pin is being dragged
+  lanePreview: null,   // {kind, item} while a perimeter/run lane is being dragged
   toaMaxH: 336,        // time-of-arrival threshold slider (show arrival <= this)
   granIdx: 12,         // hourly-mosaic forecast-hour slider
   georasterCache: new Map(),
@@ -398,6 +414,7 @@ async function init() {
   if (want && state.fires.some(x => x.slug === want)) select(want);
   else deselect();
   wirePickers();
+  wireLanes();
   for (const id of ["selRun", "selVar", "selPct"])
     document.getElementById(id).addEventListener("change", refreshWms);
   document.getElementById("opacity").addEventListener("input", () =>
@@ -782,7 +799,7 @@ const CanvasOverlay = L.ImageOverlay.extend({
   },
 });
 
-const TOA_MAX_PX = 1600;   // longest side of the resampled image (~2.5M pixels at most)
+const TOA_MAX_PX = 4096;   // longest side of the resampled image
 
 function toaGrid(georaster) {
   // resample the forecast's UTM raster once onto the Web Mercator grid the overlay is
@@ -794,18 +811,31 @@ function toaGrid(georaster) {
   const { xmin, ymax, pixelWidth: pw, pixelHeight: ph, width: W, height: Ht } = georaster;
   const src = georaster.values[0];
   const merc = L.Projection.SphericalMercator;
+  // most of a forecast tif is nodata: crop to the cells that arrive at all, so the
+  // canvas can keep the native 30m cells (a downsampled one blurs when zoomed in)
+  let r0 = Ht, r1 = -1, c0 = W, c1 = -1;
+  for (let r = 0; r < Ht; r++) {
+    const row = src[r];
+    for (let c = 0; c < W; c++) {
+      if (row[c] > 0) { if (r < r0) r0 = r; if (r > r1) r1 = r; if (c < c0) c0 = c; if (c > c1) c1 = c; }
+    }
+  }
+  if (r1 < 0) { r0 = 0; r1 = 0; c0 = 0; c1 = 0; }
+  const bx0 = xmin + c0 * pw, bx1 = xmin + (c1 + 1) * pw, by1 = ymax - r0 * ph, by0 = ymax - (r1 + 1) * ph;
   // the UTM footprint is not a box in mercator, so bound it by sampling its edges
   let mx0 = Infinity, my0 = Infinity, mx1 = -Infinity, my1 = -Infinity;
   for (let i = 0; i <= 16; i++) {
-    const x = xmin + W * pw * i / 16, y = ymax - Ht * ph * i / 16;
-    for (const [X, Y] of [[x, ymax], [x, ymax - Ht * ph], [xmin, y], [xmin + W * pw, y]]) {
+    const x = bx0 + (bx1 - bx0) * i / 16, y = by1 - (by1 - by0) * i / 16;
+    for (const [X, Y] of [[x, by1], [x, by0], [bx0, y], [bx1, y]]) {
       const [lon, lat] = utm.inverse([X, Y]);
       const m = merc.project(L.latLng(lat, lon));
       mx0 = Math.min(mx0, m.x); mx1 = Math.max(mx1, m.x);
       my0 = Math.min(my0, m.y); my1 = Math.max(my1, m.y);
     }
   }
-  const w = Math.min(TOA_MAX_PX, W), h = Math.max(1, Math.round(w * (my1 - my0) / (mx1 - mx0)));
+  // a few % over the cell count: the mercator box around the slightly rotated UTM grid is wider
+  const w = Math.min(TOA_MAX_PX, Math.ceil((c1 - c0 + 1) * 1.05));
+  const h = Math.max(1, Math.round(w * (my1 - my0) / (mx1 - mx0)));
   // UTM coordinates are projected exactly on a 16px lattice and interpolated in
   // between (the projection is smooth at this scale; per-pixel proj4 takes seconds)
   const S = 16, nx = Math.ceil(w / S) + 1, ny = Math.ceil(h / S) + 1;
@@ -837,6 +867,7 @@ function toaGrid(georaster) {
   }
   const canvas = document.createElement("canvas");
   canvas.width = w; canvas.height = h;
+  canvas.style.imageRendering = "pixelated";   // crisp 30m cells when zoomed in
   const ctx = canvas.getContext("2d");
   const bounds = L.latLngBounds(merc.unproject(L.point(mx0, my0)), merc.unproject(L.point(mx1, my1)));
   return (georaster._toaGrid = { canvas, ctx, img: ctx.createImageData(w, h), hours, band, bounds });
@@ -940,14 +971,20 @@ async function loadSkill(f, seq) {
 }
 
 function renderSkill() {
-  // the selected run and percentile's scored horizons; hidden when there are none
-  const sec = document.getElementById("skillSec");
+  // the selected run and percentile's scored horizons, or why there are none
   const doc = state.sel && state.skill.get(state.sel);
   const byPct = doc && doc.runs && doc.runs[document.getElementById("selRun").value];
   const got = byPct && byPct[document.getElementById("selPct").value];
   const rows = Array.isArray(got) ? got.filter(Array.isArray) : [];
-  sec.hidden = !rows.length;
-  if (sec.hidden) return;
+  const table = document.getElementById("skillTable"), empty = document.getElementById("skillEmpty");
+  table.hidden = !rows.length;
+  empty.hidden = !!rows.length;
+  if (!rows.length) {
+    empty.textContent = doc
+      ? "Not scored for this run and percentile: it needs at least 10 acres of growth and a perimeter mapped within 6h of a horizon."
+      : "No scored forecasts for this fire yet.";
+    return;
+  }
   const hLab = h => (h >= 168 && h % 24 === 0 ? `${h / 24}d` : `${h}h`);
   const cell = v => (typeof v === "number" && isFinite(v)
     ? `<td style="--v:${Math.min(Math.max(v, 0), 1)}">${Math.round(100 * v)}</td>` : "<td>—</td>");
@@ -998,14 +1035,14 @@ async function loadPerims(f, seq) {
       <span class="dot${latest ? " cur" : ""}" style="background:${color}"></span>
       ${fmtPerim(p)}${latest ? " (current)" : ""}`;
     lab.querySelector("input").addEventListener("change", ev => {
-      togglePerim(f, p, ev.target.checked, latest);
+      togglePerim(f, p, ev.target.checked);
       renderHotMarks();
       perimSummary();
     });
     el.appendChild(lab);
   }
   perimSummary();
-  await togglePerim(f, state.perimIndex[n - 1], true, true);
+  await togglePerim(f, state.perimIndex[n - 1], true);
 }
 
 const fmtPerim = p => `${p.date.slice(0, 16).replace("T", " ")}Z`;
@@ -1027,10 +1064,21 @@ function rememberPerim(path, gj) {
   if (perimGj.size > 60) perimGj.delete(perimGj.keys().next().value);
 }
 
-async function togglePerim(f, p, on, latest) {
+function stylePerims() {
+  // the newest perimeter on the map takes the perimeter color, any older ones gray dashed
+  let newest = null;
+  for (const p of state.perimIndex) if (state.perimLayers.has(p.ems)) newest = p;   // sorted oldest first
+  for (const [ems, layer] of state.perimLayers) {
+    layer.setStyle(newest && ems === newest.ems
+      ? { color: Palette.get().perimeter, weight: 2.5, dashArray: null, fillOpacity: 0.08 }
+      : { color: "#52514e", weight: 1.5, dashArray: "4 3", fillOpacity: 0 });
+  }
+}
+
+async function togglePerim(f, p, on) {
   if (!on) {
     const l = state.perimLayers.get(p.ems);
-    if (l) { map.removeLayer(l); state.perimLayers.delete(p.ems); }
+    if (l) { map.removeLayer(l); state.perimLayers.delete(p.ems); stylePerims(); }
     return;
   }
   if (state.perimLayers.has(p.ems)) return;
@@ -1049,12 +1097,9 @@ async function togglePerim(f, p, on, latest) {
   if (state.seq !== seq || state.perimLayers.has(p.ems)) return;
   const box = document.querySelector(`#perimlist input[data-ems="${p.ems}"]`);
   if (box && !box.checked) return;
-  const layer = L.geoJSON(gj, {
-    style: latest
-      ? { color: Palette.get().perimeter, weight: 2.5, fillOpacity: 0.08 }
-      : { color: "#52514e", weight: 1.5, dashArray: "4 3", fillOpacity: 0 },
-  }).addTo(map).bindTooltip(`perimeter ${p.date.slice(0, 16).replace("T", " ")}Z`);
+  const layer = L.geoJSON(gj).addTo(map).bindTooltip(`perimeter ${p.date.slice(0, 16).replace("T", " ")}Z`);
   state.perimLayers.set(p.ems, layer);
+  stylePerims();
 }
 
 // ---------------------------------------------------------------- hotspots
@@ -1132,37 +1177,58 @@ function layoutHotTimeline(span) {
 }
 
 const RUN_PIN = "#2166ac";
+const fmtShort = ms => `${fmtDay(ms)} ${new Date(ms).toISOString().slice(11, 16)}Z`;
+
+function laneActive(kind, items) {
+  // the item a lane highlights: the one being dragged to, else what the map shows
+  if (state.lanePreview && state.lanePreview.kind === kind) return state.lanePreview.item;
+  if (kind === "run") {
+    const run = document.getElementById("selRun").value;
+    return document.getElementById("selVar").value ? items.find(c => c.run === run) : null;
+  }
+  const shown = new Set([...document.querySelectorAll("#perimlist input:checked")].map(i => i.dataset.ems));
+  let best = null;
+  for (const c of items) if (shown.has(c.p.ems) && (!best || c.t > best.t)) best = c;
+  return best;
+}
 
 function renderHotMarks() {
-  // pins for the newest perimeter toggled on, the forecast run on the map and the
-  // containment; times outside the timeline sit at its edge, faded. The perimeter and
-  // run pins drag along the timeline (wirePin); a click on any pin seeks the playhead
-  if (state.pinDrag) return;   // the dragged pin keeps its own position until release
-  const el = document.getElementById("hotMarks"), span = state.hotSpan, pal = Palette.get();
-  const key = [[pal.perimeter, "perimeter"], [RUN_PIN, "forecast run"]];
-  if (span && span.contained) key.push([pal.contained, "contained"]);
+  // lanes under the playhead track: every perimeter snapshot / forecast run as a light
+  // tick, the one on the map dark and labelled, with a guide line up to the track;
+  // containment is a magenta line across the track
+  const span = state.hotSpan, pal = Palette.get();
+  const key = [[pal.perimeter, "perimeter", "lk"], [RUN_PIN, "forecast run", "lk"]];
+  if (span && span.contained) key.push([pal.contained, "contained", "mk"]);
   document.getElementById("hotKey").innerHTML =
-    key.map(([c, what]) => `<i class="mk" style="--c:${c}"></i>${what}`).join("");
-  el.innerHTML = '<div id="pinTip" class="pin-tip" hidden></div>';
-  if (!span) return;
-  const marks = [];
-  const shown = [...document.querySelectorAll("#perimlist input:checked")]
-    .map(i => state.perimIndex.find(p => p.ems === i.dataset.ems)).filter(Boolean);
-  if (shown.length) marks.push([pal.perimeter, Math.max(...shown.map(p => Date.parse(p.date))), "perimeter", "perimeter"]);
-  const run = document.getElementById("selRun").value;
-  if (run && document.getElementById("selVar").value) marks.push([RUN_PIN, runDate(run).getTime(), "forecast run", "run"]);
-  if (span.contained) marks.push([pal.contained, span.end, "contained", null]);
-  for (const [color, t, what, drag] of marks) {
-    const outside = t < span.start ? " (before the timeline starts)" : t > span.end ? " (after the timeline ends)" : "";
-    const mk = document.createElement("i");
-    mk.className = "mk" + (outside ? " clamped" : "") + (drag ? " drag" : "");
-    mk.style.setProperty("--c", color);
-    mk.style.left = `${100 * pinFrac(t)}%`;
-    mk.title = `${what} ${fmtTs(t)}${outside}` +
-      (drag ? " — drag to change it, click to move the playhead here" : " — click to move the playhead here");
-    wirePin(mk, drag, t);
-    el.appendChild(mk);
+    key.map(([c, what, cls]) => `<i class="${cls}" style="--c:${c}"></i>${what}`).join("");
+  const guides = document.getElementById("tlGuides"), lanes = document.querySelectorAll(".lane");
+  guides.innerHTML = "";
+  for (const lane of lanes) lane.innerHTML = "";
+  if (!span || !state.sel) return;
+  const tl = document.getElementById("tl"), track = document.getElementById("hotTime");
+  const guide = (t, color, top, bottom) => {
+    const g = document.createElement("i");
+    g.style.cssText = `left:${7 + pinFrac(t) * (tl.clientWidth - 14)}px;top:${top}px;` +
+      `height:${Math.max(0, bottom - top)}px;--c:${color}`;
+    guides.appendChild(g);
+  };
+  const mid = track.offsetTop + track.offsetHeight / 2;
+  for (const lane of lanes) {
+    const kind = lane.dataset.kind, color = kind === "run" ? RUN_PIN : pal.perimeter;
+    const items = pinTargets(kind), act = laneActive(kind, items);
+    lane.style.setProperty("--c", color);
+    lane.innerHTML = items.map(c => `<i style="left:${(100 * pinFrac(c.t)).toFixed(3)}%"` +
+      `${c === act ? ' class="on"' : ""}></i>`).join("");
+    if (!act) continue;
+    const label = document.createElement("b");
+    label.textContent = `${kind === "run" ? "forecast" : "perimeter"} ${fmtShort(act.t)}`;
+    lane.appendChild(label);
+    const x = pinFrac(act.t) * lane.clientWidth, w = label.offsetWidth;
+    // beside the tick, on whichever side keeps it inside the panel
+    label.style.left = `${x + 4 + w <= lane.clientWidth + 7 ? x + 3 : x - 3 - w}px`;
+    guide(act.t, color, mid, lane.offsetTop);
   }
+  if (span.contained) guide(span.end, pal.contained, track.offsetTop, track.offsetTop + track.offsetHeight + 8);
 }
 
 function pinFrac(t) {
@@ -1171,7 +1237,7 @@ function pinFrac(t) {
 }
 
 function pinTargets(kind) {
-  // where a dragged pin can land: real perimeter snapshots, or runs with something to draw
+  // what a lane offers: every perimeter snapshot, or every run with something to draw
   const f = state.fires.find(x => x.slug === state.sel);
   if (!f) return [];
   if (kind === "perimeter") return state.perimIndex.map(p => ({ t: Date.parse(p.date), p }));
@@ -1184,70 +1250,62 @@ function applyPin(kind, target) {
     if (sel.value !== target.run) { sel.value = target.run; refreshWms(); }
     return;
   }
-  // a dragged perimeter pin shows just the snapshot it rests on
-  const f = state.fires.find(x => x.slug === state.sel), n = state.perimIndex.length;
+  // picking on the perimeter lane shows just that snapshot
+  const f = state.fires.find(x => x.slug === state.sel);
   for (const box of document.querySelectorAll("#perimlist input")) {
     const on = box.dataset.ems === target.p.ems;
     if (box.checked === on) continue;
     box.checked = on;
-    const i = state.perimIndex.findIndex(p => p.ems === box.dataset.ems);
-    togglePerim(f, state.perimIndex[i], on, i === n - 1);
+    togglePerim(f, state.perimIndex.find(p => p.ems === box.dataset.ems), on);
   }
   perimSummary();
 }
 
-function wirePin(mk, kind, t0) {
-  mk.addEventListener("pointerdown", ev => {
-    if (ev.button !== 0) return;
-    ev.preventDefault();
-    const targets = kind ? pinTargets(kind) : [];
-    const row = document.getElementById("hotMarks"), tip = document.getElementById("pinTip");
-    const x0 = ev.clientX;
-    let dragging = false, cur = null, timer = 0;
-    mk.setPointerCapture(ev.pointerId);
-    const move = e => {
-      if (!targets.length || (!dragging && Math.abs(e.clientX - x0) < 3)) return;
-      if (!dragging) { dragging = true; state.pinDrag = kind; mk.classList.add("dragging"); }
-      const r = row.getBoundingClientRect();
-      const fx = Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1);
-      const t = state.hotSpan.start + fx * +document.getElementById("hotTime").max * HOUR;
-      // nearest on screen; among targets stacked at a clamped edge, nearest in time
-      let best = null, bd = Infinity, bt = Infinity;
-      for (const c of targets) {
-        const d = Math.abs(pinFrac(c.t) - fx), dt = Math.abs(c.t - t);
-        if (d < bd - 1e-9 || (d < bd + 1e-9 && dt < bt)) { best = c; bd = d; bt = dt; }
-      }
-      if (best === cur) return;
-      cur = best;
-      mk.style.left = `${100 * pinFrac(cur.t)}%`;
-      tip.textContent = `${kind === "run" ? "forecast run" : "perimeter"} ${fmtTs(cur.t)}`;
-      tip.hidden = false;
-      const x = pinFrac(cur.t) * row.clientWidth, w = tip.offsetWidth;
-      tip.style.left = `${Math.min(Math.max(x - w / 2, -7), row.clientWidth + 7 - w)}px`;   // stay inside the panel
-      clearTimeout(timer);
-      timer = setTimeout(() => applyPin(kind, cur), 120);   // the map follows once the pin rests on a snap
-    };
-    const up = () => {
-      mk.removeEventListener("pointermove", move);
-      mk.removeEventListener("pointerup", up);
-      mk.removeEventListener("pointercancel", up);
-      clearTimeout(timer);
-      tip.hidden = true;
-      if (!dragging) { seekHot(t0); return; }
-      state.pinDrag = null;
-      if (cur) applyPin(kind, cur);
-      renderHotMarks();
-    };
-    mk.addEventListener("pointermove", move);
-    mk.addEventListener("pointerup", up);
-    mk.addEventListener("pointercancel", up);
-  });
-}
-
-function seekHot(t) {
-  const span = state.hotSpan, el = document.getElementById("hotTime");
-  el.value = t >= span.end ? el.max : Math.round((Math.max(t, span.start) - span.start) / HOUR);
-  el.dispatchEvent(new Event("input"));
+function wireLanes() {
+  // press anywhere on a lane to jump to the nearest tick; drag to move between ticks.
+  // The highlight follows the pointer at once, the map after a 120ms rest and on release
+  for (const lane of document.querySelectorAll(".lane")) {
+    const kind = lane.dataset.kind;
+    lane.addEventListener("pointerdown", ev => {
+      if (ev.button !== 0 || !state.sel) return;
+      const items = pinTargets(kind);
+      if (!items.length) return;
+      ev.preventDefault();
+      lane.setPointerCapture(ev.pointerId);
+      let cur = null, timer = 0;
+      const pick = e => {
+        const r = lane.getBoundingClientRect();
+        const fx = Math.min(Math.max((e.clientX - r.left) / r.width, 0), 1);
+        const t = state.hotSpan.start + fx * +document.getElementById("hotTime").max * HOUR;
+        // nearest on screen; among ticks stacked at a clamped edge, nearest in time
+        let best = null, bd = Infinity, bt = Infinity;
+        for (const c of items) {
+          const d = Math.abs(pinFrac(c.t) - fx), dt = Math.abs(c.t - t);
+          if (d < bd - 1e-9 || (d < bd + 1e-9 && dt < bt)) { best = c; bd = d; bt = dt; }
+        }
+        if (best === cur) return;
+        cur = best;
+        state.lanePreview = { kind, item: cur };
+        renderHotMarks();
+        clearTimeout(timer);
+        timer = setTimeout(() => applyPin(kind, cur), 120);
+      };
+      const up = () => {
+        lane.removeEventListener("pointermove", pick);
+        lane.removeEventListener("pointerup", up);
+        lane.removeEventListener("pointercancel", up);
+        clearTimeout(timer);
+        state.lanePreview = null;
+        if (cur) applyPin(kind, cur);
+        renderHotMarks();
+      };
+      lane.addEventListener("pointermove", pick);
+      lane.addEventListener("pointerup", up);
+      lane.addEventListener("pointercancel", up);
+      pick(ev);
+    });
+  }
+  window.addEventListener("resize", renderHotMarks);   // labels and guides are placed in px
 }
 
 // The burn scar: every detection older than the ramp, in one canvas. A big fire's
@@ -1559,7 +1617,8 @@ function renderHotspots() {
     parts.push(H.histError ? "earlier history failed to load"
       : `loading history ${Math.floor(100 * have / (today - first + 1))}%`);
   }
-  document.getElementById("hotnote").textContent = parts.join(" · ");
+  const hotnote = document.getElementById("hotnote");
+  hotnote.textContent = hotnote.title = parts.join(" · ");
   if (pending) scheduleHotCoverage();
 }
 
@@ -1581,9 +1640,7 @@ function applyPalette() {
   const pal = Palette.get();
   if (state.toaGeo) paintToa(toaGrid(state.toaGeo));
   renderToaLegend();
-  const cur = state.perimIndex[state.perimIndex.length - 1];
-  const latest = cur && state.perimLayers.get(cur.ems);
-  if (latest) latest.setStyle({ color: pal.perimeter });
+  stylePerims();
   for (const dot of document.querySelectorAll("#perimlist .dot.cur")) dot.style.background = pal.perimeter;
   renderHotMarks();
   renderHotLegend();
