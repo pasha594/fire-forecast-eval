@@ -57,15 +57,6 @@
   .panel-toggle { display: none; }
   body.panel-hidden .panel-toggle { display: block; }
   .panel-toggle button { font: 600 18px/1 var(--font-sans); color: var(--ink-2); }
-  /* a phone: the map takes the screen, and the panel slides in over it */
-  @media (max-width: 760px) {
-    body { position: relative; }
-    #side { position: absolute; left: 0; top: 0; bottom: 0; z-index: 30; width: min(320px, 88vw); min-width: 0;
-            box-shadow: 4px 0 24px rgba(59, 29, 41, 0.25); }
-    #tlDock { padding: 6px 12px 4px; }
-    #tlDock .hot-head { flex-wrap: wrap; row-gap: 2px; }
-    #tlDock .tl-legend { order: 5; flex: 1 1 100%; justify-content: flex-start; margin-left: 0; }
-  }
   h1 { font: 800 19px/24px var(--font-serif); margin: 0 0 var(--sp-1); }
   .sub { color: var(--ink-2); font-size: var(--fs-label); line-height: var(--lh-label); margin: 0 0 var(--sp-4); }
   a:hover { text-decoration-color: var(--ink); }
@@ -317,7 +308,7 @@
   .hot-legend .cap { order: -1; color: var(--ink-2); font-size: var(--fs-meta); line-height: 10px; white-space: nowrap; }
   /* forecast metrics: 9 horizon columns have to fit the 292px content width */
   /* fixed height (a full table): the section must not change size as runs change */
-  .skill-box { height: 58px; }
+  .skill-box { height: 58px; overflow-x: auto; }   /* a narrow phone panel scrolls the table, not clips it */
   .skill-empty { margin: 0; color: var(--muted); font-size: var(--fs-meta); line-height: var(--lh-meta); }
   .skill { border-collapse: collapse; font-size: 11px; line-height: 13px;
            font-variant-numeric: tabular-nums; }
@@ -360,6 +351,22 @@
                      background: var(--surface); color: var(--ink); font: 15px/1 var(--font-sans); cursor: pointer; }
   .ov-pager button:hover:not(:disabled) { background: var(--hover); }
   .ov-pager button:disabled { opacity: .4; cursor: default; }
+  /* the docked timeline's head wraps by the dock's own width (narrowest with the panel
+     beside a tablet-sized map, not only on a phone): the legend and count take a row of
+     their own, and the axis end stays at the right */
+  #tlDock { container-type: inline-size; }
+  @container (max-width: 660px) {
+    #tlDock .hot-head { flex-wrap: wrap; row-gap: 2px; }
+    #tlDock .tl-legend { order: 5; flex: 1 1 100%; justify-content: flex-start; margin-left: 0; }
+    #tlDock #hotEndLabel { margin-left: auto; }
+  }
+  /* a phone: the map takes the screen, and the panel slides in over it (last, so it wins) */
+  @media (max-width: 760px) {
+    body { position: relative; }
+    #side { position: absolute; left: 0; top: 0; bottom: 0; z-index: 30; width: min(320px, 100vw - 24px); min-width: 0;
+            box-shadow: 4px 0 24px rgba(59, 29, 41, 0.25); }
+    #tlDock { padding: 6px 12px 4px; }
+  }
 </style>
 </head>
 <body>
@@ -1044,7 +1051,7 @@ function fitOverview() {
   // as many rows per page as the panel holds without scrolling, at least 5
   const side = document.getElementById("side"), list = document.getElementById("ovList");
   const row = list.firstElementChild;
-  if (state.sel || !row) return;
+  if (state.sel || !row || document.body.classList.contains("panel-hidden")) return;
   const top = side.getBoundingClientRect().top - side.scrollTop;
   const used = document.getElementById("overview").getBoundingClientRect().bottom - top +
     parseFloat(getComputedStyle(side).paddingBottom);
@@ -1091,8 +1098,10 @@ async function select(slug) {
   setMode();
   renderList();
   showSelectedName();
-  if (f.centroid) map.jumpTo({ center: f.centroid, zoom: FIRE_ZOOM });
-  if (PHONE.matches) setPanel(false);   // the fire is on the map: let the phone show it
+  if (f.centroid) {
+    map.jumpTo({ center: f.centroid, zoom: FIRE_ZOOM });
+    if (PHONE.matches) setPanel(false);   // the fire is on the map: let the phone show it
+  } else if (PHONE.matches) setPanel(true);   // nothing to show on the map: keep its details in view
 
   const selRun = document.getElementById("selRun");
   // runs that expired upstream before any file was archived can't draw anything;
@@ -2027,10 +2036,21 @@ function layoutTimelineAxis() {
     const align = x < half ? "transform:none" : x > width - half ? "transform:translateX(-100%)" : "";
     return `<span class="${cls}" style="left:${(100 * f).toFixed(3)}%;${align}">${text}</span>`;
   };
-  document.getElementById("hotDates").innerHTML = majors.filter((t, i) => i % every === 0)
-    .filter(t => nowAt === null || Math.abs(frac(t) - nowAt) * width >= gap)
+  const dates = document.getElementById("hotDates");
+  dates.innerHTML = majors.filter((t, i) => i % every === 0)
     .map(t => label(frac(t), fmtDate(t).slice(0, 5))).join("") +
     (nowAt === null ? "" : label(nowAt, "now", "now"));
+  // then any label that would touch the one before it, or "now", goes (measured, as the
+  // edge-aligned ones don't sit where their spacing says; skipped while hidden)
+  if (!ticks.clientWidth) return;
+  const nowEl = dates.querySelector(".now"), nowBox = nowEl && nowEl.getBoundingClientRect();
+  let right = -Infinity;
+  for (const el of [...dates.children]) {
+    if (el === nowEl) continue;
+    const b = el.getBoundingClientRect();
+    if (b.left < right + 6 || (nowBox && b.right + 6 > nowBox.left && b.left - 6 < nowBox.right)) el.remove();
+    else right = b.right;
+  }
 }
 
 const RUN_PIN = "#2166ac";
@@ -2472,7 +2492,11 @@ function applyPalette() {
 // tapping the map puts it away again.
 const PHONE = matchMedia("(max-width: 760px)");
 function setPanel(open) {
+  const side = document.getElementById("side"), had = document.activeElement;
   document.body.classList.toggle("panel-hidden", !open);
+  // focus on a control that just hid moves to the one that undoes it
+  if (open && had && had.closest(".panel-toggle")) document.getElementById("hidePanel").focus();
+  if (!open && side.contains(had)) document.querySelector(".panel-toggle button").focus();
   // beside the map (not over it), the panel's width moves to the map and the dock
   map.resize();
   layoutTimelineAxis();
