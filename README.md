@@ -8,7 +8,8 @@ Pyrecast deletes forecast runs after ~1 day (verified: both
 `data.pyrecast.org/fire_spread_forecast/` and their geoserver retain only the
 latest ~2 runs per fire), so a GitHub Actions cron archives them every 2h into
 Backblaze B2. Ground truth is Cornea's fire API (`fire-api-prod.web.app`),
-which retains dated perimeter snapshots per fire (~2–3/day for active fires).
+which retains dated perimeter snapshots per fire (often several edits a day, but
+typically about one newly mapped perimeter per fire-day).
 
 ## Pieces
 
@@ -116,9 +117,33 @@ assumes a single writer. Disable the workflow (or wait for it to finish) first.
 For a forecast issued at `run_ts`, percentile `p`, window `H` hours:
 
 - **pred_new** = pixels with time-of-arrival ≤ H, minus baseline
-- **baseline B** = latest Cornea perimeter at/before `run_ts`(+3h), rasterized onto the forecast's own UTM grid
-- **actual A** = Cornea perimeter nearest `run_ts + H` (required within ±12h; signed offset recorded)
+- **baseline B** = latest Cornea perimeter mapped (or, lacking a reliable mapped time, last edited) by the end of `run_ts`'s minute, as published by then, rasterized onto the forecast's own UTM grid — never one from after the run. (`run_ts` is cut to the minute: Pyrecast names a run after the perimeter it started from, seconds dropped.)
+- **actual A** = Cornea perimeter mapped nearest `run_ts + H` within ±12h; failing that, the one last edited nearest it within ±12h; failing that, the one published nearest it within ±12h, at its (earlier) mapped time. The signed offset is recorded either way
 - **precision** = area(pred_new ∩ act_new) / area(pred_new), **recall** = area(pred_new ∩ act_new) / area(act_new), where act_new = A − B
+
+**Perimeter times.** Every Cornea snapshot is one *edit* of a WFIGS polygon, and
+its date (and archive file name) is the edit time, `poly_DateCurrent` — a median
+~17h after the polygon was mapped (as of Oct 2026; p90 ~5 days, since old
+captures get re-edited). Each snapshot is scored at the most reliable time it
+has:
+
+1. **mapped** — `poly_PolygonDateTime`, if it is at most 5 minutes after its own
+   edit, no earlier than a day before discovery (61 days before the edit when
+   discovery is unknown; typos like year 0926 exist), and the polygon's area is
+   within 2% and 25 acres of the first edit that carried that time (editors often
+   redraw a growing perimeter without updating it, and leave `poly_GISAcres`
+   stale too, so the area is measured from the geometry). Matching edits are
+   corrections of that capture: an actual uses the latest one, a baseline the
+   latest one published by the run (else the first), so no growth published
+   after the run can enter it.
+2. **edited** — otherwise `poly_DateCurrent`, the publish time, which is no
+   earlier than the mapping it stands in for. (`poly_CreateDate` was checked
+   and adds nothing: it is either the upload time or the polygon record's
+   original creation, often days before the perimeter.)
+
+No snapshot is dropped. `baseline_time_basis` / `actual_time_basis` say which
+time each row used, and report.html can restrict to mapped times only.
+`*_perim_ms` are snapshot ids (edit times); `*_time_utc` are the times scored.
 
 **Hotspot capture** (`hs_*` columns) is the deliberately *separate* satellite
 companion metric: detections within exactly `(run, run+H]` (their timestamps

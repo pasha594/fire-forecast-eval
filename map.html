@@ -469,13 +469,13 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
       <p>This run is scored against <b>NIFC fire perimeters</b> — hotspots are not used.</p>
       <ul>
         <li><b>Predicted:</b> where the forecast's time of arrival is within the horizon.</li>
-        <li><b>Actual:</b> the NIFC perimeter mapped closest to run time + horizon.</li>
-        <li><b>Growth only:</b> the perimeter at forecast time is removed from both, so only new spread counts.</li>
+        <li><b>Actual:</b> the NIFC perimeter mapped closest to run time + horizon (timed by its last edit when it has no reliable mapped time).</li>
+        <li><b>Growth only:</b> the latest perimeter mapped before the run is removed from both, so only new spread counts.</li>
       </ul>
       <p><b>Precision</b> = overlap ÷ predicted growth<br><b>Recall</b> = overlap ÷ actual growth<br>
         <b>IoU</b> = overlap ÷ area either one covers</p>
       <p class="muted">A horizon is shown only when the fire grew at least 10 acres, a perimeter was
-        mapped within 6h of it, and at most 10% of the growth fell outside the forecast's area —
+        mapped (or last edited) within 6h of it, and at most 10% of the growth fell outside the forecast's area —
         the metrics report's default filters.</p>
     </div>
     <div class="skill-box"><table class="skill" id="skillTable"></table>
@@ -1765,7 +1765,7 @@ function renderSkill() {
   empty.hidden = !!rows.length;
   if (!rows.length) {
     empty.textContent = doc
-      ? "Not scored for this run and percentile: it needs at least 10 acres of growth and a perimeter mapped within 6h of a horizon."
+      ? "Not scored for this run and percentile: it needs at least 10 acres of growth and a perimeter mapped (or last edited) within 6h of a horizon."
       : "No scored forecasts for this fire yet.";
     return;
   }

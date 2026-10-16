@@ -35,9 +35,20 @@ TOA_TO_HOURS = 1.0
 
 HORIZONS_H = (12, 24, 48, 72, 96, 120, 168, 240, 336)
 PUBLIC_BUCKET_URL = "https://f005.backblazeb2.com/file/fire-forecast-archive"
-BASELINE_TOL_H = 3.0     # baseline = latest perimeter <= run + this
-ACTUAL_TOL_H = 12.0      # actual must be within +/- this of run + H
+# baseline = latest perimeter mapped <= run + this. run_ts is cut to the minute: Pyrecast
+# names a run after the time of the perimeter it started from, seconds dropped
+BASELINE_TOL_H = 59.999 / 3600
+ACTUAL_TOL_H = 12.0      # actual = perimeter mapped (else edited/published) within +/- this of run + H
+# Perimeter times (see PerimeterSet): a snapshot's file key / Cornea date is its last
+# EDIT (poly_DateCurrent), a median ~17h after the polygon was mapped. The mapped time is
+# poly_PolygonDateTime, used only if it is plausible and the geometry still matches the
+# first edit that carried it (editors often redraw a perimeter without updating it);
+# otherwise the edit time stands in, and each row records which one it used.
+CAPTURE_REL_TOL = 0.02   # later edits within this area change of the first edit,
+CAPTURE_TOL_AC = 25.0    # and within this many acres, are corrections of the same capture
+CAPTURE_LATE_S = 300     # a capture time may sit at most this far after its own edit
 SQM_PER_ACRE = 4046.8564224
+ISO_Z = "%Y-%m-%dT%H:%M:%SZ"
 PERCENTILES = ("10", "30", "50", "70", "90")
 
 REPO = Path(__file__).resolve().parent
@@ -49,8 +60,9 @@ SKILL_FILTERS = {"min_act_new_acres": 10, "max_abs_offset_h": 6, "max_offgrid_fr
 SKILL_UPLOAD_WORKERS = 16
 
 CSV_COLUMNS = ["slug", "cornea_id", "run_ts", "run_dt_utc", "percentile",
-               "horizon_h", "valid_dt_utc", "baseline_perim_ms", "baseline_offset_h",
-               "actual_perim_ms", "actual_offset_h", "pixel_m", "baseline_acres",
+               "horizon_h", "valid_dt_utc", "baseline_perim_ms", "baseline_time_utc",
+               "baseline_time_basis", "baseline_offset_h", "actual_perim_ms", "actual_time_utc",
+               "actual_time_basis", "actual_offset_h", "pixel_m", "baseline_acres",
                "pred_total_acres", "pred_new_acres", "act_new_acres", "inter_acres",
                "precision", "recall", "iou", "act_outside_acres", "act_offgrid_frac",
                "hs_n", "hs_new_acres", "hs_hit_acres", "hs_capture",
@@ -153,38 +165,150 @@ def inspect(path):
 
 # ---------------------------------------------------------------- geometry
 
+def _parts(gj):
+    """[(geometry, properties)] of a snapshot, however Cornea wrapped it."""
+    if gj.get("type") == "FeatureCollection":
+        g = gj
+    else:
+        g = gj.get("geometry") if "geometry" in gj else gj
+    g = g or {}
+    if g.get("type") == "FeatureCollection":
+        return [((f or {}).get("geometry") or {}, (f or {}).get("properties") or {})
+                for f in g.get("features") or []]
+    return [(g, gj.get("properties") or {})]
+
+
+def _ring_acres(ring):
+    """Approximate area of one ring: shoelace on degrees, scaled at the ring's latitude."""
+    a = np.asarray([p[:2] for p in ring], dtype=float)
+    if len(a) < 3:
+        return 0.0
+    deg2 = abs(np.dot(a[:, 0], np.roll(a[:, 1], -1)) - np.dot(a[:, 1], np.roll(a[:, 0], -1))) / 2
+    return deg2 * 111320.0 ** 2 * np.cos(np.radians(a[:, 1].mean())) / SQM_PER_ACRE
+
+
+def _acres(parts):
+    """Polygon area in acres, measured from the geometry: poly_GISAcres can't be used, as
+    redraws leave it stale too. Only compared between edits of one perimeter."""
+    total = 0.0
+    for g, _ in parts:
+        polys = {"Polygon": [g.get("coordinates")], "MultiPolygon": g.get("coordinates")}.get(g.get("type")) or []
+        for rings in polys:
+            if rings:
+                total += max(0.0, _ring_acres(rings[0]) - sum(_ring_acres(r) for r in rings[1:]))
+    return total
+
+
 class PerimeterSet:
-    """Perimeter timeline for one fire + lazy per-grid rasterization cache."""
+    """Perimeter timeline for one fire + lazy per-grid rasterization cache.
+
+    Each Cornea snapshot is one edit of a WFIGS polygon, keyed by its edit time. Every
+    snapshot gets the most reliable time it has: when it was mapped (poly_PolygonDateTime),
+    if that is plausible and the polygon still matches the first edit that carried it
+    (later matching edits are corrections of that capture); otherwise when it was last
+    edited (published), which bounds when it was mapped. poly_CreateDate adds nothing: it
+    is either the upload time or the polygon record's original creation, often days before."""
 
     def __init__(self, slug):
         self.slug = slug
-        self.timeline = []  # sorted [(dt, epochms)]
+        self.timeline = []      # sorted [(time, epochms, basis)], basis "mapped" or "edited";
+                                # a mapped capture appears once, as its latest correction
+        self.corrections = {}   # mapped time -> sorted [(edit dt, epochms)] of that capture
+        self.published = []     # sorted [(edit dt, epochms)]: every snapshot
+        self.time_of = {}       # epochms -> (time, basis) for every snapshot
+        self.unreadable = 0
+        by_capture = {}
         idx = load_json(RAW / "perimeter_archive" / slug / "index.json")
         for item in (idx or {}).get("index", []):
             path, date = item.get("path"), item.get("date")
             if not path or not date:
                 continue
             epochms = path.rsplit("/", 1)[-1]
-            if (RAW / "perimeter_archive" / slug / f"{epochms}.geojson").exists():
-                self.timeline.append((parse_iso(date), epochms))
+            try:
+                gj = load_json(RAW / "perimeter_archive" / slug / f"{epochms}.geojson")
+                if gj is None:
+                    continue
+                parts = _parts(gj)
+                acres = _acres(parts)
+            except (ValueError, TypeError, AttributeError, IndexError) as e:
+                # one bad snapshot must not stop the whole run: leave it out of the timeline
+                log(f"{slug}/{epochms}.geojson unreadable, skipped: {e}")
+                self.unreadable += 1
+                continue
+            pr = parts[0][1] if parts else {}
+            edited = parse_iso(date)
+            self.published.append((edited, epochms))
+            cap, disc = pr.get("poly_PolygonDateTime"), pr.get("attr_FireDiscoveryDateTime")
+            # plausible: at most CAPTURE_LATE_S after its own edit, and no earlier than a day
+            # before discovery (61 days before the edit if discovery is unknown): catches
+            # typos like year 0926
+            lo = (disc / 1000 if isinstance(disc, (int, float))
+                  else edited.timestamp() - 60 * 86400) - 86400
+            if (isinstance(cap, (int, float)) and np.isfinite(acres)
+                    and lo <= cap / 1000 <= edited.timestamp() + CAPTURE_LATE_S):
+                by_capture.setdefault(int(cap), []).append((edited, epochms, acres))
+            else:
+                self._add(edited, epochms, "edited")
+        for cap, edits in by_capture.items():
+            edits.sort()
+            mapped, a0 = datetime.fromtimestamp(cap / 1000, timezone.utc), edits[0][2]
+            tol = min(CAPTURE_REL_TOL * a0, CAPTURE_TOL_AC)
+            same = [(edited, e) for edited, e, area in edits if a0 > 0 and abs(area - a0) <= tol]
+            for edited, e, area in edits:
+                if (edited, e) in same:
+                    self.time_of[e] = (mapped, "mapped")
+                else:
+                    self._add(edited, e, "edited")   # redrawn under a stale capture time
+            if same:
+                self.corrections[mapped] = same
+                self.timeline.append((mapped, same[-1][1], "mapped"))
         self.timeline.sort()
+        self.published.sort()
         self._geom_utm = {}   # (epochms, crs_str) -> shapely geom in raster CRS
         self._mask = {}       # (epochms, grid_sig) -> bool ndarray
 
+    def _add(self, t, epochms, basis):
+        self.timeline.append((t, epochms, basis))
+        self.time_of[epochms] = (t, basis)
+
     def latest_at_or_before(self, dt):
+        """The most recent perimeter known to be mapped by dt -> (time, epochms, basis), as
+        published by dt: of a mapped capture, the latest correction out by then (else its
+        first edit), so later growth can't creep in. An edit time is safe here too: it is
+        no earlier than the mapping it stands in for."""
         best = None
-        for t, e in self.timeline:
-            if t <= dt:
-                best = (t, e)
+        for t, e, basis in self.timeline:
+            if t <= dt and (best is None or t > best[0]):
+                best = (t, e, basis)
+        if best and best[2] == "mapped":
+            edits = self.corrections[best[0]]
+            out = [e for edited, e in edits if edited <= dt]
+            best = (best[0], out[-1] if out else edits[0][1], "mapped")
         return best
 
     def nearest(self, dt, tol_h):
-        best = None
-        for t, e in self.timeline:
-            off = (t - dt).total_seconds() / 3600.0
-            if abs(off) <= tol_h and (best is None or abs(off) < abs(best[2])):
-                best = (t, e, off)
-        return best
+        """The perimeter showing the fire at dt -> (time, epochms, offset_h, basis), by
+        reliability: the one mapped closest to dt within tol_h; else the one last edited
+        closest to it (its mapped time unknown); else the one published closest to dt, at
+        its mapped time even though that is further off (a late re-edit of an older map).
+        A mapped capture is always its latest correction."""
+        for want in ("mapped", "edited"):
+            best = None
+            for t, e, basis in self.timeline:
+                off = (t - dt).total_seconds() / 3600.0
+                if basis == want and abs(off) <= tol_h and (best is None or abs(off) < abs(best[2])):
+                    best = (t, e, off, basis)
+            if best:
+                return best
+        pub = [(abs((t - dt).total_seconds()), e) for t, e in self.published
+               if abs((t - dt).total_seconds()) <= tol_h * 3600]
+        if not pub:
+            return None
+        e = min(pub)[1]
+        t, basis = self.time_of[e]
+        if basis == "mapped":
+            e = self.corrections[t][-1][1]
+        return (t, e, (t - dt).total_seconds() / 3600.0, basis)
 
     def geom_utm(self, epochms, crs):
         from rasterio.warp import transform_geom
@@ -288,7 +412,8 @@ def compute(only_slug=None):
     perimsets = {}
     hssets = {}
     rows = []
-    skipped = {"no_match": 0, "no_perims": 0, "no_horizon": 0, "missing_tif": 0}
+    skipped = {"no_match": 0, "no_perims": 0, "no_horizon": 0, "missing_tif": 0,
+               "unreadable_perims": 0}
 
     for run_key in sorted(manifest["runs"]):
         entry = manifest["runs"][run_key]
@@ -306,6 +431,7 @@ def compute(only_slug=None):
             perimsets.clear()
             hssets.clear()
             perimsets[slug] = PerimeterSet(slug)
+            skipped["unreadable_perims"] += perimsets[slug].unreadable
         ps = perimsets[slug]
         if not ps.timeline:
             skipped["no_perims"] += 1
@@ -347,7 +473,7 @@ def compute(only_slug=None):
                  if baseline else np.zeros(arr.shape, dtype=bool))
             b_geom = ps.geom_utm(baseline[1], crs) if baseline else None
 
-            for H, (a_dt, a_ems, a_off) in horizons:
+            for H, (a_dt, a_ems, a_off, a_basis) in horizons:
                 A = ps.mask(a_ems, crs, tfm, arr.shape)
                 pred = valid & (toa_h <= H)
                 pred_new = pred & ~B
@@ -370,13 +496,17 @@ def compute(only_slug=None):
                 rows.append({
                     "slug": slug, "cornea_id": m["cornea_id"],
                     "run_ts": entry["run_ts"],
-                    "run_dt_utc": run_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "run_dt_utc": run_dt.strftime(ISO_Z),
                     "percentile": pct, "horizon_h": H,
-                    "valid_dt_utc": (run_dt + timedelta(hours=H)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "valid_dt_utc": (run_dt + timedelta(hours=H)).strftime(ISO_Z),
                     "baseline_perim_ms": baseline[1] if baseline else "",
+                    "baseline_time_utc": baseline[0].strftime(ISO_Z) if baseline else "",
+                    "baseline_time_basis": baseline[2] if baseline else "",
                     "baseline_offset_h": (round((baseline[0] - run_dt).total_seconds() / 3600, 2)
                                           if baseline else ""),
                     "actual_perim_ms": a_ems,
+                    "actual_time_utc": a_dt.strftime(ISO_Z),
+                    "actual_time_basis": a_basis,
                     "actual_offset_h": round(a_off, 2),
                     "pixel_m": round(abs(tfm.a), 1),
                     "baseline_acres": acres(int(B.sum()), px_area),

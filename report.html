@@ -39,6 +39,7 @@
     border-radius: 6px; background: var(--surface); color: var(--ink); width: 90px;
   }
   .filters .chk { display: flex; gap: 6px; align-items: center; padding-bottom: 6px; }
+  .filters [hidden] { display: none; }
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
   .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
   .tile .v { font: 800 26px/1.2 var(--font-serif); color: var(--stat); }
@@ -76,9 +77,11 @@
   </div>
   <h1>ELMFIRE forecast metrics vs actual perimeters</h1>
   <p class="sub">Growth-only precision &amp; recall of Pyrecast fire-spread forecasts against Cornea
-  perimeter snapshots. One row per (fire, forecast run, weather percentile, horizon) with ground
-  truth within &plusmn;12h. Predicted area = time-of-arrival &le; horizon; both sides subtract the
-  perimeter at forecast issuance.</p>
+  perimeter snapshots. One row per (fire, forecast run, weather percentile, horizon) with a perimeter
+  near the horizon: mapped within &plusmn;12h, else last edited within &plusmn;12h, else published then
+  (at its earlier mapped time); the offset is recorded. Perimeters without a reliable mapped time are
+  timed by their last edit. Predicted area = time-of-arrival &le; horizon; both sides subtract the latest
+  perimeter mapped before the run.</p>
 
   <div id="loaderr" hidden></div>
 
@@ -89,6 +92,8 @@
       <input type="number" id="fMaxOff" value="6" min="0" step="1"></div>
     <div class="chk"><input type="checkbox" id="fOffgrid" checked>
       <label for="fOffgrid" style="margin:0">exclude &gt;10% off-grid growth</label></div>
+    <div class="chk" id="fMappedWrap" hidden><input type="checkbox" id="fMapped">
+      <label for="fMapped" style="margin:0" title="Leave out rows whose baseline or actual perimeter has no reliable mapped time and was timed by its last edit instead">only perimeters with a reliable mapped time</label></div>
   </div>
 
   <div class="tiles" id="tiles" hidden></div>
@@ -170,10 +175,14 @@ function filtered() {
   const minG = +document.getElementById("fMinGrowth").value || 0;
   const maxOff = +document.getElementById("fMaxOff").value || 0;
   const exOff = document.getElementById("fOffgrid").checked;
+  // only when the data says which time each perimeter used (older metrics.csv files don't)
+  const mappedOnly = !document.getElementById("fMappedWrap").hidden && document.getElementById("fMapped").checked;
   return DATA.filter(r =>
     r.act_new_acres !== null && r.act_new_acres >= minG &&
     Math.abs(r.actual_offset_h) <= maxOff &&
-    (!exOff || r.act_offgrid_frac <= 0.10));
+    (!exOff || r.act_offgrid_frac <= 0.10) &&
+    (!mappedOnly || (r.actual_time_basis === "mapped" &&
+                     (!r.baseline_perim_ms || r.baseline_time_basis === "mapped"))));
 }
 
 
@@ -347,17 +356,27 @@ function acqMs(pr) {
   return Date.UTC(Y, M - 1, D, Math.floor(hm / 100), Math.round(hm % 100));
 }
 
+// which time a perimeter was scored at: when it was mapped, or (no reliable mapped time)
+// when it was last edited, which it was mapped by. Older metrics.csv files only have the
+// perimeter ids, which are edit times.
+function perimTime(row, role) {
+  const basis = row[`${role}_time_basis`];
+  const at = row[`${role}_time_utc`] || +row[`${role}_perim_ms`];
+  return { at, mapped: basis === "mapped", legacy: !basis };
+}
+
 function describeTimes(row) {
   const fmt = x => fmtDT(typeof x === "string" ? Date.parse(x) : x);
-  const off = row.actual_offset_h;
+  const off = row.actual_offset_h, act = perimTime(row, "actual");
   let t = `forecast run <b>${fmt(row.run_dt_utc)}</b> · +${row.horizon_h}h window ends ` +
-    `<b>${fmt(row.valid_dt_utc)}</b> · scored against perimeter mapped ` +
-    `<b>${fmt(+row.actual_perim_ms)}</b> (<b>${Math.abs(off).toFixed(1)}h ` +
-    `${off < 0 ? "before" : "after"}</b> window end)`;
-  t += row.baseline_perim_ms
-    ? ` · baseline perimeter mapped ${fmt(+row.baseline_perim_ms)} ` +
-      `(${Math.abs(row.baseline_offset_h).toFixed(1)}h ${row.baseline_offset_h < 0 ? "before" : "after"} run)`
-    : " · baseline: none (no mapped perimeter existed at issuance)";
+    `<b>${fmt(row.valid_dt_utc)}</b> · scored against perimeter ${act.mapped ? "mapped" : "last edited"} ` +
+    `<b>${fmt(act.at)}</b> (<b>${Math.abs(off).toFixed(1)}h ` +
+    `${off < 0 ? "before" : "after"}</b> window end${act.mapped ? "" : act.legacy ? "; older metrics file, edit times only" : "; no reliable mapped time"})`;
+  if (row.baseline_perim_ms) {
+    const base = perimTime(row, "baseline");
+    t += ` · baseline perimeter ${base.mapped ? "mapped" : "last edited"} ${fmt(base.at)} ` +
+      `(${Math.abs(row.baseline_offset_h).toFixed(1)}h ${row.baseline_offset_h < 0 ? "before" : "after"} run)`;
+  } else t += " · baseline: none (no perimeter was mapped before the run)";
   return t;
 }
 
@@ -570,7 +589,9 @@ async function init() {
 
 function start() {
   document.getElementById("filters").hidden = false;
-  for (const id of ["fMinGrowth", "fMaxOff", "fOffgrid"])
+  // older metrics.csv files don't say which time each perimeter was scored at
+  document.getElementById("fMappedWrap").hidden = !DATA.some(r => r.actual_time_basis);
+  for (const id of ["fMinGrowth", "fMaxOff", "fOffgrid", "fMapped"])
     document.getElementById(id).addEventListener("change", redraw);
   [["insFire", 1], ["insRun", 2], ["insPct", 3], ["insH", 4]].forEach(([id, lvl]) =>
     document.getElementById(id).addEventListener("change", () => populateInspector(lvl)));
