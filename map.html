@@ -475,7 +475,7 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
       <p><b>Precision</b> = overlap ÷ predicted growth<br><b>Recall</b> = overlap ÷ actual growth<br>
         <b>IoU</b> = overlap ÷ area either one covers</p>
       <p class="muted">A horizon is shown only when the fire grew at least 10 acres, a perimeter was
-        mapped (or last edited) within 6h of it, and at most 10% of the growth fell outside the forecast's area —
+        mapped (or last edited) within 3h of it, and at most 10% of the growth fell outside the forecast's area —
         the metrics report's default filters.</p>
     </div>
     <div class="skill-box"><table class="skill" id="skillTable"></table>
@@ -1765,7 +1765,7 @@ function renderSkill() {
   empty.hidden = !!rows.length;
   if (!rows.length) {
     empty.textContent = doc
-      ? "Not scored for this run and percentile: it needs at least 10 acres of growth and a perimeter mapped (or last edited) within 6h of a horizon."
+      ? "Not scored for this run and percentile: it needs at least 10 acres of growth and a perimeter mapped (or last edited) within 3h of a horizon."
       : "No scored forecasts for this fire yet.";
     return;
   }

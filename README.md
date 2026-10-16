@@ -67,7 +67,7 @@ skill/{slug}.json  {"v": 1, "slug", "generated", "filters": {...},
 ```
 
 Rows use the metrics report's default filters exactly (actual growth ≥ 10 acres,
-perimeter offset within ±6h, off-grid growth ≤ 10%; blank offset/off-grid count as
+perimeter offset within ±3h, off-grid growth ≤ 10%; blank offset/off-grid count as
 0), entries are sorted by `H`, scores are rounded to 3 decimals (`null` when
 undefined), and `index.json` lists only fires with ≥ 1 scored row. Fires that
 drop out keep a stale `skill/{slug}.json` in the bucket, but are no longer

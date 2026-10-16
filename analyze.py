@@ -56,7 +56,7 @@ RAW = REPO / "raw"
 SKILL_DIR = REPO / "data" / "skill"
 
 # must stay equal to report.html's default filter inputs
-SKILL_FILTERS = {"min_act_new_acres": 10, "max_abs_offset_h": 6, "max_offgrid_frac": 0.10}
+SKILL_FILTERS = {"min_act_new_acres": 10, "max_abs_offset_h": 3, "max_offgrid_frac": 0.10}
 SKILL_UPLOAD_WORKERS = 16
 
 CSV_COLUMNS = ["slug", "cornea_id", "run_ts", "run_dt_utc", "percentile",
