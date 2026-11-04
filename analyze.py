@@ -125,6 +125,47 @@ def http_get(sess, url, timeout=(10, 120)):
         time.sleep(delay)
 
 
+# A fire's perimeter index.json and latest hotspot days are MUTABLE while collect
+# still writes them, and a cached copy then hides newer data (the rows-frozen-at-463
+# bug). But collect only writes fires that are listed upstream or had a run in the
+# last 15 days (collect.main's scoring set); after that their files never change.
+# Re-fetching every finished fire anyway cost ~2,500 downloads (~13 min) per run by
+# Nov. A finished fire is re-fetched once more after it freezes, then left alone
+# until its manifest entries change. 3 days of slack covers clock skew and a collect
+# run overlapping this sync.
+FROZEN_AFTER = timedelta(days=15 + 3)
+# collect rewrites hotspot days since (now - 3d) by date: up to 4 calendar days
+HOTSPOT_REWRITE_DAYS = 4
+# in raw/, so it travels in the actions cache together with the files it vouches for
+FROZEN_STATE = "sync_frozen.json"
+
+
+def frozen_fingerprints(manifest, now):
+    """{slug: fingerprint} for the fires collect can no longer write. A fire with no
+    datable run counts as active, so it is always re-fetched."""
+    last = {}
+    for e in manifest["runs"].values():
+        try:
+            t = datetime.strptime(e["run_ts"], "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
+            if e.get("last_seen"):
+                t = max(t, parse_iso(e["last_seen"]))
+        except (KeyError, ValueError):
+            continue
+        last[e["slug"]] = max(last.get(e["slug"], t), t)
+    perims = manifest.get("perimeters") or {}
+    hotspots = manifest.get("hotspots") or {}
+    out = {}
+    for slug in set(perims) | set(hotspots):
+        if slug not in last or now - last[slug] < FROZEN_AFTER:
+            continue
+        ep, days = perims.get(slug) or [], hotspots.get(slug) or []
+        # any manifest change for the fire (it came back, a late backfill) un-freezes it
+        out[slug] = {"last_activity": last[slug].strftime(ISO_Z),
+                     "perimeters": [len(ep), ep[-1] if ep else None],
+                     "hotspots": [len(days), days[-1] if days else None]}
+    return out
+
+
 def sync_bucket(url):
     """Mirror the R2 bucket (public r2.dev URL) into raw/, manifest-driven."""
     import requests
@@ -140,22 +181,34 @@ def sync_bucket(url):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(get(key).content)
     manifest = load_json(RAW / "manifest.json")
+    frozen = frozen_fingerprints(manifest, datetime.now(timezone.utc))
+    state_path = RAW / FROZEN_STATE
+    settled = load_json(state_path) or {}
+
+    def is_settled(slug):
+        """local copies were fetched after collect stopped writing this fire"""
+        return slug in frozen and settled.get(slug) == frozen[slug]
+
     wanted = []
     for run_key, entry in manifest["runs"].items():
         for pct, info in entry["files"].items():
             if info.get("ok"):
                 wanted.append(f"forecast_archive/{run_key}/{pct}.tif")
+    refreshing = set()
     for slug, epochs in (manifest.get("perimeters") or {}).items():
-        # index.json is MUTABLE (the perimeter timeline grows) — always refresh,
-        # or a cached copy hides newer snapshots from PerimeterSet
+        # the perimeter timeline grows: refresh unless the fire is settled
         idx = RAW / "perimeter_archive" / slug / "index.json"
-        if idx.exists():
-            idx.unlink()
+        if not is_settled(slug):
+            refreshing.add(slug)
+            if idx.exists():
+                idx.unlink()
         wanted.append(f"perimeter_archive/{slug}/index.json")
         wanted += [f"perimeter_archive/{slug}/{e}.geojson" for e in epochs]
     for slug, days in (manifest.get("hotspots") or {}).items():
-        # recent day files are rewritten upstream; re-fetch the last 3 always
-        recent = set(days[-3:])
+        # collect rewrites the most recent days; refresh them unless the fire is settled
+        recent = set() if is_settled(slug) else set(days[-HOTSPOT_REWRITE_DAYS:])
+        if recent:
+            refreshing.add(slug)
         for d in days:
             p = RAW / "hotspot_archive" / slug / f"{d}.geojson"
             if d in recent and p.exists():
@@ -171,7 +224,13 @@ def sync_bucket(url):
         tmp.replace(p)
         n += 1
         time.sleep(0.02)
-    log(f"sync: {n} new objects ({len(wanted)} tracked)")
+    # only once every download landed: each frozen fire is now settled, either from
+    # an earlier run or because this run just fetched its final copies
+    tmp = state_path.with_suffix(".json.part")
+    tmp.write_text(json.dumps(frozen, sort_keys=True))
+    tmp.replace(state_path)
+    log(f"sync: {n} new objects ({len(wanted)} tracked); refreshed {len(refreshing)} fires, "
+        f"{len(frozen) - len(refreshing & set(frozen))} finished fires left as cached")
 
 
 # ---------------------------------------------------------------- inspect
