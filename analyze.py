@@ -94,6 +94,37 @@ def load_json(path):
 
 # ---------------------------------------------------------------- sync
 
+# B2's public URL throws occasional 500/503s and the odd dropped connection; a
+# single one used to kill the whole analyze run mid-sync (Oct 29 + 30)
+RETRY_STATUS = {429, 500, 502, 503, 504}
+RETRY_DELAYS_S = (2, 5, 15, 30, 60)
+
+
+def http_get(sess, url, timeout=(10, 120)):
+    """GET with backoff on transient errors (5xx, 429, connection/timeout). A 404
+    or other 4xx raises at once: a manifest-listed object should exist."""
+    import requests
+    for delay in RETRY_DELAYS_S + (None,):
+        try:
+            r = sess.get(url, timeout=timeout)
+            if r.status_code not in RETRY_STATUS or delay is None:
+                r.raise_for_status()
+                # urllib3 1.x returns a cut-off body silently; sync would cache it
+                want = r.headers.get("Content-Length")
+                if want and not r.headers.get("Content-Encoding") and len(r.content) != int(want):
+                    raise requests.exceptions.ChunkedEncodingError(
+                        f"truncated body: {len(r.content)}/{want} bytes")
+                return r
+            err = f"HTTP {r.status_code}"
+        except (requests.ConnectionError, requests.Timeout,
+                requests.exceptions.ChunkedEncodingError) as e:
+            if delay is None:
+                raise
+            err = type(e).__name__
+        log(f"retrying in {delay}s ({err}): {url}")
+        time.sleep(delay)
+
+
 def sync_bucket(url):
     """Mirror the R2 bucket (public r2.dev URL) into raw/, manifest-driven."""
     import requests
@@ -101,9 +132,7 @@ def sync_bucket(url):
     sess = requests.Session()
 
     def get(key):
-        r = sess.get(f"{url}/{key}", timeout=(10, 120))
-        r.raise_for_status()
-        return r
+        return http_get(sess, f"{url}/{key}")
 
     n = 0
     for key in ("manifest.json", "fire_matches.json"):
@@ -612,8 +641,7 @@ def skill_only():
     import requests
     # before the download, so missing S3_* env fails fast
     client, bucket = collect.make_r2()
-    r = requests.get(f"{PUBLIC_BUCKET_URL}/metrics.csv", timeout=(10, 120))
-    r.raise_for_status()
+    r = http_get(requests.Session(), f"{PUBLIC_BUCKET_URL}/metrics.csv")
     dst = RAW / "metrics_published.csv"
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_bytes(r.content)

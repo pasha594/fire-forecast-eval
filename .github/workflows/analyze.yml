@@ -17,9 +17,10 @@ concurrency:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    # full recompute grows with the archive (~25min at 1.7k runs); catch-up runs
-    # after a gap also re-sync several days of tifs
-    timeout-minutes: 90
+    # full recompute grows with the archive (~25min at 1.7k runs, 66-76min at 2.9k
+    # in Nov; a 90-min limit cancelled Oct 31). Catch-up runs after a gap, or a
+    # cold cache, also re-sync days of tifs. Minutes are free on a public repo.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
