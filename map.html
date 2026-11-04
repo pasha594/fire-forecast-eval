@@ -30,6 +30,7 @@
     --rng-ring: 0 0 0 1px rgba(59, 29, 41, 0.5), 0 1px 2px rgba(59, 29, 41, 0.25);
     --rng-ring-hover: 0 0 0 1px var(--ink), 0 1px 3px rgba(59, 29, 41, 0.35);
     --rng-ring-focus: 0 0 0 1px var(--surface), 0 0 0 3px var(--ink);
+    --bubble: #f0c888;                    /* the timeline's hotspot-activity bubbles */
   }
   /* the docked timeline is the large size of the same slider */
   #tlDock { --rng-h: 22px; --rng-track: 6px; }
@@ -300,6 +301,40 @@
   #tlDock #hotDates { height: var(--lh-meta); margin-top: 1px; }
   #tlDock #hotDates span { font-size: var(--fs-meta); line-height: var(--lh-meta); }
   .tl-guides i { position: absolute; width: 1px; margin-left: -0.5px; background: var(--c); opacity: .6; }
+  /* hotspot activity: a bubble per 12 hours, day or week of detections (its area by the
+     count) centred on the playhead track. First in .tl and positioned, so every other row
+     of the timeline (lanes, track, ticks, dates, guides, thumb) draws over it */
+  #tlBubbles { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+  #tlBubbles circle { fill: var(--bubble); stroke: var(--surface); stroke-width: 1; }
+  /* what the bubbles count, at the right end of the row above the track */
+  .bub-cap { position: absolute; right: 3px; display: flex; align-items: center; gap: 4px; height: var(--lh-micro);
+             color: var(--ink-2); font-size: var(--fs-micro); line-height: var(--lh-micro); white-space: nowrap; }
+  .bub-cap[hidden] { display: none; }
+  .bub-cap i { width: 8px; height: 8px; border-radius: 50%; background: var(--bubble); }
+  #tlDock .bub-cap { height: 16px; font-size: var(--fs-label); line-height: 16px; }
+  #tlDock .bub-cap i { width: 10px; height: 10px; }
+  /* the distance scale, bottom right: miles (feet up close) over kilometers (meters up
+     close), the two bars sharing one line */
+  .scalebar.maplibregl-ctrl { display: flex; flex-direction: column; align-items: flex-end; pointer-events: none;
+                              color: var(--ink); font: 600 var(--fs-micro)/12px var(--font-sans); font-variant-numeric: tabular-nums; }
+  .scalebar .sb-row { padding: 0 4px; white-space: nowrap; border: 0 solid var(--ink); border-width: 0 2px;
+                      background: color-mix(in srgb, var(--surface) 78%, transparent); }
+  .scalebar .sb-imp { border-bottom-width: 2px; }
+  .scalebar .sb-met { margin-top: -2px; border-top-width: 2px; }
+  /* the ruler, under the view toggles; while it is on, a hint sits beside its button */
+  .ruler-ctrl.maplibregl-ctrl { display: flex; align-items: center; gap: 6px; }
+  .ruler-ctrl .base-toggle button { display: block; padding: 4px 8px; }
+  .ruler-ctrl svg { display: block; }
+  .ruler-ctrl .base-toggle button:not(.on):hover { background: var(--hover); color: var(--ink); }
+  .ruler-ctrl .base-toggle button.on:hover, .ruler-ctrl .base-toggle button.on:active { background: var(--accent); }
+  .ruler-ctrl .base-toggle button:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+  .ruler-hint { padding: 4px 8px; border-radius: 6px; background: var(--surface); color: var(--ink-2);
+                box-shadow: 0 1px 4px rgba(59, 29, 41, 0.3); font: 12px/16px var(--font-sans); white-space: nowrap; }
+  .ruler-hint[hidden] { display: none; }
+  #map.ruler-on .maplibregl-canvas { cursor: crosshair; }
+  .ruler-label { pointer-events: none; padding: 2px 6px; border-radius: 4px; background: var(--surface); color: var(--ink);
+                 font: 600 12px/16px var(--font-sans); font-variant-numeric: tabular-nums; white-space: nowrap;
+                 box-shadow: 0 1px 4px rgba(59, 29, 41, 0.3); }
   .hot-legend { display: flex; align-items: flex-start; gap: var(--sp-4); color: var(--muted); font-size: var(--fs-micro); }
   .hot-legend .days { display: grid; grid-template-columns: 30px repeat(7, 22px);
                       justify-items: center; row-gap: 2px; line-height: var(--lh-micro); }
@@ -444,6 +479,8 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
     <div id="tlSlot"><div id="tlBlock">
     <div class="hot-head ctl-head"><span>Playhead</span><b id="hotTimeLabel">now</b><span class="tl-legend" id="tlLegend"></span><span id="hotEndLabel" hidden>now</span></div>
     <div class="tl" id="tl">
+      <svg id="tlBubbles" aria-hidden="true"></svg>
+      <div class="bub-cap" id="bubCap" hidden><i></i><span></span></div>
       <div class="lane-cap" data-kind="run"></div>
       <div class="lane" data-kind="run" title="Forecast runs: press or drag to show one"></div>
       <div class="lane-cap" data-kind="perimeter"></div>
@@ -532,6 +569,7 @@ const map = new maplibregl.Map({
       perims: { type: "geojson", data: EMPTY },
       hot: { type: "geojson", data: EMPTY },
       fires: { type: "geojson", data: EMPTY },
+      ruler: { type: "geojson", data: EMPTY },
     },
     sky: { "sky-color": "#c4d9e8", "horizon-color": "#f3eee6", "fog-color": "#f3eee6",
            "sky-horizon-blend": 0.6, "horizon-fog-blend": 0.5, "fog-ground-blend": 0.85, "atmosphere-blend": 0 },
@@ -561,6 +599,14 @@ const map = new maplibregl.Map({
       { id: "fires", type: "circle", source: "fires",
         paint: { "circle-radius": 5, "circle-color": "#eb6834", "circle-opacity": 0.8,
                  "circle-stroke-width": 1.5, "circle-stroke-color": "#52514e" } },
+      // the ruler's line (on a white casing) and its ends, over everything
+      { id: "ruler-casing", type: "line", source: "ruler", layout: { "line-cap": "round" },
+        paint: { "line-color": "#ffffff", "line-width": 5, "line-opacity": 0.85 } },
+      { id: "ruler-line", type: "line", source: "ruler", layout: { "line-cap": "round" },
+        paint: { "line-color": "#3b1d29", "line-width": 2 } },
+      // (a circle layer also marks a line's vertices: only the points set get a dot)
+      { id: "ruler-ends", type: "circle", source: "ruler", filter: ["==", ["geometry-type"], "Point"],
+        paint: { "circle-radius": 4, "circle-color": "#ffffff", "circle-stroke-width": 2, "circle-stroke-color": "#3b1d29" } },
     ],
   },
 });
@@ -781,14 +827,17 @@ function tipText(feat) {
   return r ? `${r.src || "?"} ${fmtDT(r.t)} · FRP ${r.frp ?? "?"} · conf ${r.conf ?? "?"}` : "";
 }
 map.on("mousemove", ev => {
+  // measuring: no hover labels, and the ruler follows the pointer (see rulerMove)
+  if (ruler.on) { map.getCanvas().style.cursor = ""; tip.remove(); rulerMove(ev.lngLat); return; }
   const feat = featureAt(ev.point);
   map.getCanvas().style.cursor = feat && feat.layer.id === "fires" ? "pointer" : "";
   const text = feat && tipText(feat);
   if (text) tip.setLngLat(ev.lngLat).setText(text).addTo(map);
   else tip.remove();
 });
-map.on("mouseout", () => tip.remove());
+map.on("mouseout", () => { tip.remove(); rulerOut(); });
 map.on("click", ev => {
+  if (ruler.on) { rulerClick(ev.lngLat); return; }   // a click places a ruler end, never picks a fire
   const feat = featureAt(ev.point);
   if (feat && feat.layer.id === "fires") select(feat.properties.slug);
 });
@@ -2040,6 +2089,7 @@ function layoutTimelineAxis() {
   dates.innerHTML = majors.filter((t, i) => i % every === 0)
     .map(t => label(frac(t), fmtDate(t).slice(0, 5))).join("") +
     (nowAt === null ? "" : label(nowAt, "now", "now"));
+  renderHotBubbles();   // binned and placed by the axis's width, like the ticks
   // then any label that would touch the one before it, or "now", goes (measured, as the
   // edge-aligned ones don't sit where their spacing says; skipped while hidden)
   if (!ticks.clientWidth) return;
@@ -2140,6 +2190,87 @@ function pinFrac(t) {
   return Math.min(Math.max((t - span.start) / total, 0), 1);
 }
 
+// Hotspot activity on the playhead track: a bubble per day of loaded detections (per 12
+// hours when even the largest bubbles would stand apart, per week once days are under
+// 3px), its area by the count against the busiest bin, at the mean time of its
+// detections, so a 12-hour bubble sits on that half-day's satellite passes. Neighbours
+// may overlap, but never by more than the spacing allows (see rTop)
+const BUB_STEPS = [[12, "12h"], [24, "day"], [168, "week"]];
+let bubbles = [];   // as drawn: [{cx, cy, r, n, t0, stepH}], largest first (smallest on top)
+
+function bubbleBins(span, stepH) {
+  // [start, end) bins touching the span on the viewer's calendar, like the ticks: local
+  // midnights (and noons for 12 hours; Mondays for weeks), built from calendar fields
+  const s0 = new Date(span.start), weekly = stepH >= 168;
+  const Y = s0.getFullYear(), M = s0.getMonth(), D = s0.getDate() - (weekly ? (s0.getDay() + 6) % 7 : 0);
+  const edge = k => (stepH === 12 ? new Date(Y, M, D + (k >> 1), k & 1 ? 12 : 0)
+                                  : new Date(Y, M, D + k * (weekly ? 7 : 1))).getTime();
+  const bins = [];
+  for (let k = 0, a = edge(0); a < span.end; k++) {
+    const b = edge(k + 1);
+    if (b > span.start) bins.push([a, b]);
+    a = b;
+  }
+  return bins;
+}
+
+function renderHotBubbles() {
+  const svg = document.getElementById("tlBubbles"), cap = document.getElementById("bubCap");
+  const tl = document.getElementById("tl"), H = state.hot, span = state.hotSpan;
+  const width = tl.clientWidth - 6;   // the time axis, inset by half the thumb at each end
+  bubbles = [];
+  svg.innerHTML = "";
+  cap.hidden = true;
+  if (!H || !span || width <= 0) return;
+  const F = hotFlat(H);
+  if (!F.t.length) return;
+  const docked = document.body.classList.contains("tl-docked");
+  // the largest stays clear of the perimeter lane above and the dates below
+  const maxR = docked ? 13 : 9, minR = docked ? 2.5 : 2;
+  const pxPerH = width / +document.getElementById("hotTime").max;
+  const [stepH, per] = 12 * pxPerH >= 2 * maxR ? BUB_STEPS[0] : 24 * pxPerH >= 3 ? BUB_STEPS[1] : BUB_STEPS[2];
+  const rTop = Math.min(maxR, Math.max(1.5 * stepH * pxPerH, 2 * minR));
+  const track = tl.querySelector(".track"), cy = track.offsetTop + track.offsetHeight / 2;
+  let maxN = 0;
+  for (const [a, b] of bubbleBins(span, stepH)) {
+    const i0 = lowerBound(F.t, Math.max(a, span.start)), i1 = lowerBound(F.t, Math.min(b, span.end));
+    if (i1 <= i0) continue;
+    let sum = 0;   // offsets from the bin start: summed epoch ms would outrun float precision
+    for (let i = i0; i < i1; i++) sum += F.t[i] - a;
+    const n = i1 - i0;
+    bubbles.push({ cx: 3 + pinFrac(a + sum / n) * width, cy, n, t0: a, stepH });
+    if (n > maxN) maxN = n;
+  }
+  if (!bubbles.length) return;
+  for (const c of bubbles) c.r = Math.max(minR, rTop * Math.sqrt(c.n / maxN));
+  bubbles.sort((p, q) => q.r - p.r);
+  svg.innerHTML = bubbles.map(c =>
+    `<circle cx="${c.cx.toFixed(1)}" cy="${c.cy.toFixed(1)}" r="${c.r.toFixed(2)}"/>`).join("");
+  cap.style.top = `${tl.querySelector('.lane-cap[data-kind="perimeter"]').offsetTop}px`;
+  cap.querySelector("span").textContent = "Hotspot detections";
+  cap.title = `Bubble area is the number of hotspot detections in each ${per === "12h" ? "12 hours" : per}` +
+    ` (the largest: ${maxN.toLocaleString("en-US")})`;
+  cap.hidden = false;
+}
+
+function bubbleNear(clientX) {
+  // the bubble under a pointer on the playhead track: the nearest whose reach (at least
+  // 4px, so the smallest can still be found) covers it
+  const x = clientX - document.getElementById("tl").getBoundingClientRect().left;
+  let best = null, bd = Infinity;
+  for (const c of bubbles) {
+    const d = Math.abs(x - c.cx);
+    if (d <= Math.max(c.r, 4) && d < bd) { best = c; bd = d; }
+  }
+  return best;
+}
+
+function bubbleText(c) {
+  const n = plural(c.n, "detection");
+  if (c.stepH === 12) return `${n}, ${fmtDate(c.t0)} ${new Date(c.t0).getHours() < 12 ? "00:00–12:00" : "12:00–24:00"}`;
+  return c.stepH === 24 ? `${n} on ${fmtDate(c.t0)}` : `${n} in the week of ${fmtDate(c.t0)}`;
+}
+
 function pinTargets(kind) {
   // what a lane offers: every perimeter snapshot, or every run with something to draw
   const f = state.fires.find(x => x.slug === state.sel);
@@ -2187,6 +2318,12 @@ function wireLanes() {
   for (const lane of document.querySelectorAll(".lane")) {
     lane.addEventListener("pointerdown", ev => startLaneDrag(lane, ev));
   }
+  // the playhead slider lies over the bubbles: its tooltip names the one under the pointer
+  const hotTime = document.getElementById("hotTime");
+  hotTime.addEventListener("pointermove", ev => {
+    const c = bubbleNear(ev.clientX), text = c ? bubbleText(c) : "";
+    if (hotTime.title !== text) hotTime.title = text;
+  });
   window.addEventListener("resize", () => { layoutTimelineAxis(); renderHotMarks(); });   // guides are placed in px
 }
 
@@ -2320,6 +2457,7 @@ function clearHotspots() {
   dropCanvas("scar");
   scar.grid = null;
   state.hot = null;
+  renderHotBubbles();
 }
 
 async function refreshHotspots() {
@@ -2408,6 +2546,7 @@ async function ensureHotCoverage(historyOnly) {
   for (let k = d, through = full ? dayOf(Date.now()) : Math.max(d, last - 1); k <= through; k++) {
     H.covered.add(k);
   }
+  if (grown) renderHotBubbles();
   renderHotspots();
   ensureHotCoverage(true);
 }
@@ -2484,6 +2623,186 @@ function applyPalette() {
   renderHotLegend();
   if (state.hotSpan) renderHotspots();
 }
+
+// ---------------------------------------------------------------- distance: scale and ruler
+
+const FT_PER_M = 3.28084, FT_PER_MI = 5280;
+const EARTH_CIRC = 40075016.686, R_MEAN = 6371008.8;   // equatorial circumference; mean radius (haversine)
+
+// the scale's round distances, as MapLibre's own: the largest 1 / 2 / 3 / 5 × 10ⁿ that fits
+function roundDistance(n) {
+  const pow10 = 10 ** Math.floor(Math.log10(n)), d = n / pow10;
+  return Number(((d >= 5 ? 5 : d >= 3 ? 3 : d >= 2 ? 2 : 1) * pow10).toPrecision(1));
+}
+function scaleRow(max, unit, maxPx) {
+  const v = roundDistance(max);
+  return { label: `${v.toLocaleString("en-US")} ${unit}`, px: Math.round(maxPx * v / max) };
+}
+
+// Meters per pixel at the map's centre, from how high the camera is rather than the
+// ground under it: in 3D, measuring the ground (as MapLibre's own scale does) or reading
+// the zoom jitters as ridges and valleys slide under a pan. The ground and latitude are
+// held until the camera climbs or drops 5%, or the latitude moves the mercator stretch
+// 1% (Incibrief's panStableMetersPerPixel). Flat and untilted this is the plain
+// web-mercator resolution.
+let scaleLock = null;
+function mapMetersPerPixel() {
+  const lat = map.getCenter().lat, zoom = map.getZoom();
+  const perWorld = l => EARTH_CIRC * Math.cos(l * D2R);
+  const flat = perWorld(lat) / (512 * 2 ** zoom);   // MapLibre's world is 512px at zoom 0
+  if (typeof map.getVerticalFieldOfView !== "function") return flat;
+  const reach = Math.cos(map.getPitch() * D2R) * 0.5 * map.getContainer().clientHeight /
+    Math.tan(map.getVerticalFieldOfView() * D2R / 2);
+  const centerElev = map.getCameraTargetElevation() || 0;
+  const height = (centerElev + reach * flat) / perWorld(lat);
+  const prev = scaleLock, moved = !prev || Math.abs(height / prev.height - 1) > 0.05;
+  // a ground of 0 may have been sampled before the terrain tiles arrived: sample again
+  const ground = moved || prev.ground === 0 ? (map.queryTerrainElevation(map.getCenter()) ?? centerElev) : prev.ground;
+  const atLat = moved || Math.abs(perWorld(lat) / perWorld(prev.lat) - 1) > 0.01 ? lat : prev.lat;
+  scaleLock = { height: moved ? height : prev.height, ground, lat: atLat };
+  const mpp = (height * perWorld(atLat) - ground) / reach;
+  return mpp > 0 && isFinite(mpp) ? mpp : flat;
+}
+
+const SCALE_MAX_PX = 100;   // the widest a bar gets; its round distance lands in 50-100px
+class ScaleBar {
+  onAdd(m) {
+    const el = this.el = document.createElement("div");
+    el.className = "maplibregl-ctrl scalebar";
+    el.setAttribute("role", "img");
+    el.innerHTML = '<div class="sb-row sb-imp"></div><div class="sb-row sb-met"></div>';
+    const [imp, met] = el.children;
+    let last = "";
+    this.update = () => {
+      const meters = mapMetersPerPixel() * SCALE_MAX_PX, feet = meters * FT_PER_M;
+      const a = feet > FT_PER_MI ? scaleRow(feet / FT_PER_MI, "mi", SCALE_MAX_PX) : scaleRow(feet, "ft", SCALE_MAX_PX);
+      const b = meters >= 1000 ? scaleRow(meters / 1000, "km", SCALE_MAX_PX) : scaleRow(meters, "m", SCALE_MAX_PX);
+      const key = `${a.label}|${a.px}|${b.label}|${b.px}`;
+      if (key === last) return;
+      last = key;
+      imp.textContent = a.label;
+      imp.style.width = `${a.px}px`;
+      met.textContent = b.label;
+      met.style.width = `${b.px}px`;
+      el.setAttribute("aria-label", `Map scale: ${a.label}, ${b.label}`);
+    };
+    this.map = m;
+    // "idle" catches terrain tiles landing after the camera has settled
+    for (const ev of ["move", "resize", "idle"]) m.on(ev, this.update);
+    this.update();
+    return el;
+  }
+  onRemove() {
+    for (const ev of ["move", "resize", "idle"]) this.map.off(ev, this.update);
+    this.el.remove();
+  }
+}
+map.addControl(new ScaleBar(), "bottom-right");
+
+// The ruler (top right, under the view toggles): with it on, a click on the map sets a
+// point, the distance from there follows the pointer, and a second click pins the
+// distance between the two points (a third starts over). Esc clears it; Esc again, or
+// the button, puts the ruler away. Distances are great-circle, along the ground's
+// horizontal (in 3D the line drapes over the terrain, the distance stays horizontal).
+const ruler = { on: false, a: null, b: null, btn: null, hint: null, live: false, pin: false };
+const rulerLabel = () => Object.assign(document.createElement("div"), { className: "ruler-label" });
+const rulerLive = new maplibregl.Marker({ element: rulerLabel(), anchor: "left", offset: [14, 0] });
+const rulerPin = new maplibregl.Marker({ element: rulerLabel(), anchor: "bottom", offset: [0, -8] });
+
+function groundMeters(p, q) {
+  const la1 = p.lat * D2R, la2 = q.lat * D2R;
+  const h = Math.sin((la2 - la1) / 2) ** 2 + Math.cos(la1) * Math.cos(la2) * Math.sin((q.lng - p.lng) * D2R / 2) ** 2;
+  return 2 * R_MEAN * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+function fmtDistance(m) {
+  // feet under a tenth of a mile, meters under a kilometer; 2 decimals, fewer past 10 and 100
+  const fixed = v => { const d = v < 10 ? 2 : v < 100 ? 1 : 0;
+                       return v.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d }); };
+  const mi = m * FT_PER_M / FT_PER_MI, km = m / 1000;
+  const imp = mi < 0.1 ? `${Math.round(m * FT_PER_M).toLocaleString("en-US")} ft` : `${fixed(mi)} mi`;
+  const met = km < 1 ? `${Math.round(m).toLocaleString("en-US")} m` : `${fixed(km)} km`;
+  return `${imp} · ${met}`;
+}
+
+function showRulerLabel(marker, key, at, text) {
+  if (!at) {
+    if (ruler[key]) marker.remove();
+    ruler[key] = false;
+    return;
+  }
+  marker.getElement().textContent = text;
+  marker.setLngLat(at);
+  if (!ruler[key]) marker.addTo(map);   // re-adding on every move would rebuild its element
+  ruler[key] = true;
+}
+
+function drawRuler(cursor) {
+  // the line (to the pointer until there is a second point), dots at the points set,
+  // the live distance beside the pointer and the pinned one over the line's middle
+  const { a, b } = ruler, end = b || cursor;
+  const features = [a, b].filter(Boolean).map(p =>
+    ({ type: "Feature", properties: {}, geometry: { type: "Point", coordinates: [p.lng, p.lat] } }));
+  if (a && end) features.unshift({ type: "Feature", properties: {},
+    geometry: { type: "LineString", coordinates: [[a.lng, a.lat], [end.lng, end.lat]] } });
+  const src = map.getSource("ruler");   // none until the style has loaded
+  if (src) src.setData({ type: "FeatureCollection", features });
+  showRulerLabel(rulerLive, "live", a && !b && cursor ? cursor : null, a && cursor ? fmtDistance(groundMeters(a, cursor)) : "");
+  showRulerLabel(rulerPin, "pin", a && b ? [(a.lng + b.lng) / 2, (a.lat + b.lat) / 2] : null,
+                 a && b ? fmtDistance(groundMeters(a, b)) : "");
+  ruler.hint.textContent = !a ? "Click a point to measure from" : !b ? "Click a second point"
+    : "Click to measure again · Esc clears";
+}
+
+function setRuler(on) {
+  ruler.on = on;
+  ruler.a = ruler.b = null;
+  ruler.btn.classList.toggle("on", on);
+  ruler.btn.setAttribute("aria-pressed", String(on));
+  ruler.hint.hidden = !on;
+  map.getContainer().classList.toggle("ruler-on", on);
+  // two quick clicks set both ends; they mustn't also zoom
+  if (on) map.doubleClickZoom.disable(); else map.doubleClickZoom.enable();
+  tip.remove();
+  drawRuler(null);
+}
+
+function rulerClick(p) {
+  if (!ruler.a || ruler.b) { ruler.a = p; ruler.b = null; }
+  else ruler.b = p;
+  drawRuler(p);
+}
+function rulerMove(p) { if (ruler.a && !ruler.b) drawRuler(p); }
+function rulerOut() { if (ruler.on) showRulerLabel(rulerLive, "live", null); }
+
+// capture phase: this runs before the settings overlay's own Esc closes it, so an Esc
+// meant for an open overlay, or for the search box, leaves the ruler be
+document.addEventListener("keydown", ev => {
+  if (ev.key !== "Escape" || !ruler.on) return;
+  if (document.querySelector(".palette-panel:not([hidden])")) return;
+  if (ev.target instanceof Element && ev.target.closest("input[type=text], select")) return;
+  if (ruler.a) { ruler.a = ruler.b = null; drawRuler(null); }
+  else setRuler(false);
+}, true);
+
+const RULER_ICON = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" ' +
+  'stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<path d="M1.5 11.5l10-10 3 3-10 10z"/><path d="M4 9l1.5 1.5M6 7l1 1M8 5l1.5 1.5M10 3l1 1"/></svg>';
+class RulerControl {
+  onAdd() {
+    const el = this.el = document.createElement("div");
+    el.className = "maplibregl-ctrl ruler-ctrl";
+    el.innerHTML = '<span class="ruler-hint" role="status" hidden></span>' +
+      '<div class="base-toggle"><button type="button" aria-pressed="false" aria-label="Measure distance" ' +
+      `title="Measure distance (Esc clears)">${RULER_ICON}</button></div>`;
+    ruler.hint = el.querySelector(".ruler-hint");
+    ruler.btn = el.querySelector("button");
+    ruler.btn.addEventListener("click", () => setRuler(!ruler.on));
+    return el;
+  }
+  onRemove() { this.el.remove(); }
+}
+map.addControl(new RulerControl(), "top-right");
 
 // ---------------------------------------------------------------- the panel
 
