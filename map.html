@@ -200,20 +200,18 @@
   .ctl-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink); font-weight: 600;
                 font-variant-numeric: tabular-nums; }
   /* ---- the timeline: lanes for the forecast runs, perimeters and hotspot activity on one
-     time axis, the axis, and the playhead across them. The lanes' names sit in a column left
-     of them when there's room (docked under a wide map), the playhead's between the
-     perimeter's and the hotspots' beside a track of its own; narrower, the forecast,
-     perimeter and playhead go in a list above the lanes (the playhead's handle on the axis)
-     and the hotspot count and key under the axis. Either way the three times share one
-     column, so they read down like a table. Every row on the axis is inset by half the
-     playhead slider's 6px thumb (3px) so the thumb's travel spans it. TL_WIDE (JS) must
-     match the 620px query below */
+     time axis, the axis, and the playhead across them, its handle on the axis. The lanes'
+     names sit in a column left of them when there's room (docked under a wide map), the
+     playhead's between the perimeter's and the hotspots', those two beside the hotspot
+     lane (two rows tall there); narrower, the forecast, perimeter and playhead go in a list
+     above the lanes and the hotspots and their key under the axis. Either way the three
+     times share one column, so they read down like a table. Every row on the axis is inset
+     by half the playhead slider's 6px thumb (3px) so the thumb's travel spans it. TL_WIDE
+     (JS) must match the 620px query below */
   #tlBlock { container: tl / inline-size; }
   .tl-in { --lane-h: 16px; --hot-h: 22px; --lane-gap: 2px; --axis-gap: 3px; --tick-h: 8px; --tick-w: 1.5px;
            --hot-top: calc(2 * (var(--lane-h) + var(--lane-gap)));
            --axis-y: calc(var(--hot-top) + var(--hot-h) + var(--axis-gap));
-           --scrub-top: var(--hot-top);              /* where the playhead slider starts */
-           --ph-y: calc(var(--axis-y) - 2px);        /* the middle of the playhead's handle */
            color: var(--ink-2); font-size: var(--fs-label); line-height: var(--lh-label); }
   /* the hotspot-age key: the burn scar, then the 7-day ramp, oldest on the left like the axis */
   .tl-key { display: flex; align-items: center; gap: 5px; margin-left: auto; color: var(--muted);
@@ -257,10 +255,6 @@
   .tl-body { display: flex; }
   .tl-gutter { display: none; }
   .tl { position: relative; flex: 1; min-width: 0; }
-  /* wide, the playhead's own row between the perimeters and the hotspots: its handle on a rail */
-  .tl-track { display: none; position: relative; height: var(--lane-h); margin: 0 3px var(--lane-gap); }
-  .tl-track::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: var(--rng-track);
-                      margin-top: calc(var(--rng-track) / -2); border-radius: calc(var(--rng-track) / 2); background: var(--axis); }
   .lane { position: relative; height: var(--lane-h); margin: 0 3px var(--lane-gap); border-radius: 4px;
           background: rgba(59, 29, 41, 0.04); cursor: pointer; touch-action: none; }
   .hot-lane { height: var(--hot-h); margin-bottom: 0; cursor: auto; }
@@ -297,11 +291,10 @@
                    white-space: nowrap; transform: translateX(-50%); font-variant-numeric: tabular-nums; }
   #hotDates span.end { color: var(--ink); font-weight: 600; }
   #hotDates span.end.contained { color: var(--contained); }
-  /* the playhead: an ink line through every lane, its accent handle on the axis (wide, on
-     its own track). The slider that moves it is transparent, over the track, the hotspot
-     lane and the axis */
-  #hotTime { -webkit-appearance: none; appearance: none; position: absolute; left: 0; top: var(--scrub-top); z-index: 3;
-             display: block; width: 100%; height: calc(100% - var(--scrub-top)); margin: 0; padding: 0; border: 0;
+  /* the playhead: an ink line through every lane, its accent handle on the axis. The slider
+     that moves it is transparent, over the hotspot lane and the axis */
+  #hotTime { -webkit-appearance: none; appearance: none; position: absolute; left: 0; top: var(--hot-top); z-index: 3;
+             display: block; width: 100%; height: calc(100% - var(--hot-top)); margin: 0; padding: 0; border: 0;
              background: transparent; cursor: ew-resize; }
   #hotTime:focus-visible { outline: none; }
   #hotTime::-webkit-slider-runnable-track { height: 100%; background: transparent; }
@@ -310,7 +303,7 @@
   #hotTime::-moz-range-thumb { width: var(--rng-thumb-w); height: 20px; border: 0; opacity: 0; }
   .tl-ph { position: absolute; top: 0; z-index: 2; height: var(--axis-y); margin-left: -0.75px; pointer-events: none;
            left: calc(3px + (100% - 6px) * var(--f, 1)); border-left: 1.5px solid var(--ink); }
-  .tl-ph i { position: absolute; left: -5.75px; top: calc(var(--ph-y) - 7px); width: 10px; height: 14px; border-radius: 3px;
+  .tl-ph i { position: absolute; left: -5.75px; top: calc(100% - 9px); width: 10px; height: 14px; border-radius: 3px;
              background: var(--accent); box-shadow: var(--rng-ring); }
   .tl:has(#hotTime:hover) .tl-ph i { box-shadow: var(--rng-ring-hover); }
   .tl:has(#hotTime:focus-visible) .tl-ph i { box-shadow: var(--rng-ring-focus); }
@@ -321,18 +314,14 @@
   .tl-tip[hidden] { display: none; }
   /* wide: the panel's scale one step up (13 / 12 / 11), and the lane names in a column */
   @container tl (min-width: 620px) {
-    .tl-in { --lane-h: 20px; --hot-h: 28px; --lane-gap: 3px; --axis-gap: 4px; --tick-h: 10px; --tick-w: 2px;
-             --scrub-top: calc(2 * (var(--lane-h) + var(--lane-gap)));
-             --hot-top: calc(var(--scrub-top) + var(--lane-h) + var(--lane-gap));
-             --ph-y: calc(var(--scrub-top) + var(--lane-h) / 2);
-             font-size: var(--fs-body); line-height: var(--lh-body); }
+    .tl-in { --lane-h: 20px; --hot-h: calc(2 * var(--lane-h) + var(--lane-gap)); --lane-gap: 3px; --axis-gap: 4px;
+             --tick-h: 10px; --tick-w: 2px; font-size: var(--fs-body); line-height: var(--lh-body); }
     .tl-sel, .tl-foot { display: none; }
-    .tl-track { display: block; }
     .tl-key { font-size: var(--fs-meta); line-height: var(--lh-meta); }
     .tl-key .lab { font-size: var(--fs-label); }
     .tl-key .scar { width: 9px; height: 9px; }
     .tl-key .ramp { width: 64px; }
-    .tl-gutter { display: grid; grid-template-rows: repeat(3, var(--lane-h)) var(--hot-h) auto; row-gap: var(--lane-gap);
+    .tl-gutter { display: grid; grid-template-rows: repeat(4, var(--lane-h)) auto; row-gap: var(--lane-gap);
                  flex: none; align-self: flex-start; width: 210px; margin-right: 10px; padding-right: 12px;
                  border-right: 1px solid var(--grid); font-size: var(--fs-label); line-height: var(--lh-label); }
     .tl-lab .sw { height: 12px; }
@@ -519,7 +508,6 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
         <div class="tl" id="tl">
           <div class="lane" data-kind="run"></div>
           <div class="lane" data-kind="perimeter"></div>
-          <div class="tl-track" aria-hidden="true"></div>
           <div class="lane hot-lane" id="hotLane"><svg id="tlHot" aria-hidden="true"></svg></div>
           <div id="hotTicks" aria-hidden="true"></div>
           <div id="hotDates" aria-hidden="true"></div>
@@ -2791,11 +2779,11 @@ function renderHotspots() {
     parts.push(H.histError ? "earlier history failed to load"
       : `loading history ${Math.floor(100 * have / (today - first + 1))}%`);
   }
-  // the hotspot lane's label gives the count, its tooltip the whole story (and any
-  // trouble, in the warning color)
-  const story = parts.join(" · ");
-  setLaneLabel("hot", pending ? "loading…" : `${num(vis)} in 7d`, story[0].toUpperCase() + story.slice(1),
-               pending ? "none" : H.capped || H.histError ? "warn" : "");
+  // the hotspot lane's label says only when it's loading or missing some, its tooltip
+  // the whole story (the counts too)
+  const story = parts.join(" · "), short = H.capped || H.histError;
+  setLaneLabel("hot", pending ? "loading…" : short ? "incomplete" : "", story[0].toUpperCase() + story.slice(1),
+               pending ? "none" : short ? "warn" : "");
   renderHotLane();   // the bars take their age at the playhead
   if (pending) scheduleHotCoverage();
 }
