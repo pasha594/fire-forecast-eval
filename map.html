@@ -201,13 +201,11 @@
                 font-variant-numeric: tabular-nums; }
   /* ---- the timeline: lanes for the forecast runs, perimeters and hotspot activity on one
      time axis, the axis, and the playhead across them, its handle on the axis. The lanes'
-     names sit in a column left of them when there's room (docked under a wide map), the
-     playhead's between the perimeter's and the hotspots', those two beside the hotspot
-     lane (two rows tall there); narrower, the forecast, perimeter and playhead go in a list
-     above the lanes and the hotspots and their key under the axis. Either way the three
-     times share one column, so they read down like a table. Every row on the axis is inset
-     by half the playhead slider's 6px thumb (3px) so the thumb's travel spans it. TL_WIDE
-     (JS) must match the 620px query below */
+     names, each with its time (the hotspots', the playhead's), sit in a column left of the
+     lanes when there's room (docked under a wide map), else in a list above them; either
+     way the three times share one column, so they read down like a table. Every row on the
+     axis is inset by half the playhead slider's 6px thumb (3px) so the thumb's travel spans
+     it. TL_WIDE (JS) must match the 620px query below */
   #tlBlock { container: tl / inline-size; }
   .tl-in { --lane-h: 16px; --hot-h: 22px; --lane-gap: 2px; --axis-gap: 3px; --tick-h: 8px; --tick-w: 1.5px;
            --hot-top: calc(2 * (var(--lane-h) + var(--lane-gap)));
@@ -216,13 +214,11 @@
   /* the hotspot-age key: the burn scar, then the 7-day ramp, oldest on the left like the axis */
   .tl-key { display: flex; align-items: center; gap: 5px; margin-left: auto; color: var(--muted);
             font-size: var(--fs-micro); line-height: var(--lh-micro); white-space: nowrap; }
-  .tl-key .lab { margin-right: 3px; color: var(--ink-2); font-size: var(--fs-meta); }
   .tl-key .scar { width: 8px; height: 8px; border-radius: 50%; }
   .tl-key .ramp { width: 56px; height: 8px; border-radius: 4px; }
   .tl-key .gap { width: 4px; }
-  .tl-gutter .tl-key .lab, .tl-foot .tl-key .lab { display: none; }
   /* a lane's name and what it shows: the eye that shows or hides its layer, a swatch in
-     its color (the playhead's, its handle), the name, then the value */
+     its color, the name, then its time */
   .tl-lab { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; white-space: nowrap; }
   .tl-lab .eye { display: grid; place-items: center; width: 18px; height: 16px; padding: 0; border: 0; border-radius: 3px;
                  background: none; color: var(--muted); cursor: pointer; }
@@ -234,26 +230,21 @@
   .tl-lab.hid :is(.sw, .glyph, .nm), .tl-lab.hid[data-kind="hot"] ~ .tl-key { opacity: 0.45; }
   .tl-lab .sw { flex: none; width: 3px; height: 11px; border-radius: 1.5px; background: var(--c); }
   .tl-lab .glyph { flex: none; display: block; }
-  .tl-lab .hd { flex: none; width: 6px; height: 12px; border-radius: 2px; background: var(--accent); box-shadow: var(--rng-ring); }
   .tl-lab .vl { overflow: hidden; text-overflow: ellipsis; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
   .tl-lab .vl.none { color: var(--muted); font-weight: 400; }
   .tl-lab .vl.warn { color: var(--warn); }
   .tl-lab .vl .off { color: var(--c); }
-  /* the lists of names: a grid, so the eyes, icons, names and values each keep one column
-     (the playhead, with no eye, starts in the icons'); the hotspot-age key goes under the
-     hotspots' name */
-  .tl-sel, .tl-gutter, .tl-foot { display: grid; grid-template-columns: 18px 10px max-content minmax(0, 1fr);
-                                  align-items: center; column-gap: 5px; }
-  :is(.tl-sel, .tl-gutter, .tl-foot) .tl-lab { display: contents; }
-  :is(.tl-sel, .tl-gutter, .tl-foot) .eye { grid-column: 1; }
-  :is(.tl-sel, .tl-gutter, .tl-foot) :is(.sw, .glyph, .hd) { grid-column: 2; justify-self: center; }
-  :is(.tl-sel, .tl-gutter, .tl-foot) .nm { grid-column: 3; }
-  :is(.tl-sel, .tl-gutter, .tl-foot) .vl { grid-column: 4; margin-left: var(--sp-4); }
-  :is(.tl-gutter, .tl-foot) .tl-key { grid-column: 3 / -1; justify-self: start; margin: 0; }
-  .tl-sel { margin: 0 0 var(--sp-3); }
-  .tl-foot { margin-top: var(--sp-1); }
-  .tl-body { display: flex; }
-  .tl-gutter { display: none; }
+  /* the list of names: a grid, so the eyes, icons, names and times each keep one column,
+     and the hotspot-age key under the hotspots' name */
+  .tl-names { display: grid; grid-template-columns: 18px 10px max-content minmax(0, 1fr);
+              align-items: center; column-gap: 5px; margin: 0 0 var(--sp-3); }
+  .tl-names .tl-lab { display: contents; }
+  .tl-names .eye { grid-column: 1; }
+  .tl-names :is(.sw, .glyph) { grid-column: 2; justify-self: center; }
+  .tl-names .nm { grid-column: 3; }
+  .tl-names .vl { grid-column: 4; margin-left: var(--sp-4); }
+  .tl-names .tl-key { grid-column: 3 / -1; justify-self: start; margin: 0; }
+  .tl-body { display: flex; flex-direction: column; }
   .tl { position: relative; flex: 1; min-width: 0; }
   .lane { position: relative; height: var(--lane-h); margin: 0 3px var(--lane-gap); border-radius: 4px;
           background: rgba(59, 29, 41, 0.04); cursor: pointer; touch-action: none; }
@@ -284,13 +275,13 @@
   #hotTicks { position: relative; height: 7px; margin: var(--axis-gap) 3px 0; border-top: 1px solid var(--axis); pointer-events: none; }
   #hotTicks span { position: absolute; top: 0; width: 1px; height: 3px; margin-left: -0.5px; background: var(--axis); }
   #hotTicks span.major { height: 5px; background: var(--muted); }
-  #hotTicks span.end { top: -5px; width: 2px; height: 11px; margin-left: -1px; background: var(--ink); }
-  #hotTicks span.end.contained { background: var(--contained); }
+  #hotTicks span.mark { top: -5px; width: 2px; height: 11px; margin-left: -1px; background: var(--ink); }
+  #hotTicks span.mark.contained { background: var(--contained); }
   #hotDates { position: relative; height: var(--lh-micro); margin: 0 3px; }
   #hotDates span { position: absolute; top: 0; color: var(--muted); font-size: var(--fs-micro); line-height: var(--lh-micro);
                    white-space: nowrap; transform: translateX(-50%); font-variant-numeric: tabular-nums; }
-  #hotDates span.end { color: var(--ink); font-weight: 600; }
-  #hotDates span.end.contained { color: var(--contained); }
+  #hotDates span.mark { color: var(--ink); font-weight: 600; }
+  #hotDates span.mark.contained { color: var(--contained); }
   /* the playhead: an ink line through every lane, its accent handle on the axis. The slider
      that moves it is transparent, over the hotspot lane and the axis */
   #hotTime { -webkit-appearance: none; appearance: none; position: absolute; left: 0; top: var(--hot-top); z-index: 3;
@@ -314,21 +305,20 @@
   .tl-tip[hidden] { display: none; }
   /* wide: the panel's scale one step up (13 / 12 / 11), and the lane names in a column */
   @container tl (min-width: 620px) {
-    .tl-in { --lane-h: 20px; --hot-h: calc(2 * var(--lane-h) + var(--lane-gap)); --lane-gap: 3px; --axis-gap: 4px;
-             --tick-h: 10px; --tick-w: 2px; font-size: var(--fs-body); line-height: var(--lh-body); }
-    .tl-sel, .tl-foot { display: none; }
+    .tl-in { --lane-h: 20px; --hot-h: 28px; --lane-gap: 3px; --axis-gap: 4px; --tick-h: 10px; --tick-w: 2px;
+             font-size: var(--fs-body); line-height: var(--lh-body); }
+    .tl-body { flex-direction: row; }
     .tl-key { font-size: var(--fs-meta); line-height: var(--lh-meta); }
-    .tl-key .lab { font-size: var(--fs-label); }
     .tl-key .scar { width: 9px; height: 9px; }
     .tl-key .ramp { width: 64px; }
-    .tl-gutter { display: grid; grid-template-rows: repeat(4, var(--lane-h)) auto; row-gap: var(--lane-gap);
-                 flex: none; align-self: flex-start; width: 210px; margin-right: 10px; padding-right: 12px;
-                 border-right: 1px solid var(--grid); font-size: var(--fs-label); line-height: var(--lh-label); }
+    .tl-names { grid-template-rows: repeat(2, var(--lane-h)) var(--hot-h) auto; row-gap: var(--lane-gap);
+                flex: none; align-self: flex-start; width: 210px; margin: 0 10px 0 0; padding-right: 12px;
+                border-right: 1px solid var(--grid); font-size: var(--fs-label); line-height: var(--lh-label); }
     .tl-lab .sw { height: 12px; }
     #hotTicks { height: 9px; }
     #hotTicks span { height: 4px; }
     #hotTicks span.major { height: 7px; }
-    #hotTicks span.end { top: -6px; height: 14px; }
+    #hotTicks span.mark { top: -6px; height: 14px; }
     #hotDates { height: var(--lh-meta); }
     #hotDates span { font-size: var(--fs-meta); line-height: var(--lh-meta); }
   }
@@ -502,9 +492,8 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
     <div class="sec-head"><h2>Hotspots <span class="src">NASA VIIRS</span></h2></div>
     <!-- the timeline; docked (Settings → Timeline) it moves to #tlDock under the map -->
     <div id="tlSlot"><div id="tlBlock"><div class="tl-in">
-      <div class="tl-sel"><div class="tl-lab" data-kind="run"><i class="sw"></i><span class="nm">Forecast</span><b class="vl none"></b></div><div class="tl-lab" data-kind="perimeter"><i class="sw"></i><span class="nm">Perimeter</span><b class="vl none"></b></div><div class="tl-lab" data-kind="ph"><i class="hd"></i><span class="nm">Playhead</span><b class="vl">now</b></div></div>
       <div class="tl-body">
-        <div class="tl-gutter"><div class="tl-lab" data-kind="run"><i class="sw"></i><span class="nm">Forecast</span><b class="vl none"></b></div><div class="tl-lab" data-kind="perimeter"><i class="sw"></i><span class="nm">Perimeter</span><b class="vl none"></b></div><div class="tl-lab" data-kind="ph"><i class="hd"></i><span class="nm">Playhead</span><b class="vl">now</b></div><div class="tl-lab" data-kind="hot"><svg class="glyph" width="10" height="11" viewBox="0 0 10 11" aria-hidden="true"><rect x="0" y="4" width="2.4" height="7"/><rect x="3.6" y="0" width="2.4" height="11"/><rect x="7.2" y="6" width="2.4" height="5"/></svg><span class="nm">Hotspots</span><b class="vl none"></b></div><div class="tl-key"></div></div>
+        <div class="tl-names"><div class="tl-lab" data-kind="run"><i class="sw"></i><span class="nm">Forecast</span><b class="vl none"></b></div><div class="tl-lab" data-kind="perimeter"><i class="sw"></i><span class="nm">Perimeter</span><b class="vl none"></b></div><div class="tl-lab" data-kind="hot"><svg class="glyph" width="10" height="11" viewBox="0 0 10 11" aria-hidden="true"><rect x="0" y="4" width="2.4" height="7"/><rect x="3.6" y="0" width="2.4" height="11"/><rect x="7.2" y="6" width="2.4" height="5"/></svg><span class="nm">Hotspots</span><b class="vl none"></b></div><div class="tl-key"></div></div>
         <div class="tl" id="tl">
           <div class="lane" data-kind="run"></div>
           <div class="lane" data-kind="perimeter"></div>
@@ -516,7 +505,6 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
           <div class="tl-tip" id="tlTip" hidden></div>
         </div>
       </div>
-      <div class="tl-foot"><div class="tl-lab" data-kind="hot"><svg class="glyph" width="10" height="11" viewBox="0 0 10 11" aria-hidden="true"><rect x="0" y="4" width="2.4" height="7"/><rect x="3.6" y="0" width="2.4" height="11"/><rect x="7.2" y="6" width="2.4" height="5"/></svg><span class="nm">Hotspots</span><b class="vl none"></b></div><div class="tl-key"></div></div>
     </div></div></div>
   </div>
 
@@ -2013,22 +2001,30 @@ const MONDAY0 = new Date(1970, 0, 5).getTime();   // a local Monday, counting 4-
 const dayOf = ms => Math.floor(ms / DAY);
 
 async function fireSpan(f) {
-  // Cornea's record creation (~discovery) to its containment timestamp, else
-  // now; without a usable record, the last 14 days
+  // Cornea's record creation (~discovery) to now, or for a contained fire to its
+  // containment or its last perimeter, whichever is later (perimeters are often mapped
+  // after containment; the fire's are loaded by now, see select); without a usable
+  // record, the last 14 days
   const now = Date.now();
-  let start = now - 14 * DAY, end = now, contained = false;
+  let start = now - 14 * DAY, end = now, containedAt = null;
   if (f.cornea_id) {
     try {
       const rec = await getJson(`${CORNEA}/fires/${encodeURIComponent(f.cornea_id)}`);
       const s = Date.parse(rec.created_on), c = Date.parse(rec.contained_at);
       if (s < now) start = s;
-      if (c > start && c < now) { end = c; contained = true; }
+      if (c > start && c < now) end = containedAt = c;
     } catch (e) { /* keep the 14-day fallback */ }
   }
-  return { start: dayOf(start) * DAY, end, contained };
+  if (containedAt && state.sel === f.slug) {
+    for (const p of state.perimIndex) {
+      const t = Date.parse(p.date);
+      if (t > end && t <= now) end = t;
+    }
+  }
+  return { start: dayOf(start) * DAY, end, contained: !!containedAt, containedAt };
 }
 
-const defaultHotSpan = () => ({ start: dayOf(Date.now() - 14 * DAY) * DAY, end: Date.now(), contained: false });
+const defaultHotSpan = () => ({ start: dayOf(Date.now() - 14 * DAY) * DAY, end: Date.now(), contained: false, containedAt: null });
 
 function layoutHotTimeline(span) {
   // the playhead starts at the axis's end, or stays put when the axis is unchanged (the
@@ -2044,14 +2040,31 @@ function layoutHotTimeline(span) {
 }
 
 function labelPlayhead() {
-  // the playhead's time ("now" at the end of a burning fire's axis), as short as the
-  // forecast's and perimeter's above it, and its line
+  // the playhead's time ("now" at the end of a burning fire's axis), on the hotspots'
+  // label, and its line
   const el = document.getElementById("hotTime"), span = state.hotSpan;
   if (!span) return;
   const p = hotPlayhead(), atNow = +el.value >= +el.max && !span.contained;
-  for (const vl of document.querySelectorAll('.tl-lab[data-kind="ph"] .vl')) vl.textContent = atNow ? "now" : fmtShortDT(p);
   el.setAttribute("aria-valuetext", atNow ? "now" : fmtDT(p));
   document.getElementById("tlPh").style.setProperty("--f", pinFrac(p).toFixed(5));
+  paintHotLabel();
+}
+
+// the hotspots' label: the playhead's time, as short as the forecast's and perimeter's
+// above it (muted while the detections behind it load, in the warning color when some
+// are missing), or a word when there are none to show ("hidden", "none", "failed")
+let hotLabel = { word: "", title: "", cls: "" };
+
+function setHotLabel(word, title, cls = "") {
+  hotLabel = { word, title, cls };
+  paintHotLabel();
+}
+
+function paintHotLabel() {
+  const { word, title, cls } = hotLabel, el = document.getElementById("hotTime"), span = state.hotSpan;
+  if (word !== null || !span) { setLaneLabel("hot", word || "", title, cls); return; }
+  const p = hotPlayhead(), atNow = +el.value >= +el.max && !span.contained;
+  setLaneLabel("hot", atNow ? "now" : fmtShortDT(p), `Playhead ${atNow ? "now" : fmtDT(p)}` + (title ? ` · ${title}` : ""), cls);
 }
 
 // the timeline's lane names go in a column beside the lanes from this width (the CSS
@@ -2094,16 +2107,17 @@ function layoutTimelineAxis() {
       ticks.appendChild(tick);
     }
   }
-  // the axis end: "now" on a burning fire's (so the playhead's "now" has a place on it),
-  // else its containment
-  const endAt = frac(span.contained ? span.end : Math.min(Date.now(), span.end));
-  const endCls = span.contained ? "end contained" : "end";
-  const endTick = document.createElement("span");
-  endTick.className = endCls;
-  endTick.style.left = `${100 * endAt}%`;
-  ticks.appendChild(endTick);
+  // the axis's one named mark: "now" at a burning fire's end (so the playhead's "now" has
+  // a place on it), else its containment, at the end or, when a perimeter was mapped
+  // after it, where it falls
+  const markAt = frac(span.contained ? span.containedAt : Math.min(Date.now(), span.end));
+  const markCls = span.contained ? "mark contained" : "mark";
+  const markTick = document.createElement("span");
+  markTick.className = markCls;
+  markTick.style.left = `${100 * markAt}%`;
+  ticks.appendChild(markTick);
   // MM/DD under every major tick, or every 2nd, 3rd... so the labels don't touch (44px
-  // apart wide, 32px narrow), none crowding the end; a label near an end of the axis
+  // apart wide, 32px narrow), none crowding the mark; a label near an end of the axis
   // lines up with it instead of centring on its tick and running past it
   const width = ticks.clientWidth || 260, gap = wide ? 44 : 32;
   const every = Math.max(1, Math.ceil(gap / (width * majorH * HOUR / (el.max * HOUR))));
@@ -2115,17 +2129,17 @@ function layoutTimelineAxis() {
   const dates = document.getElementById("hotDates");
   dates.innerHTML = majors.filter((t, i) => i % every === 0)
     .map(t => label(frac(t), fmtDate(t).slice(0, 5))).join("") +
-    label(endAt, span.contained ? "Contained" : "now", endCls);
+    label(markAt, span.contained ? "Contained" : "now", markCls);
   renderHotLane();   // binned and placed by the axis's width, like the ticks
-  // then any label that would touch the one before it, or the end, goes (measured, as the
-  // edge-aligned ones don't sit where their spacing says; skipped while hidden)
+  // then any label that would touch the one before it, or the mark, goes (measured, as
+  // the edge-aligned ones don't sit where their spacing says; skipped while hidden)
   if (!ticks.clientWidth) return;
-  const endEl = dates.querySelector(".end"), endBox = endEl.getBoundingClientRect();
+  const markEl = dates.querySelector(".mark"), markBox = markEl.getBoundingClientRect();
   let right = -Infinity;
   for (const el of [...dates.children]) {
-    if (el === endEl) continue;
+    if (el === markEl) continue;
     const b = el.getBoundingClientRect();
-    if (b.left < right + 6 || (b.right + 6 > endBox.left && b.left - 6 < endBox.right)) el.remove();
+    if (b.left < right + 6 || (b.right + 6 > markBox.left && b.left - 6 < markBox.right)) el.remove();
     else right = b.right;
   }
 }
@@ -2173,7 +2187,7 @@ function offAxisText(t) {
   if (t < span.start) return "before the timeline starts";
   const d = t - span.end;
   const n = d >= DAY ? plural(Math.round(d / DAY), "day") : plural(Math.max(1, Math.round(d / HOUR)), "hour");
-  return `${n} after ${span.contained ? "containment" : "now"}`;
+  return `${n} after ${!span.contained ? "now" : span.end > span.containedAt ? "the last perimeter" : "containment"}`;
 }
 
 function renderHotMarks() {
@@ -2646,15 +2660,15 @@ async function refreshHotspots() {
   clearHotspots();
   const token = state.hotSeq;
   const f = state.fires.find(x => x.slug === state.sel);
-  if (!f) { setLaneLabel("hot", "", ""); return; }
-  setLaneLabel("hot", "loading…", "", "none");
+  if (!f) { setHotLabel("", ""); return; }
+  setHotLabel(null, "loading detections…", "none");
   // the timeline (and its perimeter/run markers) follows the fire even when
   // detections are switched off
   const span = await fireSpan(f);
   if (token !== state.hotSeq) return;   // another fire or toggle superseded this one
   layoutHotTimeline(span);
   if (!f.centroid || !layerShown.hot) {
-    setLaneLabel("hot", f.centroid ? "hidden" : "none", f.centroid ? "Hotspots are hidden (the eye beside Hotspots shows them)"
+    setHotLabel(f.centroid ? "hidden" : "none", f.centroid ? "Hotspots are hidden (the eye beside Hotspots shows them)"
       : "This fire has no location to look up hotspots around", "none");
     return;
   }
@@ -2702,7 +2716,7 @@ async function ensureHotCoverage(historyOnly) {
     if (H.req === req) H.req = null;
     if (state.hot !== H || req.ctl.signal.aborted) return;
     if (req.history) { H.histError = e.message; renderHotspots(); }
-    else setLaneLabel("hot", "failed", "Hotspots request failed: " + e.message, "warn");
+    else setHotLabel("failed", "Hotspots request failed: " + e.message, "warn");
     return;
   }
   if (H.req === req) H.req = null;
@@ -2779,11 +2793,9 @@ function renderHotspots() {
     parts.push(H.histError ? "earlier history failed to load"
       : `loading history ${Math.floor(100 * have / (today - first + 1))}%`);
   }
-  // the hotspot lane's label says only when it's loading or missing some, its tooltip
-  // the whole story (the counts too)
-  const story = parts.join(" · "), short = H.capped || H.histError;
-  setLaneLabel("hot", pending ? "loading…" : short ? "incomplete" : "", story[0].toUpperCase() + story.slice(1),
-               pending ? "none" : short ? "warn" : "");
+  // the hotspots' label (the playhead's time) muted while loading, warning when some are
+  // missing; its tooltip the whole story, the counts too
+  setHotLabel(null, parts.join(" · "), pending ? "none" : H.capped || H.histError ? "warn" : "");
   renderHotLane();   // the bars take their age at the playhead
   if (pending) scheduleHotCoverage();
 }
@@ -2792,8 +2804,7 @@ function renderHotLegend() {
   // the hotspot-age key (the burn scar, then the 7-day ramp, oldest on the left like the
   // axis) and the hotspot lane's glyph, both in the palette's colors
   const pal = Palette.get();
-  const key = '<span class="lab">Hotspot age</span>' +
-    `<i class="scar" style="background:${pal.scar}"></i><span>older</span><span class="gap"></span>` +
+  const key = `<i class="scar" style="background:${pal.scar}"></i><span>older</span><span class="gap"></span>` +
     `<span>7d</span><i class="ramp" style="background:${Palette.hotspotGradient()}"></i><span>0</span>`;
   for (const el of document.querySelectorAll(".tl-key")) {
     el.innerHTML = key;
