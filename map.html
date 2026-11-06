@@ -675,8 +675,9 @@ const map = new maplibregl.Map({
                  "circle-stroke-width": 0.5, "circle-stroke-color": ["get", "c"], "circle-stroke-opacity": 0.9 } },
       // a run's analysis: the satellite detections in its window, as the report draws them,
       // white and ringed green inside the forecast, dark red outside. Part of the analysis,
-      // not the hotspot layer: shown with it whatever the hotspots' eye says
-      { id: "score-hot", type: "circle", source: "scorehot",
+      // not the hotspot layer: shown while the playhead is on the analysis frame (the window's
+      // end), whatever the hotspots' eye says; scrubbed off it, the hotspots take over
+      { id: "score-hot", type: "circle", source: "scorehot", layout: { visibility: "none" },
         paint: { "circle-radius": 3.5, "circle-color": "#ffffff", "circle-opacity": 0.9, "circle-stroke-width": 1.5,
                  "circle-stroke-color": ["case", ["==", ["get", "cap"], 1], "#0a5c36", "#7a1010"] } },
       { id: "fires", type: "circle", source: "fires",
@@ -1049,6 +1050,7 @@ async function init() {
   layoutHotTimeline(defaultHotSpan());
   let hotPending = false;   // setTimeout, not rAF — rAF pauses in hidden tabs
   document.getElementById("hotTime").addEventListener("input", () => {
+    snapToScoreFrame();
     if (hotPending) return;
     hotPending = true;
     setTimeout(() => { hotPending = false; renderHotspots(); }, 30);
@@ -2288,12 +2290,16 @@ async function renderScore(f, run, pct, token) {
              properties: { cap, t: r.t, src: r.src, frp: r.frp, conf: r.conf } };
   });
   map.getSource("scorehot").setData({ type: "FeatureCollection", features });
+  if (state.hotSpan) renderHotspots();   // on the analysis frame, the rings stand in for the hotspots
   key.innerHTML = scoreKeyHtml(row, sc, "", got ? { n: features.length, nIn, capped: got.capped } : { failed: true });
 }
 
-// The hotspot playhead moves to the window's end, so the hotspot layer, when it's on, shows
-// the fire as of then (the analysis draws the window's own detections either way).
-// Taking the analysis off puts the playhead back, unless it was moved meanwhile.
+// The hotspot playhead moves to the window's end: the analysis frame. There the window's
+// detections show as the analysis's hit / miss rings (even with the hotspots' eye off), in
+// place of the hotspots; scrubbed off it, the hotspots show as ever (eye on), so their
+// progress can be followed, while the analysis stays on the map; scrubbed back (it pulls
+// the playhead in from a few pixels away), the rings return. Taking the analysis off puts
+// the playhead back, unless it was moved meanwhile.
 let scoreHot = null;   // {prev, set}: the playhead slider's value before, and as the view set it
 
 function scoreWindow() {
@@ -2311,6 +2317,18 @@ function syncScorePlayhead() {
   el.value = v;
   scoreHot.set = v;
   renderHotspots();
+}
+
+// whether the playhead is on the analysis frame (an analysis on, the playhead at its window's end)
+const scoreAtFrame = () => !!(scoreHot && scoreHot.set != null && scoreWindow() &&
+  +document.getElementById("hotTime").value === scoreHot.set);
+
+function snapToScoreFrame() {
+  // a drag of the playhead that comes within ~5px of the analysis frame lands on it (only
+  // while dragging: the arrow keys still step off it an hour at a time)
+  if (!scrubbing || !scoreHot || scoreHot.set == null || !scoreWindow()) return;
+  const el = document.getElementById("hotTime"), pxPerH = el.clientWidth / +el.max;
+  if (pxPerH > 0 && Math.abs(+el.value - scoreHot.set) <= Math.max(1, Math.ceil(5 / pxPerH))) el.value = scoreHot.set;
 }
 
 function releaseScorePlayhead() {
@@ -3367,8 +3385,19 @@ function hotPlayhead() {
 function renderHotspots() {
   const p = hotPlayhead();
   labelPlayhead();
+  // on the analysis frame its rings stand in for the hotspots (see scoreAtFrame)
+  const frame = scoreAtFrame();
+  map.setLayoutProperty("score-hot", "visibility", frame ? "visible" : "none");
   const H = state.hot;
   if (!H) return;
+  if (frame) {
+    map.getSource("hot").setData(EMPTY);
+    scarUpdate(hotFlat(H), 0, 0, Palette.get().scar);
+    setHotLabel(null, "On the analysis frame: the window's detections show as the analysis's hit / miss rings " +
+      "(scrub the playhead to see the hotspots)", "");
+    renderHotLane();
+    return;
+  }
   // the detections in the 7 days behind the playhead, colored by their age at it
   const d0 = dayOf(p - HOT_LOOKBACK_H * HOUR), d1 = dayOf(p);
   const features = [];
