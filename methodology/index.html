@@ -199,6 +199,10 @@
     <li><b>Why hotspots are only a side check.</b> Satellites pass a few times a day and can't see through
       thick smoke or cloud, so missing detections don't mean the ground didn't burn. Hotspots feed the
       capture check only, never precision.</li>
+    <li><b>Detections that don't look like the fire are left out.</b> The capture check skips a detection
+      that's more than 1 km from the fire and that no later perimeter ever reaches, and one that no
+      satellite's nearest pass, before or after, also saw within 1 km. These count neither for nor
+      against the forecast. On four test fires that was about 2 in 100 detections.</li>
     <li><b>Same grid throughout.</b> The perimeters and detections are laid onto the forecast's own grid,
       and every area above is a count of its squares.</li>
   </ul>

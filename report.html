@@ -154,7 +154,7 @@ function parseCSV(text) {
     "baseline_acres", "start_acres", "burned_before_acres",
     "pred_total_acres", "pred_new_acres", "act_new_acres", "inter_acres",
     "precision", "recall", "iou", "act_outside_acres", "act_offgrid_frac",
-    "hs_n", "hs_new_acres", "hs_hit_acres", "hs_capture"]);
+    "hs_n", "hs_new_acres", "hs_hit_acres", "hs_capture", "hs_artifact_n", "hs_transient_n"]);
   return lines.slice(1).map(line => {
     const cells = line.split(",");
     const r = {};
@@ -510,6 +510,10 @@ async function renderInspection(row) {
       grp.addTo(INS.map);
       INS.layers.push(grp);
       if (nIn) hsLine = ` · <b>${nIn}</b> detections in window, <b>${nCap}</b> inside prediction`;
+      // the pipeline's screening isn't per dot here: say how many the score left out
+      const nArt = row.hs_artifact_n || 0, nTr = row.hs_transient_n || 0;
+      if (nIn && nArt + nTr) hsLine += ` (hotspot capture leaves out <b>${nArt + nTr}</b>: ` +
+        [nArt && `${nArt} far from the fire`, nTr && `${nTr} not confirmed by a nearby pass`].filter(Boolean).join(", ") + ")";
     } catch (e) { /* dots are optional */ }
     if (hsLine) document.getElementById("insTimes").innerHTML = describeTimes(row) + hsLine;
 

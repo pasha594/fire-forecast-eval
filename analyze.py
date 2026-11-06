@@ -81,11 +81,25 @@ CSV_COLUMNS = ["slug", "cornea_id", "run_ts", "run_dt_utc", "percentile",
                "start_basis", "start_acres", "burned_before_acres", "pred_total_acres", "pred_new_acres", "act_new_acres", "inter_acres",
                "precision", "recall", "iou", "act_outside_acres", "act_offgrid_frac",
                "hs_n", "hs_new_acres", "hs_hit_acres", "hs_capture",
-               "expired_run", "notes"]
+               "hs_artifact_n", "hs_transient_n", "expired_run", "notes"]
 
 # satellite active-fire footprint radii (m): VIIRS 375m px, MODIS 1km px
 HS_RADIUS_VIIRS = 187.5
 HS_RADIUS_MODIS = 500.0
+# Detections that don't look like the fire are left out of the hotspot metric instead
+# of counting as misses against the forecast (see HotspotSet._screen):
+#  artifact:  farther than HS_ARTIFACT_M from the perimeter current when it was detected,
+#             and its footprint never touches a perimeter mapped after it. Without a
+#             perimeter before it, or until one is mapped after it, it can't be judged
+#             and is kept.
+#  transient: no other detection within HS_PERSIST_M on any satellite's nearest pass
+#             before or after its own (its own satellite's included), so a source that
+#             revisits rarely, like Landsat every 8-16 days, is confirmed by the daily
+#             ones. A radius, not the same spot: the detected location shifts between
+#             passes with the view angle and as the fire moves.
+HS_ARTIFACT_M = 1000.0
+HS_PERSIST_M = 1000.0
+HS_PASS_GAP_S = 20 * 60   # one source's detections closer in time than this are one overpass
 
 
 def log(msg):
@@ -531,10 +545,14 @@ class HotspotSet:
     """Timestamped VIIRS/MODIS detections for one fire. Unlike perimeters these
     carry exact acquisition times, so windows need no tolerance: a detection
     either falls inside (run, run+H] or it doesn't. Footprints are rasterized
-    at instrument resolution (VIIRS 375m px -> r=187.5m, MODIS 1km -> r=500m)."""
+    at instrument resolution (VIIRS 375m px -> r=187.5m, MODIS 1km -> r=500m).
 
-    def __init__(self, slug):
-        self.pts = []  # (dt, lon, lat, radius_m)
+    Every detection is screened once against the fire's whole record (see
+    HS_ARTIFACT_M): only those that pass are scored; the rest are left out of
+    the metric, neither captured nor missed."""
+
+    def __init__(self, slug, ps=None):
+        self.pts = []  # (dt, lon, lat, radius_m, source)
         for p in sorted((RAW / "hotspot_archive" / slug).glob("*.geojson")):
             try:
                 gj = json.loads(p.read_text())
@@ -554,19 +572,127 @@ class HotspotSet:
                 src = (pr.get("source") or "").lower()
                 r = (HS_RADIUS_MODIS if ("terra" in src or "aqua" in src or "modis" in src)
                      else HS_RADIUS_VIIRS)
-                self.pts.append((dt, c[0], c[1], r))
-        self.pts.sort(key=lambda x: x[0])
+                self.pts.append((dt, c[0], c[1], r, src))
+        self.pts.sort(key=lambda x: (x[0], x[4]))
+        # "ok", "artifact" or "transient", per detection
+        self.status = (self._screen(ps) if ps is not None and ps.timeline and self.pts
+                       else ["ok"] * len(self.pts))
         self._mask = {}
 
-    def mask(self, t0, t1, crs, transform, shape_):
+    def _screen(self, ps):
+        import shapely
+        from rasterio.warp import transform as warp_transform
+        n = len(self.pts)
+        lons = np.array([p[1] for p in self.pts])
+        lats = np.array([p[2] for p in self.pts])
+        zone = int((np.median(lons) + 180) // 6) % 60 + 1
+        crs = f"EPSG:{(32600 if np.median(lats) >= 0 else 32700) + zone}"
+        xs, ys = (np.asarray(v) for v in warp_transform("EPSG:4326", crs, lons.tolist(), lats.tolist()))
+        status = np.full(n, "ok", dtype=object)
+
+        # 1. artifacts: far from the perimeter current at detection, never inside a later one
+        current, groups = {}, {}
+        for i, p in enumerate(self.pts):
+            if p[0] not in current:
+                c = ps.latest_at_or_before(p[0])
+                current[p[0]] = c[1] if c else None
+            if current[p[0]] is not None:
+                groups.setdefault(current[p[0]], []).append(i)
+
+        def near(epochms, idx, dist):
+            """which detections idx lie within dist (m, scalar or per detection) of a perimeter"""
+            # prepared containment first, distance only for the few outside: plain
+            # distance() on a 47k-vertex perimeter cost ~17s for one fire
+            g = ps.geom_utm(epochms, crs)
+            shapely.prepare(g)
+            pts = shapely.points(xs[idx], ys[idx])
+            out = shapely.intersects(g, pts)
+            rest = ~out
+            if rest.any():
+                out[rest] = shapely.dwithin(g, pts[rest], np.broadcast_to(dist, out.shape)[rest])
+            return out
+
+        far = np.zeros(n, dtype=bool)
+        for epochms, idx in groups.items():
+            idx = np.asarray(idx)
+            far[idx] = ~near(epochms, idx, HS_ARTIFACT_M)
+        far_idx = np.flatnonzero(far)
+        if far_idx.size:
+            t = np.array([self.pts[i][0].timestamp() for i in far_idx])
+            r = np.array([self.pts[i][3] for i in far_idx])
+            judged = np.zeros(far_idx.size, dtype=bool)    # some perimeter was mapped after it
+            touched = np.zeros(far_idx.size, dtype=bool)   # and its footprint touches one of those
+            for pt, epochms, _ in ps.timeline:
+                later = t < pt.timestamp()
+                judged |= later
+                chk = later & ~touched
+                if chk.any():
+                    touched[chk] = near(epochms, far_idx[chk], r[chk])
+            status[far_idx[judged & ~touched]] = "artifact"
+
+        # 2. transients, among the rest: a pass is one source's detections less than
+        # HS_PASS_GAP_S apart; a detection needs one within HS_PERSIST_M on some
+        # source's nearest pass before or after its own (its own source's included)
+        by_src = {}
+        for i in np.flatnonzero(status == "ok"):
+            by_src.setdefault(self.pts[i][4], []).append(i)
+        passes = {}   # source -> its passes in time order
+        for s, idx in by_src.items():
+            runs, run = [], [idx[0]]
+            for a, b in zip(idx, idx[1:]):
+                if (self.pts[b][0] - self.pts[a][0]).total_seconds() > HS_PASS_GAP_S:
+                    runs.append(run)
+                    run = []
+                run.append(b)
+            runs.append(run)
+            passes[s] = [np.asarray(r) for r in runs]
+        starts = {s: np.array([self.pts[r[0]][0].timestamp() for r in pl])
+                  for s, pl in passes.items()}
+        r2 = HS_PERSIST_M ** 2
+
+        def confirmed(a, b):
+            """which of pass a's detections have one of pass b's within HS_PERSIST_M"""
+            out = np.zeros(a.size, dtype=bool)
+            step = max(1, 2_000_000 // b.size)   # caps the pairwise block at ~16 MB
+            for s in range(0, a.size, step):
+                aa = a[s:s + step]
+                out[s:s + step] = (((xs[aa, None] - xs[None, b]) ** 2 +
+                                    (ys[aa, None] - ys[None, b]) ** 2) <= r2).any(axis=1)
+            return out
+
+        for s0, pl0 in passes.items():
+            for k, ix in enumerate(pl0):
+                nb = []
+                for s, pl in passes.items():
+                    if s == s0:
+                        j = k   # its own source: the passes either side of this one
+                        before, after = j - 1, j + 1
+                    else:       # another: its last pass starting before, first after
+                        j = int(np.searchsorted(starts[s], starts[s0][k]))
+                        before, after = j - 1, j
+                    nb += [pl[x] for x in (before, after) if 0 <= x < len(pl)]
+                ok = (confirmed(ix, np.concatenate(nb)) if nb
+                      else np.zeros(ix.size, dtype=bool))
+                status[ix[~ok]] = "transient"
+        return status.tolist()
+
+    def mask(self, t0, t1, crs, transform, shape_, screened=True):
+        """-> (footprint mask of the screened-in detections in (t0, t1], how many there
+        are, {"artifact": n, "transient": n} of those in the window left out).
+        screened=False takes every detection (RunStart: what a run was seeded from)."""
         from rasterio import features
         from rasterio.warp import transform as warp_transform
         from shapely.geometry import Point, mapping
-        key = (t0, t1, str(crs), tuple(transform)[:6], shape_)
+        key = (t0, t1, str(crs), tuple(transform)[:6], shape_, screened)
         if key not in self._mask:
-            sel = [p for p in self.pts if t0 < p[0] <= t1]
+            win = [i for i, p in enumerate(self.pts) if t0 < p[0] <= t1]
+            sel = [self.pts[i] for i in win if self.status[i] == "ok" or not screened]
+            left_out = {"artifact": 0, "transient": 0}
+            for i in win:
+                if self.status[i] != "ok" and screened:
+                    left_out[self.status[i]] += 1
             if not sel:
-                self._mask[key] = (np.zeros(shape_, dtype=bool), 0)
+                self._mask[key] = (np.zeros(shape_, dtype=bool), 0, left_out)
             else:
                 xs, ys = warp_transform("EPSG:4326", crs,
                                         [p[1] for p in sel], [p[2] for p in sel])
@@ -574,7 +700,7 @@ class HotspotSet:
                          for x, y, p in zip(xs, ys, sel)]
                 m = features.rasterize(geoms, out_shape=shape_, transform=transform,
                                        fill=0, dtype="uint8").astype(bool)
-                self._mask[key] = (m, len(sel))
+                self._mask[key] = (m, len(sel), left_out)
         return self._mask[key]
 
 
@@ -619,7 +745,7 @@ class RunStart:
                 m = on_grid(*self._src, crs, tfm, shape_)
             elif self.basis == "hotspots":
                 m = self._hs.mask(datetime(1970, 1, 1, tzinfo=timezone.utc), self._run_dt,
-                                  crs, tfm, shape_)[0]
+                                  crs, tfm, shape_, screened=False)[0]
             else:
                 m = np.zeros(shape_, dtype=bool)
             self._grids[key] = m
@@ -678,7 +804,7 @@ def compute(only_slug=None):
             skipped["no_perims"] += 1
             continue
         if slug not in hssets:
-            hssets[slug] = HotspotSet(slug)
+            hssets[slug] = HotspotSet(slug, ps)
         hs = hssets[slug]
         hs._mask.clear()  # keyed per grid+window; new run = new grid, drop old
 
@@ -730,7 +856,8 @@ def compute(only_slug=None):
                 inter = pred_new & act_new
                 n_pred, n_act, n_int = int(pred_new.sum()), int(act_new.sum()), int(inter.sum())
                 n_union = n_pred + n_act - n_int
-                hs_mask, hs_n = hs.mask(run_dt, run_dt + timedelta(hours=H), crs, tfm, arr.shape)
+                hs_mask, hs_n, hs_left_out = hs.mask(run_dt, run_dt + timedelta(hours=H),
+                                                     crs, tfm, arr.shape)
                 hs_new = hs_mask & ~BS
                 n_hs_new = int(hs_new.sum())
                 n_hs_hit = int((pred_new & hs_new).sum())
@@ -777,6 +904,8 @@ def compute(only_slug=None):
                     "hs_new_acres": acres(n_hs_new, px_area),
                     "hs_hit_acres": acres(n_hs_hit, px_area),
                     "hs_capture": round(n_hs_hit / n_hs_new, 4) if n_hs_new else "",
+                    "hs_artifact_n": hs_left_out["artifact"],
+                    "hs_transient_n": hs_left_out["transient"],
                     "expired_run": entry.get("expired", False),
                     "notes": ";".join(notes),
                 })

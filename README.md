@@ -180,6 +180,27 @@ predictions; perimeters remain the precision source. The two truths are kept
 separate rather than merged: merging 375m–1km footprints into perimeter truth
 would inflate areas and destroy error attribution.
 
+Detections are screened first, once per fire against its whole record, and the
+ones that don't look like the fire are left out (neither captured nor missed):
+- **artifact** (`hs_artifact_n`): more than 1 km from the perimeter current
+  when it was detected, and its footprint never touches a perimeter mapped
+  after it. With no later perimeter yet it can't be judged and is kept, so a
+  live fire's newest rows can change as perimeters arrive.
+- **transient** (`hs_transient_n`): no other detection within 1 km on any
+  satellite's nearest pass before or after its own, its own satellite
+  included. A pass is one source's detections less than 20 minutes apart; each
+  source's sequence is over passes that detected this fire (non-artifacts
+  only), so cloudy or empty overpasses don't break it. Every satellite's
+  nearest pass counts, not just the one pass right before and after in time:
+  that one often saw the fire somewhere else, and checking only it left out
+  23% of Landsat and 18% of MODIS detections on four test fires (Nov 2026),
+  nearly all of which another satellite's pass confirms. Now 1–2%.
+
+`hs_n` counts only the detections scored; the two `_n` columns count those
+left out in the same window. The start footprint's fallback (detections up to
+the run) takes every detection, screened or not, since it stands in for what
+the run was seeded from.
+
 Growth-only by design: comparing full footprints would be dominated by
 already-burned area. All raw areas are in `metrics.csv` so other metrics can
 be derived. Caveats worth knowing: recall is measured against *on-grid* actual
