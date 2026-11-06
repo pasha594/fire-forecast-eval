@@ -23,6 +23,14 @@
     contained: "#D81B7A",
   });
   const LE = "≤";
+  // the scored view (a forecast against the perimeter it was scored on, as report.html's
+  // calculation inspector draws it): fixed, not a setting, so the two pages always agree
+  const SCORE = Object.freeze({
+    base: "#898781",    // burned before the run: left out of both sides
+    hit: "#1baf7a",     // predicted and burned
+    falseAlarm: "#2a78d6",   // predicted, didn't burn
+    miss: "#e34948",    // burned, not predicted
+  });
 
   const isHex = v => typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v);
   const isColors = (v, n) => Array.isArray(v) && v.length === n && v.every(isHex);
@@ -334,7 +342,7 @@
   }
 
   window.Palette = {
-    TOA_EDGES, HOT_STOPS_H, DEFAULTS,
+    TOA_EDGES, HOT_STOPS_H, DEFAULTS, SCORE,
     get, set, reset, onChange,
     toaColors, toaColor, hotspotColor, hotspotGradient,
     openSettings, gearButton, addSection,

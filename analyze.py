@@ -646,17 +646,32 @@ def _passes_skill_filters(r):
             and offgrid <= SKILL_FILTERS["max_offgrid_frac"])
 
 
+def _perim_id(s):
+    return int(float(s)) if s else None
+
+
 def build_skill(csv_path, out_dir):
     """Per-fire skill files for map.html from a metrics CSV: out_dir/<slug>.json
     + out_dir/index.json, rows filtered like the report's default view.
+
+    A row is [horizon_h, precision, recall, iou, baseline_perim_ms, actual_perim_ms,
+    actual_offset_h, actual_mapped]: the scores, then what the map needs to redraw
+    the calculation (the perimeter archive ids, null baseline when none was mapped
+    before the run; the scored perimeter's hours from the window end; 1 if that time
+    is when it was mapped, 0 if it's its last edit, null in older CSVs that don't say).
     Returns (fires, rows)."""
     fires = {}
     with open(csv_path, newline="") as fh:
         for r in csv.DictReader(fh):
             if not _passes_skill_filters(r):
                 continue
+            basis = r.get("actual_time_basis")
+            off = _num(r["actual_offset_h"])
             entry = [int(float(r["horizon_h"])),
-                     _r3(r["precision"]), _r3(r["recall"]), _r3(r["iou"])]
+                     _r3(r["precision"]), _r3(r["recall"]), _r3(r["iou"]),
+                     _perim_id(r["baseline_perim_ms"]), _perim_id(r["actual_perim_ms"]),
+                     None if off is None else round(off, 2),
+                     None if not basis else int(basis == "mapped")]
             (fires.setdefault(r["slug"], {}).setdefault(r["run_ts"], {})
              .setdefault(r["percentile"], []).append(entry))
 
@@ -671,7 +686,7 @@ def build_skill(csv_path, out_dir):
                          for pct in sorted(by_pct, key=int)}
                 for run_ts, by_pct in sorted(fires[slug].items())}
         index[slug] = sum(len(v) for by_pct in runs.values() for v in by_pct.values())
-        doc = {"v": 1, "slug": slug, "generated": generated,
+        doc = {"v": 2, "slug": slug, "generated": generated,
                "filters": SKILL_FILTERS, "runs": runs}
         (out_dir / f"{slug}.json").write_text(json.dumps(doc, separators=(",", ":")))
     (out_dir / "index.json").write_text(json.dumps(

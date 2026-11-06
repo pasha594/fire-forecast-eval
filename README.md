@@ -62,14 +62,22 @@ bucket, e.g. `https://f005.backblazeb2.com/file/fire-forecast-archive/skill/inde
 
 ```
 skill/index.json   {"v": 1, "generated": "<UTC ISO>", "slugs": {"<slug>": <scored rows>, ...}}
-skill/{slug}.json  {"v": 1, "slug", "generated", "filters": {...},
-                    "runs": {"<run_ts>": {"<pct>": [[H, precision, recall, iou], ...]}}}
+skill/{slug}.json  {"v": 2, "slug", "generated", "filters": {...},
+                    "runs": {"<run_ts>": {"<pct>": [[H, precision, recall, iou,
+                      baseline_perim_ms, actual_perim_ms, actual_offset_h, actual_mapped], ...]}}}
 ```
 
 Rows use the metrics report's default filters exactly (actual growth ≥ 10 acres,
 perimeter offset within ±3h, off-grid growth ≤ 10%; blank offset/off-grid count as
 0), entries are sorted by `H`, scores are rounded to 3 decimals (`null` when
-undefined), and `index.json` lists only fires with ≥ 1 scored row. Fires that
+undefined), and `index.json` lists only fires with ≥ 1 scored row. The last four
+fields (v2) let the map redraw a row's calculation as hits and misses: the two
+perimeter archive ids (`baseline_perim_ms` is `null` when no perimeter was mapped
+before the run), the scored perimeter's hours from the window end (2 decimals), and
+`actual_mapped` 1 when that time is when it was mapped, 0 when it's its last edit,
+`null` for older CSVs that don't say. v1 files have the first four only, and the map
+then offers no hits & misses view. On localhost the map reads `data/skill/` first,
+so `analyze.py` output can be checked before it's published. Fires that
 drop out keep a stale `skill/{slug}.json` in the bucket, but are no longer
 listed. To rebuild just these files from the already-published `metrics.csv`
 (no sync or recompute), run the analyze workflow manually with **skill_only**

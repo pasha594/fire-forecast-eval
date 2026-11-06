@@ -199,16 +199,20 @@
   .ctl-head > span:first-child { flex: none; }
   .ctl-head b { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--ink); font-weight: 600;
                 font-variant-numeric: tabular-nums; }
-  /* ---- the timeline: lanes for the forecast runs, perimeters and hotspot activity on one
-     time axis, the axis, and the playhead across them, its handle on the axis. The lanes'
-     names, each with its time (the hotspots', the playhead's), sit in a column left of the
-     lanes when there's room (docked under a wide map), else in a list above them; either
-     way the three times share one column, so they read down like a table. Every row on the
+  /* ---- the timeline: lanes for the forecast runs (each model's, with its runs' analysis
+     in a lane tucked under it), perimeters and hotspot activity on one time axis, the
+     axis, and the playhead across them, its handle on the axis. The lanes' names, each
+     with its time (the hotspots', the playhead's), sit in a column left of the lanes when
+     there's room (docked under a wide map), else in a list above them; either way the
+     times share one column, so they read down like a table. Every row on the
      axis is inset by half the playhead slider's 6px thumb (3px) so the thumb's travel spans
      it. TL_WIDE (JS) must match the 620px query below */
   #tlBlock { container: tl / inline-size; }
   .tl-in { --lane-h: 16px; --hot-h: 22px; --lane-gap: 2px; --axis-gap: 3px; --tick-h: 8px; --tick-w: 1.5px;
-           --hot-top: calc(2 * (var(--lane-h) + var(--lane-gap)));
+           /* a forecast model's lane, then its Analysis lane: shorter, 1px under it, and a
+              wider gap before the next group (another model's, or the perimeters) */
+           --sub-h: 12px; --sub-gap: 1px; --group-gap: 5px;
+           --hot-top: calc(2 * var(--lane-h) + var(--sub-h) + var(--sub-gap) + var(--group-gap) + var(--lane-gap));
            --axis-y: calc(var(--hot-top) + var(--hot-h) + var(--axis-gap));
            color: var(--ink-2); font-size: var(--fs-label); line-height: var(--lh-label); }
   /* the hotspot-age key: the burn scar, then the 7-day ramp, oldest on the left like the axis */
@@ -248,6 +252,8 @@
   .tl { position: relative; flex: 1; min-width: 0; }
   .lane { position: relative; height: var(--lane-h); margin: 0 3px var(--lane-gap); border-radius: 4px;
           background: rgba(59, 29, 41, 0.04); cursor: pointer; touch-action: none; }
+  .lane[data-kind="run"] { margin-bottom: var(--sub-gap); }
+  .lane[data-kind="score"] { height: var(--sub-h); margin-bottom: var(--group-gap); border-radius: 3px; }
   .hot-lane { height: var(--hot-h); margin-bottom: 0; cursor: auto; }
   .hot-lane svg { position: absolute; left: 0; top: 0; overflow: visible; }
   .hot-lane .hl { fill: none; stroke: var(--ink); stroke-width: 1.25; }
@@ -306,15 +312,23 @@
   /* wide: the panel's scale one step up (13 / 12 / 11), and the lane names in a column */
   @container tl (min-width: 620px) {
     .tl-in { --lane-h: 20px; --hot-h: 28px; --lane-gap: 3px; --axis-gap: 4px; --tick-h: 10px; --tick-w: 2px;
+             --sub-h: 16px; --group-gap: 7px;
              font-size: var(--fs-body); line-height: var(--lh-body); }
     .tl-body { flex-direction: row; }
     .tl-key { font-size: var(--fs-meta); line-height: var(--lh-meta); }
     .tl-key .scar { width: 9px; height: 9px; }
     .tl-key .ramp { width: 64px; }
-    .tl-names { grid-template-rows: repeat(2, var(--lane-h)) var(--hot-h) auto; row-gap: var(--lane-gap);
-                flex: none; align-self: flex-start; width: 210px; margin: 0 10px 0 0; padding-right: 12px;
+    /* one row per lane and one per gap between them, so each name lines up with its lane */
+    .tl-names { grid-template-rows: var(--lane-h) var(--sub-gap) var(--sub-h) var(--group-gap) var(--lane-h) var(--lane-gap) var(--hot-h) auto;
+                row-gap: 0;
+                flex: none; align-self: flex-start; width: 232px; margin: 0 10px 0 0; padding-right: 12px;
                 border-right: 1px solid var(--grid); font-size: var(--fs-label); line-height: var(--lh-label); }
     .tl-lab .sw { height: 12px; }
+    .tl-names .tl-lab[data-kind="run"] > * { grid-row: 1; }
+    .tl-names .tl-lab[data-kind="score"] > * { grid-row: 3; }
+    .tl-names .tl-lab[data-kind="perimeter"] > * { grid-row: 5; }
+    .tl-names .tl-lab[data-kind="hot"] > * { grid-row: 7; }
+    .tl-names .tl-key { grid-row: 8; }
     #hotTicks { height: 9px; }
     #hotTicks span { height: 4px; }
     #hotTicks span.major { height: 7px; }
@@ -378,6 +392,50 @@
   .skill tbody th span { color: var(--muted); }
   .skill td { border: 1px solid var(--surface);
               background: color-mix(in srgb, var(--accent) calc(var(--v, 0) * 60%), transparent); }
+  /* ---- a run's analysis: the forecast against the perimeter it was scored on. Its lane
+     sits under the model's in the timeline; its key under Forecast metrics */
+  /* the metrics table: a horizon's column picks it, the one on the map ringed in ink */
+  .skill thead th .sk-h { width: 100%; padding: 0; border: 0; border-radius: 3px; background: none; color: inherit;
+                          font: inherit; cursor: pointer; }
+  .skill.pick td[data-h] { cursor: pointer; }
+  .skill.pick .colhov .sk-h, .skill thead th .sk-h:hover { background: var(--hover); color: var(--ink); }
+  .skill.pick td.colhov { box-shadow: inset 0 0 0 1px var(--muted); }
+  .skill thead th.sel .sk-h { background: var(--ink); color: #fff; font-weight: 600; }
+  .skill td.sel { box-shadow: inset 0 0 0 1.5px var(--ink); color: var(--ink); font-weight: 600; }
+  .skill-pick { margin: 0; }
+  .skill-pick b { color: var(--ink); font-weight: 600; }
+  /* its key, under the metrics table: the horizon and its window, the four classes and
+     their areas, the perimeter it was scored against */
+  #scoreKey[hidden] { display: none; }
+  .score-key { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); padding-top: var(--sp-3);
+               border-top: 1px dashed var(--grid); color: var(--ink-2); }
+  .score-key .sk-head { display: flex; align-items: center; gap: var(--sp-3); height: var(--lh-label);
+                        font-size: var(--fs-label); line-height: var(--lh-label); white-space: nowrap; }
+  .score-key .sk-head b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .score-key .sk-x { margin-left: auto; padding: 0 6px; height: 18px; border: 1px solid var(--axis); border-radius: 9px;
+                     background: var(--surface); color: var(--ink-2); font: var(--fs-meta)/16px var(--font-sans); cursor: pointer; }
+  .score-key .sk-x:hover { border-color: var(--muted); background: var(--hover); color: var(--ink); }
+  .sk-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 12px; font-size: var(--fs-meta); line-height: var(--lh-meta); }
+  .sk-grid span { display: flex; align-items: center; gap: 5px; min-width: 0; white-space: nowrap; }
+  .sk-grid i { flex: none; width: 10px; height: 10px; border-radius: 2px; }
+  .sk-grid b { margin-left: auto; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .sk-foot b { color: var(--ink); font-weight: 600; }
+  /* the timeline's Analysis lane, tucked under its model's: a tree mark under the model's
+     swatch, then the four-class glyph and its name; a tick at each scored horizon's window
+     end, and the window shown (run to horizon) as a band */
+  .tl-lab .tree { flex: none; align-self: stretch; position: relative; width: 10px; }
+  .tl-lab .tree::before { content: ""; position: absolute; left: 4px; top: -3px; width: 5px; height: calc(50% + 2px);
+                          border: solid color-mix(in srgb, var(--c) 45%, var(--surface)); border-width: 0 0 1.5px 1.5px;
+                          border-bottom-left-radius: 3px; }
+  .tl-names .tree { grid-column: 2; justify-self: stretch; }
+  .tl-lab[data-kind="score"] .nm { display: flex; align-items: center; gap: 5px; }
+  .tl-lab[data-kind="score"] .nm .glyph { width: 9px; height: 9px; }
+  .tl-lab[data-kind="score"] .vl .sc { color: var(--muted); font-weight: 400; }
+  .lane .win { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; pointer-events: none;
+               background: color-mix(in srgb, var(--c) 22%, var(--surface)); }
+  .tl-lab .eye:disabled { opacity: .35; cursor: default; background: none; }
+  /* an analysis on: the runs with nothing scored at this percentile fade back */
+  .lane i.un:not(.hov) { background: color-mix(in srgb, var(--c) 14%, var(--surface)); }
   /* no-selection overview */
   .ov-head { display: flex; align-items: center; gap: 10px; min-height: 36px; }
   .ov-num { font: 800 36px/1 var(--font-serif); color: var(--stat); font-variant-numeric: lining-nums; }
@@ -493,9 +551,10 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
     <!-- the timeline; docked (Settings → Timeline) it moves to #tlDock under the map -->
     <div id="tlSlot"><div id="tlBlock"><div class="tl-in">
       <div class="tl-body">
-        <div class="tl-names"><div class="tl-lab" data-kind="run"><i class="sw"></i><span class="nm">Forecast</span><b class="vl none"></b></div><div class="tl-lab" data-kind="perimeter"><i class="sw"></i><span class="nm">Perimeter</span><b class="vl none"></b></div><div class="tl-lab" data-kind="hot"><svg class="glyph" width="10" height="11" viewBox="0 0 10 11" aria-hidden="true"><rect x="0" y="4" width="2.4" height="7"/><rect x="3.6" y="0" width="2.4" height="11"/><rect x="7.2" y="6" width="2.4" height="5"/></svg><span class="nm">Hotspots</span><b class="vl none"></b></div><div class="tl-key"></div></div>
+        <div class="tl-names"><div class="tl-lab" data-kind="run"><i class="sw"></i><span class="nm">Pyrecast</span><b class="vl none"></b></div><div class="tl-lab" data-kind="score"><i class="tree"></i><span class="nm"><svg class="glyph" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><rect x="0" y="0" width="4.4" height="4.4"/><rect x="5.6" y="0" width="4.4" height="4.4"/><rect x="0" y="5.6" width="4.4" height="4.4"/><rect x="5.6" y="5.6" width="4.4" height="4.4"/></svg>Analysis</span><b class="vl none"></b></div><div class="tl-lab" data-kind="perimeter"><i class="sw"></i><span class="nm">Perimeter</span><b class="vl none"></b></div><div class="tl-lab" data-kind="hot"><svg class="glyph" width="10" height="11" viewBox="0 0 10 11" aria-hidden="true"><rect x="0" y="4" width="2.4" height="7"/><rect x="3.6" y="0" width="2.4" height="11"/><rect x="7.2" y="6" width="2.4" height="5"/></svg><span class="nm">Hotspots</span><b class="vl none"></b></div><div class="tl-key"></div></div>
         <div class="tl" id="tl">
           <div class="lane" data-kind="run"></div>
+          <div class="lane" data-kind="score"></div>
           <div class="lane" data-kind="perimeter"></div>
           <div class="lane hot-lane" id="hotLane"><svg id="tlHot" aria-hidden="true"></svg></div>
           <div id="hotTicks" aria-hidden="true"></div>
@@ -528,6 +587,8 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
     </div>
     <div class="skill-box"><table class="skill" id="skillTable"></table>
       <p class="skill-empty" id="skillEmpty" hidden></p></div>
+    <p class="note skill-pick" id="skillPick" hidden></p>
+    <div id="scoreKey" hidden></div>
   </div>
 </div>
 <div id="mapwrap"><div id="map"></div><div id="tlDock" role="group" aria-label="timeline"></div></div>
@@ -604,9 +665,15 @@ const map = new maplibregl.Map({
       { id: "perim-cur", type: "line", source: "perims", filter: ["get", "cur"],
         paint: { "line-color": OLD_PERIM, "line-width": 2.5 } },
       // newest detections on top
+      // (the hits & misses view draws its window's detections as the report does: white,
+      // ringed green inside the forecast, dark red outside; see renderHotspots)
       { id: "hot", type: "circle", source: "hot", layout: { "circle-sort-key": ["get", "t"] },
-        paint: { "circle-radius": 3, "circle-color": ["get", "c"], "circle-opacity": 0.55,
-                 "circle-stroke-width": 0.5, "circle-stroke-color": ["get", "c"], "circle-stroke-opacity": 0.9 } },
+        paint: { "circle-radius": ["case", ["has", "ring"], 3.5, 3],
+                 "circle-color": ["case", ["has", "ring"], "#ffffff", ["get", "c"]],
+                 "circle-opacity": ["case", ["has", "ring"], 0.9, 0.55],
+                 "circle-stroke-width": ["case", ["has", "ring"], 1.5, 0.5],
+                 "circle-stroke-color": ["case", ["has", "ring"], ["get", "ring"], ["get", "c"]],
+                 "circle-stroke-opacity": 0.9 } },
       { id: "fires", type: "circle", source: "fires",
         paint: { "circle-radius": 5, "circle-color": "#eb6834", "circle-opacity": 0.8,
                  "circle-stroke-width": 1.5, "circle-stroke-color": "#52514e" } },
@@ -650,7 +717,8 @@ const mapReady = new Promise(resolve => map.once("style.load", resolve));
   fold();
 }
 // a debugging handle for local runs (serve.py)
-if (["localhost", "127.0.0.1"].includes(location.hostname)) window.__map = map;
+const IS_LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
+if (IS_LOCAL) window.__map = map;
 
 // want3d is the viewer's choice (remembered); is3d is what the map shows
 const view = { base: "map", want3d: false, is3d: null };   // null until first applied
@@ -835,7 +903,8 @@ function tipText(feat) {
   if (feat.layer.id === "fires") return p.name;
   if (feat.layer.id === "perim-fill") return p.tip;
   const r = state.hot && state.hot.recs[p.id];
-  return r ? `${r.src || "?"} ${fmtDT(r.t)} · FRP ${r.frp ?? "?"} · conf ${r.conf ?? "?"}` : "";
+  const cap = p.cap === 1 ? " · inside the forecast" : p.cap === 0 ? " · outside the forecast" : "";
+  return r ? `${r.src || "?"} ${fmtDT(r.t)} · FRP ${r.frp ?? "?"} · conf ${r.conf ?? "?"}${cap}` : "";
 }
 map.on("mousemove", ev => {
   // measuring: no hover labels, and the ruler follows the pointer (see rulerMove)
@@ -871,7 +940,12 @@ const state = {
   georasterCache: new Map(),
   seq: 0,
   skillIndex: null,     // promise of {slug: scored rows} from skill/index.json, {} when unavailable
+  skillBase: `${BUCKET}/skill`,   // where skill/index.json came from (locally, data/skill first)
   skill: new Map(),     // slug -> skill/<slug>.json
+  scoreOn: false,       // the selected run's analysis on the map (see "a run's analysis"):
+  scoreH: null,         //   the horizon picked (hours),
+  scoreRow: null,       //   the skill row shown (the picked horizon or, not scored there, the nearest)
+  scoreFcWasShown: false,   //   and whether the forecast was on before the analysis hid it
   ovWin: "All",         // no-selection overview: recency filter (a RECENCY key), page, rows per page
   ovPage: 0,
   ovSize: 10,
@@ -891,8 +965,17 @@ async function loadLocalOrBucket(key) {
 // ---------------------------------------------------------------- fire list
 
 async function init() {
-  state.skillIndex = getJson(`${BUCKET}/skill/index.json`)
-    .then(j => (j && j.slugs && typeof j.slugs === "object" ? j.slugs : {}), () => ({}));
+  // localhost (serve.py): skill files built by analyze.py into data/skill first
+  const skillBases = IS_LOCAL ? ["data/skill", `${BUCKET}/skill`] : [`${BUCKET}/skill`];
+  state.skillIndex = (async () => {
+    for (const base of skillBases) {
+      try {
+        const j = await getJson(`${base}/index.json`);
+        if (j && j.slugs && typeof j.slugs === "object") { state.skillBase = base; return j.slugs; }
+      } catch (e) { /* next source */ }
+    }
+    return {};
+  })();
   const [matches, manifest] = await Promise.all([
     loadLocalOrBucket("fire_matches.json"), loadLocalOrBucket("manifest.json"), mapReady]);
   const bySlug = {};
@@ -932,7 +1015,13 @@ async function init() {
   wirePickers();
   wireLanes();
   for (const id of ["selRun", "selVar", "selPct"]) {
-    document.getElementById(id).addEventListener("change", () => { showLayer("run"); refreshWms(); });
+    document.getElementById(id).addEventListener("change", () => {
+      // a variable picked shows the forecast (and so takes the analysis off); a run or a
+      // percentile picked under an analysis switches the analysis to it
+      if (id === "selVar") state.scoreOn = false;
+      if (!state.scoreOn) showLayer("run");
+      refreshWms();
+    });
   }
   const slider = document.getElementById("timeslider");
   slider.addEventListener("input", () => {           // live label while dragging
@@ -946,6 +1035,7 @@ async function init() {
     }
   });
   slider.addEventListener("change", setLiveHour);    // live tiles reload on release
+  wireScorePickers();
   wireEyes();
   applyPerimVisibility();
   layoutHotTimeline(defaultHotSpan());
@@ -954,6 +1044,32 @@ async function init() {
     if (hotPending) return;
     hotPending = true;
     setTimeout(() => { hotPending = false; renderHotspots(); }, 30);
+  });
+}
+
+function wireScorePickers() {
+  // the metrics table's horizons, and the analysis key's close button
+  const table = document.getElementById("skillTable");
+  table.addEventListener("click", ev => {
+    const c = ev.target.closest("[data-h]");
+    if (!c || !table.classList.contains("pick")) return;
+    const h = +c.dataset.h;
+    if (scoreShownH() === h) leaveScore(); else showScore(h);
+  });
+  const hover = h => {
+    for (const el of table.querySelectorAll(".colhov")) el.classList.remove("colhov");
+    if (h != null) for (const el of table.querySelectorAll(`[data-h="${h}"]`)) el.classList.add("colhov");
+  };
+  table.addEventListener("pointerover", ev => {
+    const c = table.classList.contains("pick") && ev.target.closest("td[data-h], th[data-h]");
+    hover(c ? c.dataset.h : null);
+  });
+  table.addEventListener("pointerleave", () => hover(null));
+  document.getElementById("scoreKey").addEventListener("click", ev => {
+    const b = ev.target.closest(".score-key button");
+    if (!b) return;
+    if (b.dataset.act === "leave") leaveScore();
+    else if (b.dataset.h) showScore(+b.dataset.h);
   });
 }
 
@@ -1134,6 +1250,7 @@ function setFireParam(slug) {
 function deselect() {
   state.sel = null;
   state.seq++;              // drops in-flight forecast, perimeter and skill responses
+  resetScore();
   setFireParam(null);
   document.getElementById("selRun").innerHTML = "";
   map.jumpTo(OVERVIEW_VIEW);   // before refreshWms, whose 3D ease a jump would cut short
@@ -1152,6 +1269,7 @@ async function select(slug) {
   if (!f) return;
   state.sel = slug;
   const seq = ++state.seq;   // guard stale async responses after reselect
+  resetScore();
   clearHotspots();
   setFireParam(slug);
   setMode();
@@ -1229,6 +1347,15 @@ function refreshWms() {
   const token = ++state.wmsSeq;
   const f = state.fires.find(x => x.slug === state.sel);
   const run = document.getElementById("selRun").value;
+  // the run's analysis: the horizon to show for this run and percentile, before the lanes
+  // and the metrics table mark it; taking it off puts back the perimeters picked before
+  if (state.scoreOn) state.scoreRow = pickScoreRow();
+  else {
+    state.scoreRow = null;
+    document.getElementById("scoreKey").hidden = true;
+    if (scorePerims) releaseScorePerims();
+    if (scoreHot) releaseScorePlayhead();
+  }
   const variable = forecastVar();
   const pct = document.getElementById("selPct").value;
   const note = document.getElementById("wmsnote");
@@ -1246,6 +1373,12 @@ function refreshWms() {
   configureTimeSlider(variable);
   renderHotMarks();   // the forecast-run marker follows the selected run and layer
   renderSkill();
+  if (state.scoreOn && f && run) {
+    // the analysis takes the forecast's place on the map, for the run and percentile picked here
+    note.textContent = "hidden while this run's analysis is on the map: the run and percentile here pick it";
+    renderScore(f, run, pct, token);
+    return;
+  }
   if (!f || !run || !variable) return;
   if (variable === "time-of-arrival") renderToa(f, run, pct, note, token);
   else if (layer && !isDead(layer)) renderLiveTiles(run, variable, layer, note);
@@ -1807,34 +1940,383 @@ async function loadSkill(f, seq) {
   const index = await state.skillIndex;
   if (!index[f.slug] || state.skill.has(f.slug)) return;
   let doc;
-  try { doc = await getJson(`${BUCKET}/skill/${encodeURIComponent(f.slug)}.json`); }
+  try { doc = await getJson(`${state.skillBase}/${encodeURIComponent(f.slug)}.json`); }
   catch (e) { return; }
   state.skill.set(f.slug, doc);
-  if (state.seq === seq) renderSkill();
+  if (state.seq !== seq) return;
+  // an analysis waiting on this file draws now; the Analysis lane and run ticks follow
+  if (state.scoreOn) refreshWms();
+  else { renderSkill(); renderHotMarks(); }
+}
+
+const hLab = h => (h >= 168 && h % 24 === 0 ? `${h / 24}d` : `${h}h`);
+const NOT_SCORED = "Not scored for this run and percentile: it needs at least 10 acres of growth and a perimeter mapped (or last edited) within 3h of a horizon.";
+
+function scoredRows() {
+  // the selected run and percentile's skill rows (its scored horizons), [] when none
+  const doc = state.sel && state.skill.get(state.sel);
+  const byPct = doc && doc.runs && doc.runs[document.getElementById("selRun").value];
+  const got = byPct && byPct[document.getElementById("selPct").value];
+  return Array.isArray(got) ? got.filter(Array.isArray) : [];
 }
 
 function renderSkill() {
   // the selected run and percentile's scored horizons, or why there are none
   const doc = state.sel && state.skill.get(state.sel);
-  const byPct = doc && doc.runs && doc.runs[document.getElementById("selRun").value];
-  const got = byPct && byPct[document.getElementById("selPct").value];
-  const rows = Array.isArray(got) ? got.filter(Array.isArray) : [];
+  const rows = scoredRows();
   const table = document.getElementById("skillTable"), empty = document.getElementById("skillEmpty");
+  const hint = document.getElementById("skillPick");
   table.hidden = !rows.length;
   empty.hidden = !!rows.length;
+  hint.hidden = true;
   if (!rows.length) {
-    empty.textContent = doc
-      ? "Not scored for this run and percentile: it needs at least 10 acres of growth and a perimeter mapped (or last edited) within 3h of a horizon."
-      : "No scored forecasts for this fire yet.";
+    empty.textContent = doc ? NOT_SCORED : "No scored forecasts for this fire yet.";
     return;
   }
-  const hLab = h => (h >= 168 && h % 24 === 0 ? `${h / 24}d` : `${h}h`);
-  const cell = v => (typeof v === "number" && isFinite(v)
-    ? `<td style="--v:${Math.min(Math.max(v, 0), 1)}">${Math.round(100 * v)}</td>` : "<td>—</td>");
-  document.getElementById("skillTable").innerHTML =
-    `<thead><tr><th></th>${rows.map(r => `<th scope="col">${hLab(r[0])}</th>`).join("")}</tr></thead><tbody>` +
+  // a horizon's column puts its analysis on the map (and the one shown is ringed)
+  const pick = rows.some(canScore), on = scoreShownH();
+  const at = r => (pick && canScore(r) ? ` data-h="${r[0]}"${r[0] === on ? ' class="sel"' : ""}` : "");
+  const cell = (v, r) => (typeof v === "number" && isFinite(v)
+    ? `<td${at(r)} style="--v:${Math.min(Math.max(v, 0), 1)}">${Math.round(100 * v)}</td>` : `<td${at(r)}>—</td>`);
+  const head = r => (pick && canScore(r)
+    ? `<button type="button" class="sk-h" data-h="${r[0]}" aria-pressed="${r[0] === on}" ` +
+      `title="${r[0] === on ? "Close the analysis" : `Map the ${hLab(r[0])} analysis: hits and misses against the perimeter`}">${hLab(r[0])}</button>`
+    : hLab(r[0]));
+  table.classList.toggle("pick", pick);
+  table.innerHTML =
+    `<thead><tr><th></th>${rows.map(r => `<th scope="col"${at(r)}>${head(r)}</th>`).join("")}</tr></thead><tbody>` +
     SKILL_ROWS.map(([name, i]) => `<tr><th scope="row">${name} <span>%</span></th>` +
-      `${rows.map(r => cell(r[i])).join("")}</tr>`).join("") + "</tbody>";
+      `${rows.map(r => cell(r[i], r)).join("")}</tr>`).join("") + "</tbody>";
+  // (with an analysis on, its key below says what's shown and closes it)
+  if (!pick || on != null) return;
+  hint.hidden = false;
+  hint.textContent = "Click a horizon to map its hits and misses";
+}
+
+// ---------------------------------------------------------------- a run's analysis
+
+// Our scoring of a forecast run, not the model's own output: a run and percentile against
+// the perimeter at one horizon, as the metrics report's calculation inspector draws it,
+// where the forecast's time of arrival is within the horizon against the perimeter it was
+// scored on, both less the perimeter at run time, so only growth counts. The skill rows
+// name both perimeters (analyze.build_skill), and it's redrawn here from the same archive
+// copies analyze.py read. In the timeline its lane sits under its model's (each forecast
+// model, Pyrecast now and FARSITE next, gets a lane and an Analysis lane under it); it's
+// switched on there or from a horizon in Forecast metrics, where its key goes. On the map
+// it takes the forecast's place: the two are never drawn over each other.
+const SCORE_CLASSES = [   // a grid cell's class: [palette key, name, what it means]
+  null,
+  ["base", "Burned before", "inside the perimeter at run time: left out of both precision and recall"],
+  ["hit", "Hit", "predicted and burned: counts toward precision and recall"],
+  ["falseAlarm", "False alarm", "predicted, didn't burn: hurts precision"],
+  ["miss", "Miss", "burned, not predicted: hurts recall"],
+];
+const ACRE_M2 = 4046.8564224;
+// skill rows from before the analysis view (v1) don't name the perimeters
+const canScore = r => r.length > 5 && r[5] != null;
+const scoreRows = () => scoredRows().filter(canScore);
+// the horizon of the analysis on the map, or null
+const scoreShownH = () => (state.scoreOn && state.scoreRow ? state.scoreRow[0] : null);
+
+function pickScoreRow() {
+  // the picked horizon, else the nearest one scored (the earlier on a tie)
+  const rows = scoreRows(), h = state.scoreH;
+  if (!rows.length) return null;
+  if (h == null) return rows[0];
+  return rows.reduce((a, b) => (Math.abs(b[0] - h) < Math.abs(a[0] - h) ? b : a));
+}
+
+function showScore(h) {
+  // the analysis at horizon h (else the one last picked); the forecast it replaces on the
+  // map is hidden, and comes back when the analysis is taken off
+  if (h != null) state.scoreH = h;
+  if (!state.scoreOn) {
+    state.scoreFcWasShown = layerShown.run;
+    state.scoreOn = true;
+    if (layerShown.run) markShown("run", false);
+  }
+  refreshWms();
+}
+
+function leaveScore() {
+  if (!state.scoreOn) return;
+  state.scoreOn = false;
+  if (state.scoreFcWasShown) markShown("run", true);
+  refreshWms();
+}
+
+function resetScore() {
+  // a fire picked (or none): the analysis goes, and the forecast comes back if it hid it
+  if (state.scoreOn && state.scoreFcWasShown) markShown("run", true);
+  state.scoreOn = false;
+  state.scoreRow = null;
+  scorePerims = scoreHot = null;
+  document.getElementById("scoreKey").hidden = true;
+}
+
+const scorePerimCache = new Map();   // "slug/ms" -> promise of the snapshot's GeoJSON (or null), the 24 most recent
+function loadScorePerim(f, ms) {
+  // a snapshot as analyze.py read it: our archive copy, else Cornea's
+  const key = `${f.slug}/${ms}`;
+  let p = scorePerimCache.get(key);
+  if (p) return p;
+  const p0 = state.perimIndex.find(x => x.ems === String(ms));
+  p = loadLocalOrBucket(`perimeter_archive/${f.slug}/${ms}.geojson`)
+    .catch(() => (p0 ? perimGj.get(p0.path) || getJson(CORNEA + p0.path) : null))
+    .catch(() => null);
+  scorePerimCache.set(key, p);
+  p.then(gj => { if (!gj && scorePerimCache.get(key) === p) scorePerimCache.delete(key); });
+  while (scorePerimCache.size > 24) scorePerimCache.delete(scorePerimCache.keys().next().value);
+  return p;
+}
+
+function polygonsOf(g) {
+  if (!g) return [];
+  if (g.type === "Polygon") return [g.coordinates];
+  if (g.type === "MultiPolygon") return g.coordinates;
+  if (g.type === "GeometryCollection") return g.geometries.flatMap(polygonsOf);
+  return [];
+}
+
+const maskCache = new Map();    // "raster key|ms" -> mask, the 4 most recent
+const scoreCache = new Map();   // "raster key|horizon|baseline|scored" -> scoreGrid result, the 3 most recent
+
+function perimMask(geo, key, ms, gj) {
+  // the snapshot on the forecast's own UTM grid, as analyze.py rasterizes it: 1 for a
+  // cell inside (a canvas fill is the rasterization, as in the report)
+  const ck = `${key}|${ms}`;
+  if (maskCache.has(ck)) return maskCache.get(ck);
+  const { width: W, height: Ht, xmin, ymax, pixelWidth: pw, pixelHeight: ph } = geo;
+  const utm = utmOf(geo.projection);
+  const canvas = document.createElement("canvas");
+  canvas.width = W; canvas.height = Ht;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.fillStyle = "#fff";
+  for (const poly of geometriesOf(gj).flatMap(polygonsOf)) {
+    const path = new Path2D();
+    for (const ring of poly) {
+      ring.forEach((pt, i) => {
+        const [X, Y] = utm.forward([pt[0], pt[1]]);
+        const x = (X - xmin) / pw, y = (ymax - Y) / ph;
+        i ? path.lineTo(x, y) : path.moveTo(x, y);
+      });
+      path.closePath();
+    }
+    ctx.fill(path, "evenodd");   // a polygon's holes cut out; separate polygons add up
+  }
+  const a = ctx.getImageData(0, 0, W, Ht).data, mask = new Uint8Array(W * Ht);
+  for (let i = 0; i < mask.length; i++) mask[i] = a[4 * i + 3] > 127 ? 1 : 0;
+  maskCache.set(ck, mask);
+  while (maskCache.size > 4) maskCache.delete(maskCache.keys().next().value);
+  return mask;
+}
+
+function scoreGrid(geo, key, row, baseGj, actGj) {
+  // each cell's class on the forecast's grid (rows of classes, and each class's acres),
+  // and on the map's canvas grid (see mercGrid), painted once: the colors are fixed
+  const ck = [key, row[0], row[4], row[5]].join("|");
+  if (scoreCache.has(ck)) return scoreCache.get(ck);
+  const { width: W, height: Ht } = geo, src = geo.values[0], H = row[0];
+  const base = baseGj ? perimMask(geo, key, row[4], baseGj) : null, act = perimMask(geo, key, row[5], actGj);
+  const counts = [0, 0, 0, 0, 0], values = [];
+  for (let r = 0, o = 0; r < Ht; r++) {
+    const s = src[r], out = new Uint8Array(W);
+    for (let c = 0; c < W; c++, o++) {
+      const v = s[c], a = act[o];
+      const k = base && base[o] ? 1 : v > 0 && v <= H ? (a ? 2 : 3) : a ? 4 : 0;
+      out[c] = k;
+      counts[k]++;
+    }
+    values.push(out);
+  }
+  const grid = mercGrid({ projection: geo.projection, xmin: geo.xmin, ymax: geo.ymax, pixelWidth: geo.pixelWidth,
+                          pixelHeight: geo.pixelHeight, width: W, height: Ht, values: [values] }, k => k > 0);
+  const rgb = SCORE_CLASSES.map(c => c && hexRgb(Palette.SCORE[c[0]]));
+  const d = grid.img.data;
+  for (let o = 0, q = 0; o < grid.idx.length; o++, q += 4) {
+    const i = grid.idx[o], k = i < 0 ? 0 : values[(i / W) | 0][i % W];
+    if (!k) continue;
+    const c = rgb[k];
+    d[q] = c[0]; d[q + 1] = c[1]; d[q + 2] = c[2]; d[q + 3] = 255;
+  }
+  grid.ctx.putImageData(grid.img, 0, 0);
+  grid.img = null;   // never repainted
+  const res = { grid, geo, cls: values, acres: counts.map(n => n * geo.pixelWidth * geo.pixelHeight / ACRE_M2) };
+  scoreCache.set(ck, res);
+  while (scoreCache.size > 3) scoreCache.delete(scoreCache.keys().next().value);
+  return res;
+}
+
+function scoreInside(sc) {
+  // (lon, lat) -> whether the forecast takes the spot in: predicted growth, a hit or a
+  // false alarm (as the report counts a detection "inside prediction")
+  const { geo, cls } = sc, utm = utmOf(geo.projection);
+  return (lon, lat) => {
+    const [X, Y] = utm.forward([lon, lat]);
+    const r = Math.floor((geo.ymax - Y) / geo.pixelHeight), c = Math.floor((X - geo.xmin) / geo.pixelWidth);
+    if (r < 0 || r >= geo.height || c < 0 || c >= geo.width) return false;
+    return cls[r][c] === 2 || cls[r][c] === 3;
+  };
+}
+
+function scoreKeyHtml(row, sc, reason = "") {
+  // the analysis key, under the metrics table (whose ringed column has its scores): the
+  // horizon and its window, the classes and their acres (… while loading), and the
+  // perimeter it was scored against
+  const back = '<button type="button" class="sk-x" data-act="leave" title="Close the analysis">&times; Close</button>';
+  if (!row) return `<div class="score-key"><div class="sk-head"><span><b>Analysis</b></span>${back}</div>` +
+    `<div class="warn">${reason}</div></div>`;
+  const H = row[0], end = runDate(document.getElementById("selRun").value).getTime() + H * HOUR;
+  // (six figures and up shortened, so a megafire's four still fit two to a line)
+  const fmtAc = x => (x >= 1e6 ? `${(x / 1e6).toFixed(1)}M` : x >= 1e5 ? `${Math.round(x / 1e3)}k`
+    : Math.round(x).toLocaleString("en-US")) + " ac";
+  const cls = [2, 3, 4, 1].map(k => {
+    const [key, name, what] = SCORE_CLASSES[k];
+    const v = !sc ? "…" : k === 1 && row[4] == null ? "none" : fmtAc(sc.acres[k]);
+    return `<span title="${name}: ${what}"><i style="background:${Palette.SCORE[key]}"></i>${name}<b>${v}</b></span>`;
+  }).join("");
+  const off = row[6];
+  const perim = typeof off === "number"
+    ? `Scored against the perimeter ${row[7] === 1 ? "mapped" : "last edited"} <b>${fmtShortDT(end + off * HOUR)}</b>, ` +
+      `${Math.abs(off).toFixed(1)}h ${off < 0 ? "before" : "after"} the window end` : "";
+  return `<div class="score-key"><div class="sk-head"><span><b>Analysis</b> · ${hLab(H)} after the run, to <b>${fmtShortDT(end)}</b></span>${back}</div>` +
+    `<div class="sk-grid">${cls}</div>` + (perim ? `<div class="note sk-foot">${perim}</div>` : "") + "</div>";
+}
+
+async function renderScore(f, run, pct, token) {
+  const row = state.scoreRow, key = document.getElementById("scoreKey");
+  key.hidden = false;
+  if (!row) {
+    // nothing scored here: the perimeters and playhead stay put (scrubbing runs doesn't
+    // jump them around), and the hotspots are drawn as ever
+    if (state.hotSpan) renderHotspots();
+    const doc = state.skill.get(f.slug);
+    key.innerHTML = scoreKeyHtml(null, null, !doc ? "No scored forecasts for this fire yet."
+      : scoredRows().length ? "This fire's metrics were published before the analysis view: it shows once they're republished."
+      : "This run isn't scored at this percentile: it needs at least 10 acres of growth and a perimeter mapped (or last edited) within 3h of a horizon.");
+    return;
+  }
+  syncScorePerims(row);
+  syncScorePlayhead();
+  key.innerHTML = scoreKeyHtml(row, null);
+  // the same time-of-arrival raster as the forecast layer draws (a newest run not archived
+  // yet comes from Pyrecast), and the two snapshots the pipeline scored it with
+  const live = f.live[run] === true ? relayToa(f.slug, run, pct) : null, tif = `forecast_archive/${f.slug}/${run}/${pct}.tif`;
+  const [geo, base, act] = await Promise.all([
+    loadGeoraster(tif, live, !!live && !f.pcts[run].has(pct)),
+    row[4] != null ? loadScorePerim(f, row[4]) : null, loadScorePerim(f, row[5])]);
+  if (token !== state.wmsSeq) return;
+  if (!geo || !act || (row[4] != null && !base)) {
+    key.innerHTML = scoreKeyHtml(null, null, !geo ? missingNote(f, run, pct, "time of arrival", [...f.pcts[run]].sort(byNumber))
+      : "Couldn't load the perimeters this run was scored against — try reloading the page.");
+    return;
+  }
+  const sc = scoreGrid(geo, tif, row, base, act);
+  state.fc = { kind: "score", grid: sc.grid, row, sc, inside: scoreInside(sc) };
+  showCanvas("fc", sc.grid, "iso", forecastOpacity());
+  key.innerHTML = scoreKeyHtml(row, sc);
+  if (state.hotSpan) renderHotspots();   // the window's detections, ringed inside or out
+}
+
+// The hotspot playhead moves to the window's end, where the window's detections are drawn
+// as the report draws them, ringed by whether the forecast took them in (see
+// renderHotspots); moved off it, the hotspots are as ever. Leaving the view puts the
+// playhead back, unless it was moved meanwhile.
+let scoreHot = null;   // {prev, set}: the playhead slider's value before, and as the view set it
+
+function scoreWindow() {
+  // {t0, t1, h}: the run and window end of the hits & misses on the map, or null
+  if (scoreShownH() == null) return null;
+  const t0 = runDate(document.getElementById("selRun").value).getTime(), h = state.scoreRow[0];
+  return { t0, t1: t0 + h * HOUR, h };
+}
+
+function syncScorePlayhead() {
+  const w = scoreWindow(), span = state.hotSpan, el = document.getElementById("hotTime");
+  if (!w || !span) return;
+  const v = Math.min(+el.max, Math.max(0, Math.round((w.t1 - span.start) / HOUR)));
+  if (!scoreHot) scoreHot = { prev: +el.value, set: null };
+  el.value = v;
+  scoreHot.set = v;
+  renderHotspots();
+}
+
+function releaseScorePlayhead() {
+  const sh = scoreHot, el = document.getElementById("hotTime");
+  scoreHot = null;
+  if (!sh || sh.set == null) return;
+  if (+el.value === sh.set) el.value = sh.prev;
+  if (state.hotSpan) renderHotspots();
+}
+
+// the window whose detections are ringed: the view's, while the playhead is at its end
+const scoreRingWindow = () => (scoreHot && scoreHot.set != null &&
+  +document.getElementById("hotTime").value === scoreHot.set ? scoreWindow() : null);
+
+function renderScoreHotspots(H, w) {
+  // the window's detections (run, run + horizon], white and ringed green where the forecast
+  // took them in, dark red where it didn't (gray until the forecast is drawn); no burn
+  // scar: the already-burned area shows what burned before the run
+  const inside = state.fc && state.fc.kind === "score" ? state.fc.inside : null;
+  const features = [];
+  let n = 0, nIn = 0, pending = false;
+  for (let d = dayOf(w.t0); d <= dayOf(w.t1); d++) {
+    if (!H.covered.has(d)) pending = true;
+    for (const r of H.days.get(d) || []) {
+      if (r.t <= w.t0 || r.t > w.t1) continue;
+      const cap = inside ? inside(r.lon, r.lat) : null;
+      n++;
+      if (cap) nIn++;
+      r.geometry = r.geometry || { type: "Point", coordinates: [r.lon, r.lat] };
+      features.push({ type: "Feature", geometry: r.geometry, properties: {
+        ring: cap === null ? "#806c74" : cap ? "#0a5c36" : "#7a1010", cap: cap === null ? -1 : +cap, t: r.t / HOUR, id: r.id } });
+    }
+  }
+  map.getSource("hot").setData({ type: "FeatureCollection", features });
+  scarUpdate(hotFlat(H), 0, 0, Palette.get().scar);
+  const num = x => x.toLocaleString("en-US");
+  setHotLabel(null, pending ? "loading detections…" : `${num(n)} detections in the ${hLab(w.h)} window` +
+    (inside ? `, ${num(nIn)} inside the forecast (green rings)` : "") + (H.capped ? " (some missing: a day exceeded the API cap)" : ""),
+    pending ? "none" : H.capped ? "warn" : "");
+  renderHotLane();
+  if (pending) scheduleHotCoverage();
+}
+
+// The perimeters a scored view was scored with take over the perimeter picker while it's
+// on: its baseline (gray dashed, as an older snapshot) and the scored one (the perimeter
+// color), so the timeline's perimeter lane points at it too. Leaving the view puts back
+// what was picked before, unless the picks were changed meanwhile.
+let scorePerims = null;   // {prev, set}: Sets of the snapshots (ems) picked before, and by the view
+
+const pickedPerims = () => new Set([...document.querySelectorAll("#perimlist input:checked")].map(i => i.dataset.ems));
+
+function pickPerims(want) {
+  const f = state.fires.find(x => x.slug === state.sel);
+  for (const box of document.querySelectorAll("#perimlist input")) {
+    const on = want.has(box.dataset.ems);
+    if (box.checked === on) continue;
+    box.checked = on;
+    togglePerim(f, state.perimIndex.find(p => p.ems === box.dataset.ems), on);
+  }
+  perimSummary();
+}
+
+function syncScorePerims(row) {
+  if (!state.perimIndex.length) return;   // still loading: loadPerims picks them
+  const want = new Set([row[4], row[5]].filter(x => x != null).map(String));
+  if (!scorePerims) scorePerims = { prev: pickedPerims(), set: null };
+  showLayer("perimeter");
+  pickPerims(want);
+  scorePerims.set = want;
+  renderHotMarks();
+}
+
+function releaseScorePerims() {
+  const sp = scorePerims;
+  scorePerims = null;
+  if (!sp || !sp.set) return;
+  const now = pickedPerims();
+  if (now.size === sp.set.size && [...now].every(e => sp.set.has(e))) pickPerims(sp.prev);
 }
 
 // ---------------------------------------------------------------- perimeters
@@ -1886,7 +2368,9 @@ async function loadPerims(f, seq) {
     el.appendChild(lab);
   }
   perimSummary();
-  await togglePerim(f, state.perimIndex[n - 1], true);
+  // an analysis already on picks the perimeters it was scored with, else the current one
+  if (state.scoreRow && state.scoreOn) syncScorePerims(state.scoreRow);
+  else await togglePerim(f, state.perimIndex[n - 1], true);
 }
 
 const fmtPerim = p => fmtDT(Date.parse(p.date));
@@ -2037,6 +2521,8 @@ function layoutHotTimeline(span) {
   labelPlayhead();
   layoutTimelineAxis();
   renderHotMarks();
+  // a new axis under the hits & misses view: its playhead goes to the window's end again
+  if (keep === null && scoreWindow()) { scoreHot = null; syncScorePlayhead(); }
 }
 
 function labelPlayhead() {
@@ -2151,11 +2637,17 @@ function laneActive(kind, items) {
   // (items are rebuilt on every render, so match the dragged one by what it points at)
   const pv = state.lanePreview;
   if (pv && pv.kind === kind) {
-    return items.find(c => (kind === "run" ? c.run === pv.item.run : c.p.ems === pv.item.p.ems)) || null;
+    return items.find(c => (kind === "run" ? c.run === pv.item.run : kind === "score" ? c.h === pv.item.h
+      : c.p.ems === pv.item.p.ems)) || null;
+  }
+  if (kind === "score") {
+    const h = scoreShownH();
+    return h == null ? null : items.find(c => c.h === h) || null;
   }
   if (kind === "run") {
+    // under an analysis (the forecast itself hidden), the run it's of
     const run = document.getElementById("selRun").value;
-    return forecastVar() ? items.find(c => c.run === run) : null;
+    return forecastVar() || state.scoreOn ? items.find(c => c.run === run) : null;
   }
   if (!layerShown.perimeter) return null;
   const shown = new Set([...document.querySelectorAll("#perimlist input:checked")].map(i => i.dataset.ems));
@@ -2191,16 +2683,20 @@ function offAxisText(t) {
 }
 
 function renderHotMarks() {
-  // the forecast-run and perimeter lanes: every run / snapshot a light tick, the one on
-  // the map full color and lane-tall, and any off the axis a ▸ (◂) past that end of the
-  // lane, never a tick pinned to the end (that would misdate it). Under the run ticks,
-  // the shown forecast's arrival bands or forecast hour. The lane labels name what the
-  // map shows
+  // the forecast-run, scored-horizon and perimeter lanes: every run / horizon / snapshot a
+  // light tick, the one on the map full color and lane-tall, and any off the axis a ▸ (◂)
+  // past that end of the lane, never a tick pinned to the end (that would misdate it).
+  // Under the run ticks, the shown forecast's arrival bands, forecast hour or scored
+  // window. The lane labels name what the map shows
   const span = state.hotSpan, pal = Palette.get();
   document.getElementById("tlBlock").style.setProperty("--contained", pal.contained);
   arrival = null;
+  // an analysis on: the runs with nothing scored at this percentile fade back
+  const doc = state.scoreOn && state.sel && state.skill.get(state.sel), pct = document.getElementById("selPct").value;
+  const unscored = c => !(doc && doc.runs && doc.runs[c.run] && (doc.runs[c.run][pct] || []).some(r => Array.isArray(r) && canScore(r)));
   for (const lane of document.querySelectorAll(".lane[data-kind]")) {
-    const kind = lane.dataset.kind, color = kind === "run" ? RUN_PIN : pal.perimeter;
+    // (an Analysis lane takes its model's color)
+    const kind = lane.dataset.kind, color = kind === "perimeter" ? pal.perimeter : RUN_PIN;
     lane.style.setProperty("--c", color);
     for (const el of document.querySelectorAll(`.tl-lab[data-kind="${kind}"]`)) el.style.setProperty("--c", color);
     lane.innerHTML = "";
@@ -2209,24 +2705,31 @@ function renderHotMarks() {
     const at = c => `data-t="${c.t}" style="left:${(100 * pinFrac(c.t)).toFixed(3)}%"`;
     const ends = new Set();
     let html = kind === "run" ? '<span class="arr"></span>' : "";
+    // the analysis on the map: its window, the run to the horizon, as a band
+    if (kind === "score" && act && !ao) {
+      const x0 = pinFrac(runDate(document.getElementById("selRun").value).getTime()), x1 = pinFrac(act.t);
+      html += `<b class="win" style="left:${(100 * x0).toFixed(3)}%;width:${(100 * (x1 - x0)).toFixed(3)}%"></b>`;
+    }
     for (const c of items) {
       const o = offAxis(c.t);
       if (o) ends.add(o);
-      else if (c !== act) html += `<i ${at(c)}></i>`;
+      else if (c !== act) html += `<i ${at(c)}${doc && kind === "run" && unscored(c) ? ' class="un"' : ""}></i>`;
     }
     for (const o of ends) html += `<i class="off ${o > 0 ? "hi" : "lo"}${o === ao ? " act" : ""}"></i>`;
     // the active mark goes last so no tick covers it
     if (act && !ao) html += `<i class="on" ${at(act)}></i>`;
     lane.innerHTML = html;
     if (kind === "run" && act && !ao) renderArrivalBar(lane.querySelector(".arr"), act);
-    const what = kind === "run" ? "Forecast run" : "Perimeter";
+    if (kind === "score") { labelScoreLane(items, act); continue; }
+    const what = kind === "run" ? "Pyrecast run" : "Perimeter";
     if (!act) {
       if (!layerShown[kind]) setLaneLabel(kind, "hidden", `${kind === "run" ? "The forecast layer is" : "Perimeters are"} hidden`, "none");
       else setLaneLabel(kind, "none shown", `No ${what.toLowerCase()} on the map`, "none");
       continue;
     }
     setLaneLabel(kind, fmtShortDT(act.t) + (ao ? ` <span class="off">${ao > 0 ? "▸" : "◂"}</span>` : ""),
-                 `${what} on the map: ${fmtDT(act.t)}` + (ao ? ` (${offAxisText(act.t)})` : ""));
+                 (kind === "run" && !forecastVar() ? `${what} ${fmtDT(act.t)}: its analysis is on the map, in its place`
+                   : `${what} on the map: ${fmtDT(act.t)}`) + (ao ? ` (${offAxisText(act.t)})` : ""));
   }
 }
 
@@ -2360,11 +2863,54 @@ function binText(c) {
   return c.stepH === 24 ? `${n} on ${fmtDate(c.t0)}` : `${n} in the week of ${fmtDate(c.t0)}`;
 }
 
+function labelScoreLane(items, act) {
+  // the Analysis lane's value (the horizon on the map and its scores), and its eye, which
+  // puts the selected run's analysis on (at the horizon last picked) or takes it off
+  const on = state.scoreOn, run = document.getElementById("selRun").value;
+  for (const lab of document.querySelectorAll('.tl-lab[data-kind="score"]')) {
+    lab.classList.toggle("hid", !on);
+    const eye = lab.querySelector(".eye");
+    if (!eye) continue;
+    eye.setAttribute("aria-pressed", String(on));
+    eye.disabled = !items.length && !on;
+    eye.title = on ? "Hide the analysis" : "Show this run's analysis: its hits and misses against the perimeter";
+  }
+  if (!state.sel || !run) { setLaneLabel("score", "", ""); return; }
+  if (!items.length) {
+    const unpublished = scoredRows().length > 0;
+    setLaneLabel("score", unpublished ? "not published" : "not scored", unpublished
+      ? "This fire's metrics were published before the analysis view: it shows once they're republished" : NOT_SCORED, "none");
+    return;
+  }
+  if (!act) {
+    setLaneLabel("score", "off", `Scored at ${items.map(c => hLab(c.h)).join(", ")} · press a tick or the eye to map one`, "none");
+    return;
+  }
+  const r = act.row, pc = v => (typeof v === "number" ? Math.round(100 * v) : "—");
+  setLaneLabel("score", `${hLab(act.h)} <span class="sc">P ${pc(r[1])} · R ${pc(r[2])}</span>`,
+               `Analysis on the map: ${hLab(act.h)} after the run, to ${fmtDT(act.t)} · precision ${pc(r[1])}% · recall ${pc(r[2])}%`);
+}
+
+function renderScoreGlyph() {
+  // the Analysis lane's glyph: the four classes
+  const fills = ["hit", "falseAlarm", "miss", "base"].map(k => Palette.SCORE[k]);
+  for (const svg of document.querySelectorAll('.tl-lab[data-kind="score"] .glyph')) {
+    svg.querySelectorAll("rect").forEach((r, i) => r.setAttribute("fill", fills[i]));
+  }
+}
+
 function pinTargets(kind) {
-  // what a lane offers: every perimeter snapshot, or every run with something to draw
+  // what a lane offers: every perimeter snapshot, every run with something to draw, or
+  // the shown run's scored horizons, each at its window's end
   const f = state.fires.find(x => x.slug === state.sel);
   if (!f) return [];
   if (kind === "perimeter") return state.perimIndex.map(p => ({ t: Date.parse(p.date), p }));
+  if (kind === "score") {
+    const run = document.getElementById("selRun").value;
+    if (!run) return [];
+    const t0 = runDate(run).getTime();
+    return scoreRows().map(r => ({ t: t0 + r[0] * HOUR, h: r[0], row: r }));
+  }
   return f.runs.filter(r => f.pcts[r].size || f.live[r] !== false).map(r => ({ t: runDate(r).getTime(), run: r }));
 }
 
@@ -2402,6 +2948,7 @@ function wireEyes() {
     eye.setAttribute("aria-label", `Show ${LAYER_NOUN[kind]}`);
     eye.addEventListener("click", () => {
       markShown(kind, !layerShown[kind]);
+      if (kind === "run" && layerShown.run) state.scoreOn = false;   // never both on the map
       if (kind === "run") refreshWms();
       else if (kind === "perimeter") applyPerimVisibility();
       else refreshHotspots();
@@ -2409,6 +2956,15 @@ function wireEyes() {
     lab.prepend(eye);
   }
   for (const kind of Object.keys(layerShown)) markShown(kind, layerShown[kind]);
+  for (const lab of document.querySelectorAll('.tl-lab[data-kind="score"]')) {
+    const eye = document.createElement("button");
+    eye.type = "button";
+    eye.className = "eye";
+    eye.innerHTML = EYE_SVG;
+    eye.setAttribute("aria-label", "Show the analysis");
+    eye.addEventListener("click", () => { if (scoreShownH() != null) leaveScore(); else showScore(); });
+    lab.prepend(eye);
+  }
 }
 
 function showLayer(kind) {
@@ -2421,8 +2977,10 @@ function showLayer(kind) {
 }
 
 function applyPin(kind, target) {
+  if (kind === "score") { if (scoreShownH() !== target.h) showScore(target.h); return; }
   if (kind === "run") {
-    const sel = document.getElementById("selRun"), shown = showLayer("run");
+    // (under an analysis the run switches and the analysis follows it)
+    const sel = document.getElementById("selRun"), shown = !state.scoreOn && showLayer("run");
     if (sel.value !== target.run || shown) { sel.value = target.run; refreshWms(); }
     return;
   }
@@ -2470,7 +3028,7 @@ function laneHover(lane, clientX, picked) {
   if (!c) {
     const a = kind === "run" ? arrival : null;
     const over = a && x >= pinFrac(a.t) * r.width && x <= pinFrac(a.t + a.until * HOUR) * r.width + 2;
-    showTip(!over ? `Press or drag to show a ${kind === "run" ? "forecast run" : "perimeter"}`
+    showTip(!over ? `Press or drag to show a ${kind === "run" ? "Pyrecast run" : kind === "score" ? "scored horizon" : "perimeter"}`
       : a.hour != null ? `Forecast hour +${a.hour}h, ${fmtDT(a.t + a.until * HOUR)}`
       : `This forecast's time of arrival, up to +${Math.round(a.until)}h`, tx, lane);
     return;
@@ -2478,7 +3036,13 @@ function laneHover(lane, clientX, picked) {
   const el = lane.querySelector(`i[data-t="${c.t}"]:not(.on)`);
   if (el) el.classList.add("hov");
   const act = laneActive(kind, items);
-  showTip(`${kind === "run" ? "Forecast run" : "Perimeter"} ${fmtDT(c.t)}` +
+  if (kind === "score") {
+    const pc = v => (typeof v === "number" ? `${Math.round(100 * v)}%` : "—");
+    showTip(`${hLab(c.h)} after the run, to ${fmtDT(c.t)} · precision ${pc(c.row[1])} · recall ${pc(c.row[2])}` +
+      (act && act.h === c.h ? " · on the map" : ""), tx, lane);
+    return;
+  }
+  showTip(`${kind === "run" ? "Pyrecast run" : "Perimeter"} ${fmtDT(c.t)}` +
     (offAxis(c.t) ? ` · ${offAxisText(c.t)}` : act && act.t === c.t ? " · on the map" : ""), tx, lane);
 }
 
@@ -2766,6 +3330,8 @@ function renderHotspots() {
   labelPlayhead();
   const H = state.hot;
   if (!H) return;
+  const w = scoreRingWindow();
+  if (w) { renderScoreHotspots(H, w); return; }
   // the detections in the 7 days behind the playhead, colored by their age at it
   const d0 = dayOf(p - HOT_LOOKBACK_H * HOUR), d1 = dayOf(p);
   const features = [];
@@ -3092,6 +3658,7 @@ new ResizeObserver(fitDock).observe(document.getElementById("tlDock"));
 document.querySelector(".brand-actions").prepend(Palette.gearButton());
 Palette.onChange(applyPalette);
 renderHotLegend();
+renderScoreGlyph();
 placeTimeline(remembered("cornea-timeline-place", "map"));
 init();
 </script>
