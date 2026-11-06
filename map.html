@@ -420,6 +420,10 @@
   .sk-grid i { flex: none; width: 10px; height: 10px; border-radius: 2px; }
   .sk-grid b { margin-left: auto; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
   .sk-foot b { color: var(--ink); font-weight: 600; }
+  .sk-dets { display: flex; align-items: center; gap: 4px; font-size: var(--fs-meta); line-height: var(--lh-meta); }
+  .sk-dets > span:last-child { margin-left: 3px; }
+  .sk-dets b { color: var(--ink); font-weight: 600; }
+  .sk-ring { flex: none; width: 9px; height: 9px; border: 1.5px solid; border-radius: 50%; background: #fff; }
   /* the timeline's Analysis lane, tucked under its model's: a tree mark under the model's
      swatch, then the four-class glyph and its name; a tick at each scored horizon's window
      end, and the window shown (run to horizon) as a band */
@@ -642,6 +646,7 @@ const map = new maplibregl.Map({
       hot: { type: "geojson", data: EMPTY },
       fires: { type: "geojson", data: EMPTY },
       ruler: { type: "geojson", data: EMPTY },
+      scorehot: { type: "geojson", data: EMPTY },
     },
     sky: { "sky-color": "#c4d9e8", "horizon-color": "#f3eee6", "fog-color": "#f3eee6",
            "sky-horizon-blend": 0.6, "horizon-fog-blend": 0.5, "fog-ground-blend": 0.85, "atmosphere-blend": 0 },
@@ -665,15 +670,15 @@ const map = new maplibregl.Map({
       { id: "perim-cur", type: "line", source: "perims", filter: ["get", "cur"],
         paint: { "line-color": OLD_PERIM, "line-width": 2.5 } },
       // newest detections on top
-      // (the hits & misses view draws its window's detections as the report does: white,
-      // ringed green inside the forecast, dark red outside; see renderHotspots)
       { id: "hot", type: "circle", source: "hot", layout: { "circle-sort-key": ["get", "t"] },
-        paint: { "circle-radius": ["case", ["has", "ring"], 3.5, 3],
-                 "circle-color": ["case", ["has", "ring"], "#ffffff", ["get", "c"]],
-                 "circle-opacity": ["case", ["has", "ring"], 0.9, 0.55],
-                 "circle-stroke-width": ["case", ["has", "ring"], 1.5, 0.5],
-                 "circle-stroke-color": ["case", ["has", "ring"], ["get", "ring"], ["get", "c"]],
-                 "circle-stroke-opacity": 0.9 } },
+        paint: { "circle-radius": 3, "circle-color": ["get", "c"], "circle-opacity": 0.55,
+                 "circle-stroke-width": 0.5, "circle-stroke-color": ["get", "c"], "circle-stroke-opacity": 0.9 } },
+      // a run's analysis: the satellite detections in its window, as the report draws them,
+      // white and ringed green inside the forecast, dark red outside. Part of the analysis,
+      // not the hotspot layer: shown with it whatever the hotspots' eye says
+      { id: "score-hot", type: "circle", source: "scorehot",
+        paint: { "circle-radius": 3.5, "circle-color": "#ffffff", "circle-opacity": 0.9, "circle-stroke-width": 1.5,
+                 "circle-stroke-color": ["case", ["==", ["get", "cap"], 1], "#0a5c36", "#7a1010"] } },
       { id: "fires", type: "circle", source: "fires",
         paint: { "circle-radius": 5, "circle-color": "#eb6834", "circle-opacity": 0.8,
                  "circle-stroke-width": 1.5, "circle-stroke-color": "#52514e" } },
@@ -890,8 +895,8 @@ const tip = new maplibregl.Popup({ closeButton: false, closeOnClick: false, clas
 function featureAt(point) {
   const pad = 3;
   const feats = map.queryRenderedFeatures([[point.x - pad, point.y - pad], [point.x + pad, point.y + pad]],
-    { layers: ["fires", "hot", "perim-fill"] });
-  for (const layer of ["fires", "hot", "perim-fill"]) {
+    { layers: ["fires", "score-hot", "hot", "perim-fill"] });
+  for (const layer of ["fires", "score-hot", "hot", "perim-fill"]) {
     const of = feats.filter(f => f.layer.id === layer);
     // the newest detection is the one drawn on top
     if (of.length) return layer === "hot" ? of.reduce((a, b) => (b.properties.t > a.properties.t ? b : a)) : of[0];
@@ -902,9 +907,12 @@ function tipText(feat) {
   const p = feat.properties;
   if (feat.layer.id === "fires") return p.name;
   if (feat.layer.id === "perim-fill") return p.tip;
+  if (feat.layer.id === "score-hot") {
+    return `${p.src || "?"} ${fmtDT(p.t)} · FRP ${p.frp ?? "?"} · conf ${p.conf ?? "?"} · ` +
+      `${p.cap === 1 ? "inside" : "outside"} the forecast`;
+  }
   const r = state.hot && state.hot.recs[p.id];
-  const cap = p.cap === 1 ? " · inside the forecast" : p.cap === 0 ? " · outside the forecast" : "";
-  return r ? `${r.src || "?"} ${fmtDT(r.t)} · FRP ${r.frp ?? "?"} · conf ${r.conf ?? "?"}${cap}` : "";
+  return r ? `${r.src || "?"} ${fmtDT(r.t)} · FRP ${r.frp ?? "?"} · conf ${r.conf ?? "?"}` : "";
 }
 map.on("mousemove", ev => {
   // measuring: no hover labels, and the ruler follows the pointer (see rulerMove)
@@ -1367,6 +1375,7 @@ function refreshWms() {
   dropCanvas("fc");
   dropCanvas("fclive");
   map.getSource("iso").setData(EMPTY);
+  map.getSource("scorehot").setData(EMPTY);
   state.fc = state.toaGrid = null;
   note.textContent = "";
   note.className = "note";
@@ -2159,9 +2168,10 @@ function scoreInside(sc) {
   };
 }
 
-function scoreKeyHtml(row, sc, reason = "") {
+function scoreKeyHtml(row, sc, reason = "", hs = null) {
   // the analysis key, under the metrics table (whose ringed column has its scores): the
-  // horizon and its window, the classes and their acres (… while loading), and the
+  // horizon and its window, the classes and their acres (… while loading), the window's
+  // satellite detections (hs: {n, nIn, capped} or {failed}; loading while null), and the
   // perimeter it was scored against
   const back = '<button type="button" class="sk-x" data-act="leave" title="Close the analysis">&times; Close</button>';
   if (!row) return `<div class="score-key"><div class="sk-head"><span><b>Analysis</b></span>${back}</div>` +
@@ -2179,17 +2189,66 @@ function scoreKeyHtml(row, sc, reason = "") {
   const perim = typeof off === "number"
     ? `Scored against the perimeter ${row[7] === 1 ? "mapped" : "last edited"} <b>${fmtShortDT(end + off * HOUR)}</b>, ` +
       `${Math.abs(off).toFixed(1)}h ${off < 0 ? "before" : "after"} the window end` : "";
+  const num = x => x.toLocaleString("en-US");
+  const dets = !sc ? "" : !hs ? "Loading the window's satellite detections…"
+    : hs.failed ? "Couldn't load the window's satellite detections."
+    : `<b>${num(hs.n)}</b> satellite detections in the window, <b>${num(hs.nIn)}</b> inside the forecast` +
+      (hs.capped ? " (some missing: a day exceeded the API cap)" : "");
+  const rings = sc && hs && !hs.failed ? '<span class="sk-ring" style="border-color:#0a5c36" title="inside the forecast"></span>' +
+    '<span class="sk-ring" style="border-color:#7a1010" title="outside the forecast"></span>' : "";
   return `<div class="score-key"><div class="sk-head"><span><b>Analysis</b> · ${hLab(H)} after the run, to <b>${fmtShortDT(end)}</b></span>${back}</div>` +
-    `<div class="sk-grid">${cls}</div>` + (perim ? `<div class="note sk-foot">${perim}</div>` : "") + "</div>";
+    `<div class="sk-grid">${cls}</div>` + (dets ? `<div class="sk-dets">${rings}<span>${dets}</span></div>` : "") +
+    (perim ? `<div class="note sk-foot">${perim}</div>` : "") + "</div>";
+}
+
+const windowHotCache = new Map();   // "slug|t0|t1" -> promise of {dets, capped} (or null), the 6 most recent
+function loadWindowDetections(f, w, box) {
+  // the satellite detections in an analysis's window (run, run + horizon], by their own
+  // query: the hotspot layer may be off, or loading other days. The API returns rows
+  // oldest-first from "since", capped, with no end date, so a capped reply carries on
+  // from its last (perhaps partial) day; the box is the scored perimeter's, 0.15° out,
+  // as the report's inspector asks for
+  const key = `${f.slug}|${w.t0}|${w.t1}`;
+  let p = windowHotCache.get(key);
+  if (p) return p;
+  p = (async () => {
+    const dets = [], seen = new Set(), bbox = `${box.s},${box.w},${box.n},${box.e}`;
+    let d = dayOf(w.t0), capped = false;
+    for (let guard = 0; guard < 60 && d <= dayOf(w.t1); guard++) {
+      const gj = await getJson(`${CORNEA}/hotspots?bbox=${bbox}&since=${new Date(d * DAY).toISOString().slice(0, 10)}&limit=${HOT_LIMIT}`);
+      const feats = gj.features || [];
+      let last = d;
+      for (const feat of feats) {
+        const pr = feat.properties || {}, c = feat.geometry && feat.geometry.coordinates;
+        const t = parseAcq(pr);
+        if (t === null || !c) continue;
+        last = Math.max(last, dayOf(t));
+        if (t <= w.t0 || t > w.t1) continue;
+        const k = `${pr.acq_date}|${pr.acq_time}|${c[0]}|${c[1]}|${pr.source}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        dets.push({ lon: c[0], lat: c[1], t, src: pr.source, frp: pr.frp, conf: pr.confidence });
+      }
+      if (feats.length < HOT_LIMIT) break;   // complete through today
+      if (last === d) { capped = true; d++; }   // one day alone over the cap: the rest of it is out of reach
+      else d = last;
+    }
+    return { dets, capped };
+  })().catch(() => null);
+  windowHotCache.set(key, p);
+  p.then(r => { if (!r && windowHotCache.get(key) === p) windowHotCache.delete(key); });
+  while (windowHotCache.size > 6) windowHotCache.delete(windowHotCache.keys().next().value);
+  return p;
 }
 
 async function renderScore(f, run, pct, token) {
   const row = state.scoreRow, key = document.getElementById("scoreKey");
   key.hidden = false;
   if (!row) {
-    // nothing scored here: the perimeters and playhead stay put (scrubbing runs doesn't
-    // jump them around), and the hotspots are drawn as ever
-    if (state.hotSpan) renderHotspots();
+    // nothing scored here: the perimeter picks and the playhead go back to what they were
+    if (scorePerims) releaseScorePerims();
+    if (scoreHot) releaseScorePlayhead();
+    renderHotMarks();
     const doc = state.skill.get(f.slug);
     key.innerHTML = scoreKeyHtml(null, null, !doc ? "No scored forecasts for this fire yet."
       : scoredRows().length ? "This fire's metrics were published before the analysis view: it shows once they're republished."
@@ -2211,17 +2270,30 @@ async function renderScore(f, run, pct, token) {
       : "Couldn't load the perimeters this run was scored against — try reloading the page.");
     return;
   }
+  // the window's detections, asked for while the grid is built
+  const w = scoreWindow(), [bw, bs, be, bn] = bboxOf(geometriesOf(act));
+  const detsP = loadWindowDetections(f, w, { s: bs - 0.15, w: bw - 0.15, n: bn + 0.15, e: be + 0.15 });
   const sc = scoreGrid(geo, tif, row, base, act);
-  state.fc = { kind: "score", grid: sc.grid, row, sc, inside: scoreInside(sc) };
+  const inside = scoreInside(sc);
+  state.fc = { kind: "score", grid: sc.grid, row, sc, inside };
   showCanvas("fc", sc.grid, "iso", forecastOpacity());
   key.innerHTML = scoreKeyHtml(row, sc);
-  if (state.hotSpan) renderHotspots();   // the window's detections, ringed inside or out
+  const got = await detsP;
+  if (token !== state.wmsSeq) return;
+  let nIn = 0;
+  const features = (got ? got.dets : []).map(r => {
+    const cap = inside(r.lon, r.lat) ? 1 : 0;
+    nIn += cap;
+    return { type: "Feature", geometry: { type: "Point", coordinates: [r.lon, r.lat] },
+             properties: { cap, t: r.t, src: r.src, frp: r.frp, conf: r.conf } };
+  });
+  map.getSource("scorehot").setData({ type: "FeatureCollection", features });
+  key.innerHTML = scoreKeyHtml(row, sc, "", got ? { n: features.length, nIn, capped: got.capped } : { failed: true });
 }
 
-// The hotspot playhead moves to the window's end, where the window's detections are drawn
-// as the report draws them, ringed by whether the forecast took them in (see
-// renderHotspots); moved off it, the hotspots are as ever. Leaving the view puts the
-// playhead back, unless it was moved meanwhile.
+// The hotspot playhead moves to the window's end, so the hotspot layer, when it's on, shows
+// the fire as of then (the analysis draws the window's own detections either way).
+// Taking the analysis off puts the playhead back, unless it was moved meanwhile.
 let scoreHot = null;   // {prev, set}: the playhead slider's value before, and as the view set it
 
 function scoreWindow() {
@@ -2249,44 +2321,11 @@ function releaseScorePlayhead() {
   if (state.hotSpan) renderHotspots();
 }
 
-// the window whose detections are ringed: the view's, while the playhead is at its end
-const scoreRingWindow = () => (scoreHot && scoreHot.set != null &&
-  +document.getElementById("hotTime").value === scoreHot.set ? scoreWindow() : null);
-
-function renderScoreHotspots(H, w) {
-  // the window's detections (run, run + horizon], white and ringed green where the forecast
-  // took them in, dark red where it didn't (gray until the forecast is drawn); no burn
-  // scar: the already-burned area shows what burned before the run
-  const inside = state.fc && state.fc.kind === "score" ? state.fc.inside : null;
-  const features = [];
-  let n = 0, nIn = 0, pending = false;
-  for (let d = dayOf(w.t0); d <= dayOf(w.t1); d++) {
-    if (!H.covered.has(d)) pending = true;
-    for (const r of H.days.get(d) || []) {
-      if (r.t <= w.t0 || r.t > w.t1) continue;
-      const cap = inside ? inside(r.lon, r.lat) : null;
-      n++;
-      if (cap) nIn++;
-      r.geometry = r.geometry || { type: "Point", coordinates: [r.lon, r.lat] };
-      features.push({ type: "Feature", geometry: r.geometry, properties: {
-        ring: cap === null ? "#806c74" : cap ? "#0a5c36" : "#7a1010", cap: cap === null ? -1 : +cap, t: r.t / HOUR, id: r.id } });
-    }
-  }
-  map.getSource("hot").setData({ type: "FeatureCollection", features });
-  scarUpdate(hotFlat(H), 0, 0, Palette.get().scar);
-  const num = x => x.toLocaleString("en-US");
-  setHotLabel(null, pending ? "loading detections…" : `${num(n)} detections in the ${hLab(w.h)} window` +
-    (inside ? `, ${num(nIn)} inside the forecast (green rings)` : "") + (H.capped ? " (some missing: a day exceeded the API cap)" : ""),
-    pending ? "none" : H.capped ? "warn" : "");
-  renderHotLane();
-  if (pending) scheduleHotCoverage();
-}
-
-// The perimeters a scored view was scored with take over the perimeter picker while it's
-// on: its baseline (gray dashed, as an older snapshot) and the scored one (the perimeter
-// color), so the timeline's perimeter lane points at it too. Leaving the view puts back
-// what was picked before, unless the picks were changed meanwhile.
-let scorePerims = null;   // {prev, set}: Sets of the snapshots (ems) picked before, and by the view
+// The perimeter an analysis was scored against takes over the perimeter picker while it's
+// on, alone (the perimeter at run time is the "burned before" area already), so the
+// timeline's perimeter lane points at it too. Taking the analysis off, or a run with
+// nothing scored, puts back what was picked before, unless the picks were changed meanwhile.
+let scorePerims = null;   // {prev, set}: Sets of the snapshots (ems) picked before, and by the analysis
 
 const pickedPerims = () => new Set([...document.querySelectorAll("#perimlist input:checked")].map(i => i.dataset.ems));
 
@@ -2303,7 +2342,7 @@ function pickPerims(want) {
 
 function syncScorePerims(row) {
   if (!state.perimIndex.length) return;   // still loading: loadPerims picks them
-  const want = new Set([row[4], row[5]].filter(x => x != null).map(String));
+  const want = new Set([String(row[5])]);
   if (!scorePerims) scorePerims = { prev: pickedPerims(), set: null };
   showLayer("perimeter");
   pickPerims(want);
@@ -3330,8 +3369,6 @@ function renderHotspots() {
   labelPlayhead();
   const H = state.hot;
   if (!H) return;
-  const w = scoreRingWindow();
-  if (w) { renderScoreHotspots(H, w); return; }
   // the detections in the 7 days behind the playhead, colored by their age at it
   const d0 = dayOf(p - HOT_LOOKBACK_H * HOUR), d1 = dayOf(p);
   const features = [];
