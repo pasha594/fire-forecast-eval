@@ -581,13 +581,14 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
       <ul>
         <li><b>Predicted:</b> where the forecast's time of arrival is within the horizon.</li>
         <li><b>Actual:</b> the NIFC perimeter mapped closest to run time + horizon (timed by its last edit when it has no reliable mapped time).</li>
-        <li><b>Growth only:</b> the latest perimeter mapped before the run is removed from both, so only new spread counts.</li>
+        <li><b>Growth only:</b> what had burned when the run began is removed from both, so only new spread counts: the latest perimeter mapped before the run, and where the forecast itself started burning (Pyrecast adds satellite detections to the perimeter).</li>
       </ul>
       <p><b>Precision</b> = overlap ÷ predicted growth<br><b>Recall</b> = overlap ÷ actual growth<br>
         <b>IoU</b> = overlap ÷ area either one covers</p>
       <p class="muted">A horizon is shown only when the fire grew at least 10 acres, a perimeter was
         mapped (or last edited) within 3h of it, and at most 10% of the growth fell outside the forecast's area —
         the metrics report's default filters.</p>
+      <p><a href="methodology/">A worked example →</a></p>
     </div>
     <div class="skill-box"><table class="skill" id="skillTable"></table>
       <p class="skill-empty" id="skillEmpty" hidden></p></div>
@@ -2009,15 +2010,18 @@ function renderSkill() {
 // Our scoring of a forecast run, not the model's own output: a run and percentile against
 // the perimeter at one horizon, as the metrics report's calculation inspector draws it,
 // where the forecast's time of arrival is within the horizon against the perimeter it was
-// scored on, both less the perimeter at run time, so only growth counts. The skill rows
-// name both perimeters (analyze.build_skill), and it's redrawn here from the same archive
-// copies analyze.py read. In the timeline its lane sits under its model's (each forecast
+// scored on, both less what had burned when the run began, so only growth counts: the
+// perimeter at run time and the forecast's own start, which Pyrecast seeds with satellite
+// detections beyond that perimeter (skill files v3 name it; analyze.RunStart). The skill
+// rows name both perimeters (analyze.build_skill), and it's redrawn here from the same
+// archive copies analyze.py read, and the start footprint it published beside the skill
+// file. In the timeline its lane sits under its model's (each forecast
 // model, Pyrecast now and FARSITE next, gets a lane and an Analysis lane under it); it's
 // switched on there or from a horizon in Forecast metrics, where its key goes. On the map
 // it takes the forecast's place: the two are never drawn over each other.
 const SCORE_CLASSES = [   // a grid cell's class: [palette key, name, what it means]
   null,
-  ["base", "Burned before", "inside the perimeter at run time: left out of both precision and recall"],
+  ["base", "Burned before", "burned when the run began (the perimeter at run time, and where the forecast started burning): left out of both precision and recall"],
   ["hit", "Hit", "predicted and burned: counts toward precision and recall"],
   ["falseAlarm", "False alarm", "predicted, didn't burn: hurts precision"],
   ["miss", "Miss", "burned, not predicted: hurts recall"],
@@ -2081,6 +2085,49 @@ function loadScorePerim(f, ms) {
   return p;
 }
 
+// a run's start footprint as analyze.py scored it ("pyrecast": the forecast's own start;
+// "hotspots": the satellite detections up to the run, standing in when that wasn't
+// archived), or null for a run scored against the perimeter alone (and every run in skill
+// files before v3, whose scores didn't take it in)
+function scoreStartBasis(f, run) {
+  const doc = state.skill.get(f.slug);
+  return (doc && doc.v >= 3 && doc.starts && doc.starts[run]) || null;
+}
+
+const startCache = new Map();   // "slug/run" -> promise of its start footprint georaster (or null), the 6 most recent
+function loadScoreStart(f, run) {
+  // published beside the skill file: skill/start/<slug>/<run>.tif, uint8 1 = burned at the start
+  const key = `${f.slug}/${run}`;
+  let p = startCache.get(key);
+  if (p) return p;
+  p = fetch(`${state.skillBase}/start/${encodeURIComponent(f.slug)}/${run}.tif`, { cache: "no-cache" })
+    .then(r => (r.ok ? r.arrayBuffer() : null)).then(buf => buf && parseGeoraster(buf)).catch(() => null);
+  startCache.set(key, p);
+  p.then(g => { if (!g && startCache.get(key) === p) startCache.delete(key); });
+  while (startCache.size > 6) startCache.delete(startCache.keys().next().value);
+  return p;
+}
+
+function startOnGrid(geo, sg) {
+  // the start footprint's cells on the forecast's grid (1 = burned at the start); analyze.py
+  // writes it on that grid, so this is a copy, by the nearest cell otherwise; null when it's
+  // in another projection
+  if (sg.projection !== geo.projection) return null;
+  const { width: W, height: Ht } = geo, v = sg.values[0], out = new Uint8Array(W * Ht);
+  const same = sg.width === W && sg.height === Ht && Math.abs(sg.xmin - geo.xmin) < 0.01 &&
+    Math.abs(sg.ymax - geo.ymax) < 0.01 && Math.abs(sg.pixelWidth - geo.pixelWidth) < 1e-6;
+  for (let r = 0, o = 0; r < Ht; r++) {
+    const rr = same ? r : Math.floor((sg.ymax - (geo.ymax - (r + 0.5) * geo.pixelHeight)) / sg.pixelHeight);
+    const row = rr >= 0 && rr < sg.height ? v[rr] : null;
+    for (let c = 0; c < W; c++, o++) {
+      if (!row) continue;
+      const cc = same ? c : Math.floor((geo.xmin + (c + 0.5) * geo.pixelWidth - sg.xmin) / sg.pixelWidth);
+      if (cc >= 0 && cc < sg.width && row[cc]) out[o] = 1;
+    }
+  }
+  return out;
+}
+
 function polygonsOf(g) {
   if (!g) return [];
   if (g.type === "Polygon") return [g.coordinates];
@@ -2122,19 +2169,23 @@ function perimMask(geo, key, ms, gj) {
   return mask;
 }
 
-function scoreGrid(geo, key, row, baseGj, actGj) {
+function scoreGrid(geo, key, row, baseGj, actGj, start = null, startBasis = null) {
   // each cell's class on the forecast's grid (rows of classes, and each class's acres),
-  // and on the map's canvas grid (see mercGrid), painted once: the colors are fixed
-  const ck = [key, row[0], row[4], row[5]].join("|");
+  // and on the map's canvas grid (see mercGrid), painted once: the colors are fixed.
+  // Burned before is the baseline perimeter and the start footprint (startOnGrid), if any;
+  // startAc is how much the footprint adds beyond the perimeter
+  const ck = [key, row[0], row[4], row[5], startBasis || ""].join("|");
   if (scoreCache.has(ck)) return scoreCache.get(ck);
   const { width: W, height: Ht } = geo, src = geo.values[0], H = row[0];
   const base = baseGj ? perimMask(geo, key, row[4], baseGj) : null, act = perimMask(geo, key, row[5], actGj);
   const counts = [0, 0, 0, 0, 0], values = [];
+  let added = 0;
   for (let r = 0, o = 0; r < Ht; r++) {
     const s = src[r], out = new Uint8Array(W);
     for (let c = 0; c < W; c++, o++) {
-      const v = s[c], a = act[o];
-      const k = base && base[o] ? 1 : v > 0 && v <= H ? (a ? 2 : 3) : a ? 4 : 0;
+      const v = s[c], a = act[o], b = base && base[o], st = start && start[o];
+      if (st && !b) added++;
+      const k = b || st ? 1 : v > 0 && v <= H ? (a ? 2 : 3) : a ? 4 : 0;
       out[c] = k;
       counts[k]++;
     }
@@ -2152,7 +2203,8 @@ function scoreGrid(geo, key, row, baseGj, actGj) {
   }
   grid.ctx.putImageData(grid.img, 0, 0);
   grid.img = null;   // never repainted
-  const res = { grid, geo, cls: values, acres: counts.map(n => n * geo.pixelWidth * geo.pixelHeight / ACRE_M2) };
+  const cellAc = geo.pixelWidth * geo.pixelHeight / ACRE_M2;
+  const res = { grid, geo, cls: values, acres: counts.map(n => n * cellAc), startBasis, startAc: added * cellAc };
   scoreCache.set(ck, res);
   while (scoreCache.size > 3) scoreCache.delete(scoreCache.keys().next().value);
   return res;
@@ -2173,8 +2225,9 @@ function scoreInside(sc) {
 function scoreKeyHtml(row, sc, reason = "", hs = null) {
   // the analysis key, under the metrics table (whose ringed column has its scores): the
   // horizon and its window, the classes and their acres (… while loading), the window's
-  // satellite detections (hs: {n, nIn, capped} or {failed}; loading while null), and the
-  // perimeter it was scored against
+  // satellite detections (hs: {n, nIn, capped} or {failed}; loading while null), and what
+  // it was scored against: the perimeter at the window end, and what burned before beyond
+  // the perimeter at run time (the start footprint)
   const back = '<button type="button" class="sk-x" data-act="leave" title="Close the analysis">&times; Close</button>';
   if (!row) return `<div class="score-key"><div class="sk-head"><span><b>Analysis</b></span>${back}</div>` +
     `<div class="warn">${reason}</div></div>`;
@@ -2184,13 +2237,17 @@ function scoreKeyHtml(row, sc, reason = "", hs = null) {
     : Math.round(x).toLocaleString("en-US")) + " ac";
   const cls = [2, 3, 4, 1].map(k => {
     const [key, name, what] = SCORE_CLASSES[k];
-    const v = !sc ? "…" : k === 1 && row[4] == null ? "none" : fmtAc(sc.acres[k]);
+    const v = !sc ? "…" : k === 1 && row[4] == null && !sc.startBasis ? "none" : fmtAc(sc.acres[k]);
     return `<span title="${name}: ${what}"><i style="background:${Palette.SCORE[key]}"></i>${name}<b>${v}</b></span>`;
   }).join("");
   const off = row[6];
   const perim = typeof off === "number"
     ? `Scored against the perimeter ${row[7] === 1 ? "mapped" : "last edited"} <b>${fmtShortDT(end + off * HOUR)}</b>, ` +
       `${Math.abs(off).toFixed(1)}h ${off < 0 ? "before" : "after"} the window end` : "";
+  const before = !sc || !sc.startBasis ? ""
+    : `Burned before includes <b>${fmtAc(sc.startAc)}</b> beyond the perimeter at run time: ` +
+      (sc.startBasis === "pyrecast" ? "where the forecast started burning, seeded from satellite detections"
+        : "satellite detections up to the run (the forecast's own start wasn't archived)");
   const num = x => x.toLocaleString("en-US");
   const dets = !sc ? "" : !hs ? "Loading the window's satellite detections…"
     : hs.failed ? "Couldn't load the window's satellite detections."
@@ -2200,7 +2257,7 @@ function scoreKeyHtml(row, sc, reason = "", hs = null) {
     '<span class="sk-ring" style="border-color:#7a1010" title="outside the forecast"></span>' : "";
   return `<div class="score-key"><div class="sk-head"><span><b>Analysis</b> · ${hLab(H)} after the run, to <b>${fmtShortDT(end)}</b></span>${back}</div>` +
     `<div class="sk-grid">${cls}</div>` + (dets ? `<div class="sk-dets">${rings}<span>${dets}</span></div>` : "") +
-    (perim ? `<div class="note sk-foot">${perim}</div>` : "") + "</div>";
+    (perim || before ? `<div class="note sk-foot">${[perim, before].filter(Boolean).join(". ")}</div>` : "") + "</div>";
 }
 
 const windowHotCache = new Map();   // "slug|t0|t1" -> promise of {dets, capped} (or null), the 6 most recent
@@ -2261,21 +2318,26 @@ async function renderScore(f, run, pct, token) {
   syncScorePlayhead();
   key.innerHTML = scoreKeyHtml(row, null);
   // the same time-of-arrival raster as the forecast layer draws (a newest run not archived
-  // yet comes from Pyrecast), and the two snapshots the pipeline scored it with
+  // yet comes from Pyrecast), the two snapshots the pipeline scored it with, and the start
+  // footprint it added to the earlier one
   const live = f.live[run] === true ? relayToa(f.slug, run, pct) : null, tif = `forecast_archive/${f.slug}/${run}/${pct}.tif`;
-  const [geo, base, act] = await Promise.all([
+  const startBasis = scoreStartBasis(f, run);
+  const [geo, base, act, startGeo] = await Promise.all([
     loadGeoraster(tif, live, !!live && !f.pcts[run].has(pct)),
-    row[4] != null ? loadScorePerim(f, row[4]) : null, loadScorePerim(f, row[5])]);
+    row[4] != null ? loadScorePerim(f, row[4]) : null, loadScorePerim(f, row[5]),
+    startBasis ? loadScoreStart(f, run) : null]);
   if (token !== state.wmsSeq) return;
-  if (!geo || !act || (row[4] != null && !base)) {
+  const start = geo && startGeo ? startOnGrid(geo, startGeo) : null;
+  if (!geo || !act || (row[4] != null && !base) || (startBasis && !start)) {
     key.innerHTML = scoreKeyHtml(null, null, !geo ? missingNote(f, run, pct, "time of arrival", [...f.pcts[run]].sort(byNumber))
-      : "Couldn't load the perimeters this run was scored against — try reloading the page.");
+      : !act || (row[4] != null && !base) ? "Couldn't load the perimeters this run was scored against — try reloading the page."
+      : "Couldn't load where this run's forecast started burning, which it was scored with — try reloading the page.");
     return;
   }
   // the window's detections, asked for while the grid is built
   const w = scoreWindow(), [bw, bs, be, bn] = bboxOf(geometriesOf(act));
   const detsP = loadWindowDetections(f, w, { s: bs - 0.15, w: bw - 0.15, n: bn + 0.15, e: be + 0.15 });
-  const sc = scoreGrid(geo, tif, row, base, act);
+  const sc = scoreGrid(geo, tif, row, base, act, start, startBasis);
   const inside = scoreInside(sc);
   state.fc = { kind: "score", grid: sc.grid, row, sc, inside };
   showCanvas("fc", sc.grid, "iso", forecastOpacity());

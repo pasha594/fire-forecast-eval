@@ -62,9 +62,12 @@ bucket, e.g. `https://f005.backblazeb2.com/file/fire-forecast-archive/skill/inde
 
 ```
 skill/index.json   {"v": 1, "generated": "<UTC ISO>", "slugs": {"<slug>": <scored rows>, ...}}
-skill/{slug}.json  {"v": 2, "slug", "generated", "filters": {...},
+skill/{slug}.json  {"v": 3, "slug", "generated", "filters": {...},
+                    "starts": {"<run_ts>": "pyrecast" | "hotspots", ...},
                     "runs": {"<run_ts>": {"<pct>": [[H, precision, recall, iou,
                       baseline_perim_ms, actual_perim_ms, actual_offset_h, actual_mapped], ...]}}}
+skill/start/{slug}/{run_ts}.tif   the start footprint each run in "starts" was scored with
+                    (uint8, 1 = burned when the run began, on the forecast's grid)
 ```
 
 Rows use the metrics report's default filters exactly (actual growth ≥ 10 acres,
@@ -76,7 +79,12 @@ perimeter archive ids (`baseline_perim_ms` is `null` when no perimeter was mappe
 before the run), the scored perimeter's hours from the window end (2 decimals), and
 `actual_mapped` 1 when that time is when it was mapped, 0 when it's its last edit,
 `null` for older CSVs that don't say. v1 files have the first four only, and the map
-then offers no hits & misses view. On localhost the map reads `data/skill/` first,
+then offers no hits & misses view. v3 adds `starts`: the runs whose burned-before
+area takes in a start footprint beyond the baseline perimeter (see Metric
+definitions), and where it came from; the map and report add
+`skill/start/{slug}/{run_ts}.tif` to the baseline when they redraw a row. A
+`--skill-only` rebuild uploads no footprints: the last full run's stay in the
+bucket. On localhost the map reads `data/skill/` first,
 so `analyze.py` output can be checked before it's published. Fires that
 drop out keep a stale `skill/{slug}.json` in the bucket, but are no longer
 listed. To rebuild just these files from the already-published `metrics.csv`
@@ -122,12 +130,20 @@ assumes a single writer. Disable the workflow (or wait for it to finish) first.
 
 ## Metric definitions
 
-For a forecast issued at `run_ts`, percentile `p`, window `H` hours:
+For a forecast issued at `run_ts`, percentile `p`, window `H` hours (a worked
+example is on the site at `/methodology`):
 
-- **pred_new** = pixels with time-of-arrival ≤ H, minus baseline
-- **baseline B** = latest Cornea perimeter mapped (or, lacking a reliable mapped time, last edited) by the end of `run_ts`'s minute, as published by then, rasterized onto the forecast's own UTM grid — never one from after the run. (`run_ts` is cut to the minute: Pyrecast names a run after the perimeter it started from, seconds dropped.)
+- **baseline B** = latest Cornea perimeter mapped (or, lacking a reliable mapped time, last edited) by the end of `run_ts`'s minute, as published by then, rasterized onto the forecast's own UTM grid — never one from after the run. (`run_ts` is cut to the minute.)
+- **start S** = where the forecast itself started burning. Pyrecast seeds its runs with satellite detections on top of the perimeter (`run_ts` is usually a VIIRS overpass to the minute), so its start reaches well beyond B — a median ~2,400 ac, even when B was mapped within a minute of the run. Its time of arrival is never set there, so growth into S can't be predicted; counted as growth, it was all misses (median recall was ~0.19 instead of ~0.68 before S was subtracted, Nov 2026). S is the first granule of the run's `hours-since-burned` output (values 400 burned / 401 burning at the start; the same at every percentile), which `analyze.py --sync` fetches with two ranged reads of an archived `{pct}_hours-since-burned.tar` into `raw/forecast_archive/<slug>/<run_ts>/start.tif`. When no archived tar caught that granule (~8% of scored runs), every satellite detection footprint up to `run_ts` stands in for it (it reproduces the real start's recall within a median 0.08). `start_basis` records which (`pyrecast`, `hotspots`, or blank for neither); `start_acres` is S's area and `burned_before_acres` B ∪ S's.
+- **pred_new** = pixels with time-of-arrival ≤ H, minus B ∪ S
 - **actual A** = Cornea perimeter mapped nearest `run_ts + H` within ±12h; failing that, the one last edited nearest it within ±12h; failing that, the one published nearest it within ±12h, at its (earlier) mapped time. The signed offset is recorded either way
-- **precision** = area(pred_new ∩ act_new) / area(pred_new), **recall** = area(pred_new ∩ act_new) / area(act_new), where act_new = A − B
+- **precision** = area(pred_new ∩ act_new) / area(pred_new), **recall** = area(pred_new ∩ act_new) / area(act_new), **IoU** = area(pred_new ∩ act_new) / area(pred_new ∪ act_new), where act_new = A − (B ∪ S)
+
+Treating all of S as burned is safe even though S overstates the burned area
+(only ~42% of S beyond B ends up inside the fire's final perimeter, as 375m
+pixels overhang the fire's edge): the part that never burns is neither predicted
+nor actual growth, so it can't move a score. Padding the start doesn't pay
+either — the forecast's front then starts too far out, which costs precision.
 
 **Perimeter times.** Every Cornea snapshot is one *edit* of a WFIGS polygon, and
 its date (and archive file name) is the edit time, `poly_DateCurrent` — a median
@@ -156,7 +172,7 @@ time each row used, and report.html can restrict to mapped times only.
 **Hotspot capture** (`hs_*` columns) is the deliberately *separate* satellite
 companion metric: detections within exactly `(run, run+H]` (their timestamps
 are precise, so no tolerance is needed), footprint-rasterized at instrument
-resolution (VIIRS 375m px → r=187.5m, MODIS 1km px → r=500m), baseline
+resolution (VIIRS 375m px → r=187.5m, MODIS 1km px → r=500m), B ∪ S
 subtracted; `hs_capture` = predicted ∩ hotspot area / hotspot area. It is
 recall-flavored only — hotspots undersample burned area (clouds, smoke,
 overpass gaps), so a hotspot-based "precision" would punish correct
@@ -167,9 +183,7 @@ would inflate areas and destroy error attribution.
 Growth-only by design: comparing full footprints would be dominated by
 already-burned area. All raw areas are in `metrics.csv` so other metrics can
 be derived. Caveats worth knowing: recall is measured against *on-grid* actual
-growth (`act_offgrid_frac` quantifies clipping); ELMFIRE's internal ignition
-perimeter differs slightly from Cornea's baseline perimeter, which penalizes
-precision near the perimeter edge; and predicted area is *not* strictly
+growth (`act_offgrid_frac` quantifies clipping); and predicted area is *not* strictly
 monotone in percentile (observed inversions in ~1/3 of groups, median 11%
 relative) — the percentile runs are independent weather draws, not nested
 contours, so this is a property of the source data.

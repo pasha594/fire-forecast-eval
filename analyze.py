@@ -28,16 +28,30 @@ import numpy as np
 # float32, EPSG:326xx (per-fire UTM), 30m pixels, nodata=0.0.
 # Values are HOURS since forecast start (max ~279 ≈ 11.6d on a ≤14d horizon).
 # Already-burned-at-start area is NOT encoded (no 0/negative values; it is nodata),
-# so the predicted mask is simply valid & (toa <= H); growth is isolated purely by
-# subtracting the Cornea baseline perimeter.
+# so the predicted mask is simply valid & (toa <= H). Growth is what burns outside
+# what had burned when the run began: the Cornea baseline perimeter AND Pyrecast's own
+# start (see START_VAR), which it seeds with satellite detections on top of the
+# perimeter (in 41 of 42 ca-plaskett runs run_ts is a VIIRS overpass to the minute).
 # run_ts is UTC (tif Last-Modified ≈ run_ts + ~3h processing lag).
 TOA_TO_HOURS = 1.0
 
 HORIZONS_H = (12, 24, 48, 72, 96, 120, 168, 240, 336)
 PUBLIC_BUCKET_URL = "https://f005.backblazeb2.com/file/fire-forecast-archive"
-# baseline = latest perimeter mapped <= run + this. run_ts is cut to the minute: Pyrecast
-# names a run after the time of the perimeter it started from, seconds dropped
+# baseline = latest perimeter mapped <= run + this. run_ts is cut to the minute, and is
+# the time of whatever the run started from: sometimes a perimeter, usually a satellite pass
 BASELINE_TOL_H = 59.999 / 3600
+# Pyrecast's start: the first granule of its hours-since-burned output (named for run_ts)
+# marks the cells it had burned (400) or had burning (401) when the forecast began. Its
+# time of arrival is never set there, so growth into those cells can't be predicted:
+# scored as growth, they'd all be misses. The start is the same at every percentile.
+# Without that granule (the tar wasn't archived, or the hourly purge took the first
+# hour first), the satellite detections the run could have seen stand in for it: every
+# detection footprint up to run_ts. Each row records which it used (start_basis).
+START_VAR = "hours-since-burned"
+START_CODES = (400, 401)
+START_FILE = "start.tif"           # raw/forecast_archive/<slug>/<run_ts>/, the granule as published
+START_NONE = "start.none.json"     # beside it when no archived tar holds that granule: {"checked": [pct, ...]}
+START_PCT_ORDER = ("50", "30", "70", "10", "90")
 ACTUAL_TOL_H = 12.0      # actual = perimeter mapped (else edited/published) within +/- this of run + H
 # Perimeter times (see PerimeterSet): a snapshot's file key / Cornea date is its last
 # EDIT (poly_DateCurrent), a median ~17h after the polygon was mapped. The mapped time is
@@ -54,6 +68,7 @@ PERCENTILES = ("10", "30", "50", "70", "90")
 REPO = Path(__file__).resolve().parent
 RAW = REPO / "raw"
 SKILL_DIR = REPO / "data" / "skill"
+START_DIR = SKILL_DIR / "start"    # <slug>/<run_ts>.tif, published as skill/start/...
 
 # must stay equal to report.html's default filter inputs
 SKILL_FILTERS = {"min_act_new_acres": 10, "max_abs_offset_h": 3, "max_offgrid_frac": 0.10}
@@ -63,7 +78,7 @@ CSV_COLUMNS = ["slug", "cornea_id", "run_ts", "run_dt_utc", "percentile",
                "horizon_h", "valid_dt_utc", "baseline_perim_ms", "baseline_time_utc",
                "baseline_time_basis", "baseline_offset_h", "actual_perim_ms", "actual_time_utc",
                "actual_time_basis", "actual_offset_h", "pixel_m", "baseline_acres",
-               "pred_total_acres", "pred_new_acres", "act_new_acres", "inter_acres",
+               "start_basis", "start_acres", "burned_before_acres", "pred_total_acres", "pred_new_acres", "act_new_acres", "inter_acres",
                "precision", "recall", "iou", "act_outside_acres", "act_offgrid_frac",
                "hs_n", "hs_new_acres", "hs_hit_acres", "hs_capture",
                "expired_run", "notes"]
@@ -100,13 +115,13 @@ RETRY_STATUS = {429, 500, 502, 503, 504}
 RETRY_DELAYS_S = (2, 5, 15, 30, 60)
 
 
-def http_get(sess, url, timeout=(10, 120)):
+def http_get(sess, url, timeout=(10, 120), headers=None):
     """GET with backoff on transient errors (5xx, 429, connection/timeout). A 404
     or other 4xx raises at once: a manifest-listed object should exist."""
     import requests
     for delay in RETRY_DELAYS_S + (None,):
         try:
-            r = sess.get(url, timeout=timeout)
+            r = sess.get(url, timeout=timeout, headers=headers)
             if r.status_code not in RETRY_STATUS or delay is None:
                 r.raise_for_status()
                 # urllib3 1.x returns a cut-off body silently; sync would cache it
@@ -166,8 +181,79 @@ def frozen_fingerprints(manifest, now):
     return out
 
 
-def sync_bucket(url):
-    """Mirror the R2 bucket (public r2.dev URL) into raw/, manifest-driven."""
+def tar_first_member(get_range, key):
+    """(name, bytes) of a tar's first member by two ranged reads (its 512-byte header,
+    then the member), not the whole tar"""
+    head = get_range(key, 0, 511)
+    name = head[:100].rstrip(b"\0").decode("utf-8", "replace")
+    size = int(head[124:136].rstrip(b"\0 ") or b"0", 8)
+    return name, (get_range(key, 512, 511 + size) if size > 0 else b"")
+
+
+def fetch_start_frame(get_range, run_key, entry):
+    """Pyrecast's run-start granule (see START_VAR) -> raw/forecast_archive/<run_key>/start.tif.
+    collect tars the granules sorted by name, i.e. by time, so it's the first member of a
+    {pct}_hours-since-burned.tar, if that tar still caught it. Each archived tar is looked
+    at once: when none has it, START_NONE lists the ones checked, and only a tar archived
+    later is tried. -> "new", "none" or None (nothing to look at)"""
+    d = RAW / "forecast_archive" / run_key
+    if (d / START_FILE).exists():
+        return None
+    vs = entry.get("vars") or {}
+    pcts = [p for p in START_PCT_ORDER if ((vs.get(p) or {}).get(START_VAR) or {}).get("ok")]
+    checked = (load_json(d / START_NONE) or {}).get("checked", [])
+    todo = [p for p in pcts if p not in checked]
+    if not todo:
+        return None
+    want = f"{START_VAR}_{entry['run_ts']}.tif"
+    d.mkdir(parents=True, exist_ok=True)
+    for p in todo:
+        name, body = tar_first_member(get_range, f"forecast_archive/{run_key}/{p}_{START_VAR}.tar")
+        if name == want and body[:4] in (b"II*\x00", b"MM\x00*"):
+            tmp = d / (START_FILE + ".part")
+            tmp.write_bytes(body)
+            tmp.replace(d / START_FILE)
+            (d / START_NONE).unlink(missing_ok=True)
+            return "new"
+        checked.append(p)
+    (d / START_NONE).write_text(json.dumps({"checked": checked}))
+    return "none"
+
+
+def sync_start_frames(url, manifest, only_slug=None):
+    """fetch_start_frame for every run with a time-of-arrival tif. A failure only logs:
+    the run is scored with the stand-in start (start_basis says so) and retried next sync."""
+    import threading
+    import requests
+    local = threading.local()
+
+    def get_range(key, a, b):
+        if not hasattr(local, "sess"):
+            local.sess = requests.Session()
+        r = http_get(local.sess, f"{url}/{key}", headers={"Range": f"bytes={a}-{b}"})
+        return r.content if r.status_code == 206 else r.content[a:b + 1]   # 200: range ignored
+
+    def one(item):
+        run_key, entry = item
+        try:
+            return fetch_start_frame(get_range, run_key, entry)
+        except Exception as e:   # noqa: BLE001 -- one run's start must not stop the sync
+            log(f"start frame for {run_key} failed, retried next sync: {e}")
+            return "failed"
+
+    runs = [(k, e) for k, e in manifest["runs"].items()
+            if (not only_slug or e["slug"] == only_slug)
+            and any(i.get("ok") for i in e["files"].values())]
+    with concurrent.futures.ThreadPoolExecutor(8) as ex:
+        got = list(ex.map(one, runs))
+    log(f"start frames: {got.count('new')} new, {got.count('none')} not archived, "
+        f"{got.count('failed')} failed; {sum((RAW / 'forecast_archive' / k / START_FILE).exists() for k, _ in runs)}"
+        f" of {len(runs)} runs have one")
+
+
+def sync_bucket(url, only_slug=None):
+    """Mirror the R2 bucket (public r2.dev URL) into raw/, manifest-driven; with
+    only_slug, just that fire's files (a quick local copy to test with)."""
     import requests
     url = url.rstrip("/")
     sess = requests.Session()
@@ -184,6 +270,7 @@ def sync_bucket(url):
     frozen = frozen_fingerprints(manifest, datetime.now(timezone.utc))
     state_path = RAW / FROZEN_STATE
     settled = load_json(state_path) or {}
+    mine = (lambda slug: slug == only_slug) if only_slug else (lambda slug: True)
 
     def is_settled(slug):
         """local copies were fetched after collect stopped writing this fire"""
@@ -191,11 +278,15 @@ def sync_bucket(url):
 
     wanted = []
     for run_key, entry in manifest["runs"].items():
+        if not mine(entry["slug"]):
+            continue
         for pct, info in entry["files"].items():
             if info.get("ok"):
                 wanted.append(f"forecast_archive/{run_key}/{pct}.tif")
     refreshing = set()
     for slug, epochs in (manifest.get("perimeters") or {}).items():
+        if not mine(slug):
+            continue
         # the perimeter timeline grows: refresh unless the fire is settled
         idx = RAW / "perimeter_archive" / slug / "index.json"
         if not is_settled(slug):
@@ -205,6 +296,8 @@ def sync_bucket(url):
         wanted.append(f"perimeter_archive/{slug}/index.json")
         wanted += [f"perimeter_archive/{slug}/{e}.geojson" for e in epochs]
     for slug, days in (manifest.get("hotspots") or {}).items():
+        if not mine(slug):
+            continue
         # collect rewrites the most recent days; refresh them unless the fire is settled
         recent = set() if is_settled(slug) else set(days[-HOTSPOT_REWRITE_DAYS:])
         if recent:
@@ -224,6 +317,10 @@ def sync_bucket(url):
         tmp.replace(p)
         n += 1
         time.sleep(0.02)
+    sync_start_frames(url, manifest, only_slug)
+    if only_slug:
+        log(f"sync ({only_slug} only): {n} new objects ({len(wanted)} tracked)")
+        return
     # only once every download landed: each frozen fire is now settled, either from
     # an earlier run or because this run just fetched its final copies
     tmp = state_path.with_suffix(".json.part")
@@ -487,6 +584,58 @@ def acres(npix, px_area_sqm):
     return round(npix * px_area_sqm / SQM_PER_ACRE, 1)
 
 
+def on_grid(arr, src_crs, src_tfm, crs, tfm, shape_):
+    """a bool mask on another grid (nearest cell); as is when the grids match"""
+    if arr.shape == shape_ and tuple(src_tfm)[:6] == tuple(tfm)[:6] and str(src_crs) == str(crs):
+        return arr
+    from rasterio.warp import Resampling, reproject
+    out = np.zeros(shape_, dtype=np.uint8)
+    reproject(arr.astype(np.uint8), out, src_transform=src_tfm, src_crs=src_crs,
+              dst_transform=tfm, dst_crs=crs, resampling=Resampling.nearest)
+    return out.astype(bool)
+
+
+class RunStart:
+    """What had burned when one run began, beyond the baseline perimeter (see START_VAR):
+    Pyrecast's own start if its granule was archived, else every satellite detection
+    footprint up to run_ts, else nothing. -> mask(crs, transform, shape) on a forecast grid."""
+
+    def __init__(self, run_key, run_dt, hs):
+        import rasterio
+        self.basis, self._src = "", None
+        p = RAW / "forecast_archive" / run_key / START_FILE
+        if p.exists():
+            with rasterio.open(p) as ds:
+                self._src = (np.isin(ds.read(1), START_CODES), ds.crs, ds.transform)
+            self.basis = "pyrecast"
+        elif any(t <= run_dt for t, *_ in hs.pts):
+            self.basis = "hotspots"
+        self._run_dt, self._hs, self._grids = run_dt, hs, {}
+
+    def mask(self, crs, tfm, shape_):
+        key = (str(crs), tuple(tfm)[:6], shape_)
+        if key not in self._grids:
+            if self.basis == "pyrecast":
+                m = on_grid(*self._src, crs, tfm, shape_)
+            elif self.basis == "hotspots":
+                m = self._hs.mask(datetime(1970, 1, 1, tzinfo=timezone.utc), self._run_dt,
+                                  crs, tfm, shape_)[0]
+            else:
+                m = np.zeros(shape_, dtype=bool)
+            self._grids[key] = m
+        return self._grids[key]
+
+
+def write_start_mask(path, m, crs, tfm):
+    """the start footprint a run was scored with, for map.html and report.html to redraw
+    the calculation: uint8 0/1 on the forecast's grid"""
+    import rasterio
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with rasterio.open(path, "w", driver="GTiff", height=m.shape[0], width=m.shape[1], count=1,
+                       dtype="uint8", crs=crs, transform=tfm, compress="deflate") as ds:
+        ds.write(m.astype(np.uint8), 1)
+
+
 def compute(only_slug=None):
     import rasterio
     from shapely.geometry import box
@@ -502,6 +651,10 @@ def compute(only_slug=None):
     rows = []
     skipped = {"no_match": 0, "no_perims": 0, "no_horizon": 0, "missing_tif": 0,
                "unreadable_perims": 0}
+    starts = {"pyrecast": 0, "hotspots": 0, "": 0}
+    # each run's start footprint, as scored, for the pages (published by publish_skill)
+    import shutil
+    shutil.rmtree(START_DIR / only_slug if only_slug else START_DIR, ignore_errors=True)
 
     for run_key in sorted(manifest["runs"]):
         entry = manifest["runs"][run_key]
@@ -540,6 +693,9 @@ def compute(only_slug=None):
         if not horizons:
             skipped["no_horizon"] += 1
             continue
+        start = RunStart(run_key, run_dt, hs)
+        starts[start.basis] += 1
+        start_written = False
 
         for pct in PERCENTILES:
             if not entry["files"].get(pct, {}).get("ok"):
@@ -560,25 +716,32 @@ def compute(only_slug=None):
             B = (ps.mask(baseline[1], crs, tfm, arr.shape)
                  if baseline else np.zeros(arr.shape, dtype=bool))
             b_geom = ps.geom_utm(baseline[1], crs) if baseline else None
+            S = start.mask(crs, tfm, arr.shape)
+            BS = B | S   # burned before: what nothing after the run can count as growth
+            if S.any() and not start_written:
+                write_start_mask(START_DIR / slug / f"{entry['run_ts']}.tif", S, crs, tfm)
+                start_written = True
 
             for H, (a_dt, a_ems, a_off, a_basis) in horizons:
                 A = ps.mask(a_ems, crs, tfm, arr.shape)
                 pred = valid & (toa_h <= H)
-                pred_new = pred & ~B
-                act_new = A & ~B
+                pred_new = pred & ~BS
+                act_new = A & ~BS
                 inter = pred_new & act_new
                 n_pred, n_act, n_int = int(pred_new.sum()), int(act_new.sum()), int(inter.sum())
                 n_union = n_pred + n_act - n_int
                 hs_mask, hs_n = hs.mask(run_dt, run_dt + timedelta(hours=H), crs, tfm, arr.shape)
-                hs_new = hs_mask & ~B
+                hs_new = hs_mask & ~BS
                 n_hs_new = int(hs_new.sum())
                 n_hs_hit = int((pred_new & hs_new).sum())
 
+                # the share of the growth beyond the forecast's grid: the start footprint
+                # lies on the grid, so only the in-grid part loses its cells
                 a_geom = ps.geom_utm(a_ems, crs)
                 act_new_geom = a_geom.difference(b_geom) if b_geom else a_geom
                 outside = act_new_geom.difference(grid_box)
-                offgrid_frac = (outside.area / act_new_geom.area
-                                if act_new_geom.area > 0 else 0.0)
+                new_area = max(outside.area, act_new_geom.area - int((A & S & ~B).sum()) * px_area)
+                offgrid_frac = outside.area / new_area if new_area > 0 else 0.0
 
                 notes = [] if baseline else ["baseline=none"]
                 rows.append({
@@ -598,6 +761,9 @@ def compute(only_slug=None):
                     "actual_offset_h": round(a_off, 2),
                     "pixel_m": round(abs(tfm.a), 1),
                     "baseline_acres": acres(int(B.sum()), px_area),
+                    "start_basis": start.basis,
+                    "start_acres": acres(int(S.sum()), px_area),
+                    "burned_before_acres": acres(int(BS.sum()), px_area),
                     "pred_total_acres": acres(int(pred.sum()), px_area),
                     "pred_new_acres": acres(n_pred, px_area),
                     "act_new_acres": acres(n_act, px_area),
@@ -622,7 +788,9 @@ def compute(only_slug=None):
         w = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
         w.writeheader()
         w.writerows(rows)
-    log(f"wrote {len(rows)} rows -> {out} | skipped runs: {skipped}")
+    log(f"wrote {len(rows)} rows -> {out} | skipped runs: {skipped} | start footprint per "
+        f"scored run: {starts['pyrecast']} Pyrecast's own, {starts['hotspots']} from detections, "
+        f"{starts['']} none")
 
 
 # ---------------------------------------------------------------- skill files
@@ -659,12 +827,16 @@ def build_skill(csv_path, out_dir):
     the calculation (the perimeter archive ids, null baseline when none was mapped
     before the run; the scored perimeter's hours from the window end; 1 if that time
     is when it was mapped, 0 if it's its last edit, null in older CSVs that don't say).
-    Returns (fires, rows)."""
-    fires = {}
+    v3 adds "starts": {run_ts: "pyrecast" | "hotspots"} for the runs scored with a start
+    footprint beyond the baseline (see START_VAR), published as skill/start/<slug>/<run_ts>.tif;
+    the pages add it to the baseline perimeter. Returns (fires, rows)."""
+    fires, starts = {}, {}
     with open(csv_path, newline="") as fh:
         for r in csv.DictReader(fh):
             if not _passes_skill_filters(r):
                 continue
+            if r.get("start_basis") and (_num(r.get("start_acres")) or 0) > 0:
+                starts.setdefault(r["slug"], {})[r["run_ts"]] = r["start_basis"]
             basis = r.get("actual_time_basis")
             off = _num(r["actual_offset_h"])
             entry = [int(float(r["horizon_h"])),
@@ -686,8 +858,9 @@ def build_skill(csv_path, out_dir):
                          for pct in sorted(by_pct, key=int)}
                 for run_ts, by_pct in sorted(fires[slug].items())}
         index[slug] = sum(len(v) for by_pct in runs.values() for v in by_pct.values())
-        doc = {"v": 2, "slug": slug, "generated": generated,
-               "filters": SKILL_FILTERS, "runs": runs}
+        doc = {"v": 3, "slug": slug, "generated": generated,
+               "filters": SKILL_FILTERS, "starts": dict(sorted(starts.get(slug, {}).items())),
+               "runs": runs}
         (out_dir / f"{slug}.json").write_text(json.dumps(doc, separators=(",", ":")))
     (out_dir / "index.json").write_text(json.dumps(
         {"v": 1, "generated": generated, "slugs": index}, separators=(",", ":")))
@@ -698,16 +871,31 @@ def publish_skill(client, bucket, csv_path):
     n_fires, n_rows = build_skill(csv_path, SKILL_DIR)
     index = SKILL_DIR / "index.json"
     files = sorted(SKILL_DIR.glob("*.json"))
+    # the start footprints the skill files name, uploaded first so a page never meets a
+    # name before its file; on a --skill-only rebuild there are none here, and the bucket
+    # keeps the last full run's
+    masks = []
+    for p in files:
+        if p != index:
+            doc = json.loads(p.read_text())
+            masks += [START_DIR / doc["slug"] / f"{run_ts}.tif" for run_ts in doc.get("starts", {})]
+    masks = [m for m in masks if m.exists()]
 
     def put(p):
         client.upload_file(str(p), bucket, f"skill/{p.name}",
                            ExtraArgs={"ContentType": "application/json"})
 
+    def put_mask(p):
+        client.upload_file(str(p), bucket, f"skill/start/{p.parent.name}/{p.name}",
+                           ExtraArgs={"ContentType": "image/tiff"})
+
     with concurrent.futures.ThreadPoolExecutor(SKILL_UPLOAD_WORKERS) as ex:
+        list(ex.map(put_mask, masks))
         list(ex.map(put, [p for p in files if p != index]))
     # index last, so it never lists a slug whose file is not uploaded yet
     put(index)
-    log(f"published skill files: {n_fires} fires, {n_rows} rows, {len(files)} files")
+    log(f"published skill files: {n_fires} fires, {n_rows} rows, {len(files)} files, "
+        f"{len(masks)} start footprints")
 
 
 def skill_only():
@@ -744,6 +932,7 @@ def overlay(slug, run_ts, pct, H):
         nod = ds.nodata
     valid = (arr != nod) if nod is not None else np.isfinite(arr)
     B = ps.mask(baseline[1], crs, tfm, arr.shape) if baseline else np.zeros(arr.shape, bool)
+    B |= RunStart(f"{slug}/{run_ts}", run_dt, HotspotSet(slug)).mask(crs, tfm, arr.shape)
     pred_new = (valid & (arr * TOA_TO_HOURS <= H)) & ~B
 
     feats = []
@@ -774,7 +963,7 @@ def main():
                     help="re-fetch Cornea perimeter snapshots before computing")
     ap.add_argument("--inspect", metavar="TIF")
     ap.add_argument("--overlay", nargs=4, metavar=("SLUG", "RUN", "PCT", "H"))
-    ap.add_argument("--only", help="restrict metrics to one slug")
+    ap.add_argument("--only", help="restrict metrics (and --sync) to one slug")
     ap.add_argument("--publish", action="store_true",
                     help="after computing, upload data/metrics.csv + skill/*.json to the bucket "
                          "(needs S3_* env; used by the CI analyze workflow)")
@@ -790,7 +979,7 @@ def main():
         skill_only()
         return
     if args.sync or args.sync_url:
-        sync_bucket(args.sync_url or PUBLIC_BUCKET_URL)
+        sync_bucket(args.sync_url or PUBLIC_BUCKET_URL, only_slug=args.only)
     if args.refresh_perims:
         import collect
         archive = collect.Archive(RAW)

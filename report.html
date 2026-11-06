@@ -80,8 +80,10 @@
   perimeter snapshots. One row per (fire, forecast run, weather percentile, horizon) with a perimeter
   near the horizon: mapped within &plusmn;12h, else last edited within &plusmn;12h, else published then
   (at its earlier mapped time); the offset is recorded. Perimeters without a reliable mapped time are
-  timed by their last edit. Predicted area = time-of-arrival &le; horizon; both sides subtract the latest
-  perimeter mapped before the run.</p>
+  timed by their last edit. Predicted area = time-of-arrival &le; horizon; both sides subtract what had
+  burned when the run began: the latest perimeter mapped before the run, and where the forecast itself
+  started burning (Pyrecast seeds its start with satellite detections beyond the perimeter).
+  <a href="methodology/">How it's calculated, with a worked example</a>.</p>
 
   <div id="loaderr" hidden></div>
 
@@ -149,7 +151,8 @@ function parseCSV(text) {
   const lines = text.trim().split(/\r?\n/);
   const head = lines[0].split(",");
   const numeric = new Set(["horizon_h", "baseline_offset_h", "actual_offset_h", "pixel_m",
-    "baseline_acres", "pred_total_acres", "pred_new_acres", "act_new_acres", "inter_acres",
+    "baseline_acres", "start_acres", "burned_before_acres",
+    "pred_total_acres", "pred_new_acres", "act_new_acres", "inter_acres",
     "precision", "recall", "iou", "act_outside_acres", "act_offgrid_frac",
     "hs_n", "hs_new_acres", "hs_hit_acres", "hs_capture"]);
   return lines.slice(1).map(line => {
@@ -225,6 +228,7 @@ function makeSortable(containerId) {
 
 function drawTable(rows) {
   const cols = ["slug", "run_ts", "percentile", "horizon_h", "actual_offset_h", "baseline_acres",
+    ...(DATA.some(r => r.start_basis !== undefined) ? ["burned_before_acres", "start_basis"] : []),
     "pred_new_acres", "act_new_acres", "inter_acres", "precision", "recall", "iou",
     "hs_n", "hs_capture"];
   const top = rows.slice(0, 500);
@@ -267,7 +271,7 @@ const BUCKET_KEYS = { toa: (r) => `forecast_archive/${r.slug}/${r.run_ts}/${r.pe
                       perim: (r, ms) => `perimeter_archive/${r.slug}/${ms}.geojson` };
 const CLS = { BASE: 1, TP: 2, FP: 3, FN: 4 };
 const CLS_STYLE = {
-  1: ["#898781", "baseline (perimeter at issuance — subtracted from both sides)"],
+  1: ["#898781", "burned before (perimeter at issuance + where the forecast started burning — subtracted from both sides)"],
   2: ["#1baf7a", "hit: predicted &amp; burned (counts toward precision and recall)"],
   3: ["#2a78d6", "false alarm: predicted, didn't burn (hurts precision)"],
   4: ["#e34948", "miss: burned, not predicted (hurts recall)"],
@@ -285,6 +289,30 @@ async function fetchArchive(key, asJson) {
   throw new Error(`unreachable: ${key}`);
 }
 
+// where metrics.csv came from ("local" or "bucket", see init): the start footprints
+// published with it come from the same place
+let METRICS_SRC = "bucket";
+
+async function fetchStartMask(row, meta) {
+  // the start footprint analyze.py added to the baseline (start_basis: the forecast's own
+  // start, or satellite detections up to the run standing in for it), on the forecast's
+  // grid (1 = burned at the start); null for a row scored against the perimeter alone
+  if (!row.start_basis || !(row.start_acres > 0)) return null;
+  const key = `start/${row.slug}/${row.run_ts}.tif`;
+  const r = await fetch(METRICS_SRC === "local" ? `data/skill/${key}` : `${BUCKET}/skill/${key}`, { cache: "no-cache" });
+  if (!r.ok) throw new Error(`the start footprint this row was scored with is missing (${key})`);
+  const g = await parseGeoraster(await r.arrayBuffer()), v = g.values[0];
+  const out = new Uint8Array(meta.width * meta.height);
+  for (let rr = 0, o = 0; rr < meta.height; rr++) {
+    const sr = Math.floor((g.ymax - (meta.ymax - (rr + 0.5) * meta.ph)) / g.pixelHeight), src = v[sr];
+    for (let cc = 0; cc < meta.width; cc++, o++) {
+      const sc = Math.floor((meta.xmin + (cc + 0.5) * meta.pw - g.xmin) / g.pixelWidth);
+      if (src && sc >= 0 && sc < g.width && src[sc]) out[o] = 1;
+    }
+  }
+  return out;
+}
+
 function projectRings(geom, fwd) {
   const g = geom.geometry || geom;
   const polys = g.type === "Polygon" ? [g.coordinates] : g.coordinates;
@@ -292,20 +320,24 @@ function projectRings(geom, fwd) {
 }
 
 function rasterizeMask(polysUtm, meta) {
-  // canvas fill IS rasterization: draw rings in pixel space, read back alpha
+  // canvas fill IS rasterization: draw rings in pixel space, read back alpha. One fill per
+  // polygon, as map.html and GDAL do: a polygon's holes cut out, separate polygons add up
+  // (one evenodd path over them all cancelled where a perimeter's polygons overlap)
   const c = document.createElement("canvas");
   c.width = meta.width; c.height = meta.height;
   const ctx = c.getContext("2d", { willReadFrequently: true });
-  const path = new Path2D();
-  for (const rings of polysUtm) for (const ring of rings) {
-    ring.forEach(([X, Y], i) => {
-      const px = (X - meta.xmin) / meta.pw, py = (meta.ymax - Y) / meta.ph;
-      i ? path.lineTo(px, py) : path.moveTo(px, py);
-    });
-    path.closePath();
-  }
   ctx.fillStyle = "#fff";
-  ctx.fill(path, "evenodd");
+  for (const rings of polysUtm) {
+    const path = new Path2D();
+    for (const ring of rings) {
+      ring.forEach(([X, Y], i) => {
+        const px = (X - meta.xmin) / meta.pw, py = (meta.ymax - Y) / meta.ph;
+        i ? path.lineTo(px, py) : path.moveTo(px, py);
+      });
+      path.closePath();
+    }
+    ctx.fill(path, "evenodd");
+  }
   const a = ctx.getImageData(0, 0, meta.width, meta.height).data;
   const mask = new Uint8Array(meta.width * meta.height);
   for (let i = 0; i < mask.length; i++) mask[i] = a[i * 4 + 3] > 127 ? 1 : 0;
@@ -377,6 +409,12 @@ function describeTimes(row) {
     t += ` · baseline perimeter ${base.mapped ? "mapped" : "last edited"} ${fmt(base.at)} ` +
       `(${Math.abs(row.baseline_offset_h).toFixed(1)}h ${row.baseline_offset_h < 0 ? "before" : "after"} run)`;
   } else t += " · baseline: none (no perimeter was mapped before the run)";
+  if (row.start_basis && row.start_acres > 0) {
+    const extra = Math.max(0, (row.burned_before_acres ?? 0) - (row.baseline_acres ?? 0));
+    t += ` · burned before also takes in <b>${Math.round(extra).toLocaleString("en-US")} ac</b> beyond the baseline: ` +
+      (row.start_basis === "pyrecast" ? "where the forecast started burning (seeded from satellite detections)"
+        : "satellite detections up to the run (the forecast's own start wasn't archived)");
+  }
   return t;
 }
 
@@ -404,8 +442,11 @@ async function renderInspection(row) {
       if (!INS.cacheGj.has(ms)) INS.cacheGj.set(ms, await fetchArchive(BUCKET_KEYS.perim(row, ms), true));
       return INS.cacheGj.get(ms);
     };
-    const [baseGj, actGj] = await Promise.all([getGj(row.baseline_perim_ms), getGj(row.actual_perim_ms)]);
+    const [baseGj, actGj, startMask] = await Promise.all([getGj(row.baseline_perim_ms), getGj(row.actual_perim_ms),
+                                                         fetchStartMask(row, meta)]);
     const baseMask = baseGj ? rasterizeMask(projectRings(baseGj, fwd), meta) : new Uint8Array(meta.width * meta.height);
+    // burned before = the baseline perimeter + the start footprint
+    if (startMask) for (let i = 0; i < baseMask.length; i++) baseMask[i] |= startMask[i];
     const actMask = rasterizeMask(projectRings(actGj, fwd), meta);
 
     const H = row.horizon_h, toa = georaster.values[0];
@@ -484,13 +525,13 @@ async function renderInspection(row) {
     const R = counts[2] + counts[4] ? counts[2] / (counts[2] + counts[4]) : null;
     const fmtA = x => x.toLocaleString(undefined, { maximumFractionDigits: 0 });
     stats.innerHTML = `<table class="delta"><thead><tr><th></th><th>hit</th><th>false alarm</th>` +
-      `<th>miss</th><th>baseline</th><th>precision</th><th>recall</th></tr></thead><tbody>` +
+      `<th>miss</th><th>burned before</th><th>precision</th><th>recall</th></tr></thead><tbody>` +
       `<tr><td>in-browser</td><td>${fmtA(ac(2))} ac</td><td>${fmtA(ac(3))} ac</td>` +
       `<td>${fmtA(ac(4))} ac</td><td>${fmtA(ac(1))} ac</td>` +
       `<td>${P === null ? "" : P.toFixed(4)}</td><td>${R === null ? "" : R.toFixed(4)}</td></tr>` +
       `<tr><td>pipeline (metrics.csv)</td><td>${fmtA(row.inter_acres)} ac</td>` +
       `<td>${fmtA(row.pred_new_acres - row.inter_acres)} ac</td>` +
-      `<td>${fmtA(row.act_new_acres - row.inter_acres)} ac</td><td>${fmtA(row.baseline_acres)} ac</td>` +
+      `<td>${fmtA(row.act_new_acres - row.inter_acres)} ac</td><td>${fmtA(row.burned_before_acres ?? row.baseline_acres)} ac</td>` +
       `<td>${row.precision ?? ""}</td><td>${row.recall ?? ""}</td></tr></tbody></table>` +
       `<p class="note">precision = hit / (hit + false&nbsp;alarm) · recall = hit / (hit + miss). Small ` +
       `differences vs the pipeline come from canvas vs GDAL polygon rasterization at the pixel edge.</p>`;
@@ -565,6 +606,7 @@ async function init() {
       const resp = await fetch(url, { cache: "no-cache" });  // revalidate: metrics update twice daily
       if (!resp.ok) continue;
       text = await resp.text();
+      METRICS_SRC = label;
       const mod = resp.headers.get("Last-Modified");
       document.querySelector(".sub").innerHTML +=
         ` <span style="color:var(--muted)">· metrics: ${label}${mod && !isNaN(Date.parse(mod)) ? ", updated " + fmtDT(Date.parse(mod)) : ""}</span>`;

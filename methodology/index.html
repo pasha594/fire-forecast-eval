@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/png" href="../favicon.png">
+<title>Forecast scoring methodology</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600..800&family=Public+Sans:wght@400..800&display=swap">
+<link rel="stylesheet" href="../brand.css">
+<script src="../palette.js"></script>
+<style>
+  body { margin: 0; background: var(--page); color: var(--ink); font: 16px/1.6 var(--font-sans); }
+  main { max-width: 880px; margin: 0 auto; padding: 24px 16px 64px; }
+  header.top { display: flex; align-items: center; justify-content: space-between; gap: 16px;
+               flex-wrap: wrap; margin-bottom: 28px; }
+  header.top nav { display: flex; gap: 16px; font-size: 14px; }
+  h1 { font-size: 34px; line-height: 1.15; font-weight: 800; margin: 0 0 12px; }
+  h2 { font-size: 23px; line-height: 1.25; font-weight: 700; margin: 44px 0 10px; }
+  h2 .n { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px;
+          margin-right: 10px; border-radius: 50%; background: var(--accent); color: var(--on-accent);
+          font: 700 15px/1 var(--font-sans); vertical-align: 3px; }
+  p { margin: 0 0 14px; max-width: 68ch; }
+  .lede { font-size: 18px; color: var(--ink-2); }
+  .muted { color: var(--muted); }
+  b, strong { font-weight: 650; color: var(--ink); }
+
+  /* the timeline: wide by nature, so it scrolls sideways inside its card on a phone */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .timeline svg { display: block; min-width: 700px; width: 100%; height: auto; }
+  .steps { margin: 14px 0 0; padding-left: 20px; max-width: 70ch; }
+  .steps li { margin: 0 0 8px; }
+
+  /* the four maps of the example fire */
+  .panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+  @media (max-width: 720px) { .panels { grid-template-columns: minmax(0, 1fr); } }
+  .panel h3 { font: 700 17px/1.3 var(--font-serif); margin: 0 0 4px; }
+  .panel h3 .tag { font: 700 12px/1 var(--font-sans); color: var(--muted); letter-spacing: .08em;
+                   text-transform: uppercase; margin-right: 6px; }
+  .panel p { font-size: 14px; color: var(--ink-2); margin: 0 0 10px; }
+  .panel svg { display: block; width: 100%; height: auto; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 10px; font-size: 13px; color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { flex: none; width: 14px; height: 14px; border-radius: 3px; }
+  .sw.dot { border-radius: 50%; width: 10px; height: 10px; }
+  .sw.ring { border-radius: 50%; width: 8px; height: 8px; background: #fff; border: 2px solid; }
+  .sw.line { height: 0; border-radius: 0; border-top: 3px solid; }
+
+  /* the calculation */
+  .calc { display: grid; gap: 12px; margin-top: 16px; }
+  .counts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 560px) { .counts { grid-template-columns: minmax(0, 1fr); } }
+  .count { border-radius: 10px; padding: 12px 14px; color: #fff; }
+  .count .k { font-size: 13px; font-weight: 600; opacity: .92; }
+  .count .v { font: 800 28px/1.15 var(--font-sans); }
+  .count .s { font-size: 13px; opacity: .92; }
+  .formula { display: grid; grid-template-columns: 7.5em minmax(0, 1fr) auto; align-items: baseline;
+             gap: 4px 16px; padding: 14px 16px; }
+  .formula + .formula { border-top: 1px solid var(--grid); }
+  .formula .name { font-weight: 700; }
+  .formula .eq { font-variant-numeric: tabular-nums; }
+  .formula .res { font: 800 24px/1 var(--font-sans); color: var(--stat); font-variant-numeric: tabular-nums; }
+  .formula .what { grid-column: 2 / 4; font-size: 14px; color: var(--ink-2); }
+  @media (max-width: 560px) {
+    .formula { grid-template-columns: minmax(0, 1fr) auto; }
+    .formula .eq, .formula .what { grid-column: 1 / -1; }
+    .formula .res { grid-row: 1; grid-column: 2; }
+  }
+  .frac { white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--selected); border-radius: 0 10px 10px 0;
+             padding: 14px 16px; margin-top: 18px; }
+  .callout h3 { font: 700 17px/1.3 var(--font-serif); margin: 0 0 6px; }
+  .callout p { margin: 0 0 8px; }
+  .callout p:last-child { margin-bottom: 0; }
+  ul.rules { padding-left: 20px; max-width: 70ch; }
+  ul.rules li { margin: 0 0 10px; }
+  footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--grid); font-size: 14px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header class="top">
+    <div class="lockup"><a class="brand" href="../"><img src="../cornea-logo-on-light.webp" alt="Cornea"></a><span class="product">Projector</span></div>
+    <nav><a href="../report.html">Metrics report</a><a href="../map.html">Forecast map</a></nav>
+  </header>
+
+  <h1>How a forecast is scored</h1>
+  <p class="lede">A Pyrecast forecast says when fire will reach each patch of ground. We check that
+  against where the fire really went, counting only ground that burned <em>after</em> the forecast
+  was made. Here is one made-up fire, step by step.</p>
+
+  <h2><span class="n">1</span>The timeline</h2>
+  <div class="card timeline"><div class="scroll"><svg id="timeline" viewBox="0 0 900 214" role="img"
+    aria-label="Timeline: perimeter mapped Monday 15:40; forecast run Tuesday 07:04 right after a satellite pass; satellite detections at 13:25 and 14:05; perimeter mapped Tuesday 18:10; the 12-hour scoring window runs from 07:04 to 19:04 Tuesday."></svg></div></div>
+  <ol class="steps">
+    <li><b>Monday 15:40:</b> firefighters map the fire's perimeter. It's the latest one before the
+      forecast, so it's our <b>before</b> picture.</li>
+    <li><b>Tuesday 07:04:</b> a satellite passes over and detects heat. Pyrecast starts its forecast
+      right then, from the perimeter <em>plus</em> those satellite detections, which reach beyond the
+      perimeter where the fire has grown since Monday.</li>
+    <li>We score the forecast at fixed times after it starts. This example uses <b>12 hours</b>, so
+      the window runs from 07:04 to <b>19:04</b>. (Real runs are also scored at 24 hours and 2, 3,
+      4, 5, 7, 10 and 14 days.)</li>
+    <li><b>Tuesday 18:10:</b> a new perimeter is mapped, 0.9 hours before the window ends. It's our
+      <b>after</b> picture. A score needs a perimeter mapped within 3 hours of the window's end.</li>
+    <li>Satellite passes at 13:25 and 14:05 detect heat during the window: a second, separate check.</li>
+  </ol>
+
+  <h2><span class="n">2</span>Four maps of the same ground</h2>
+  <p>The forecast works on a grid of small squares (30 m across in reality). To keep it readable,
+  each square here stands for <b>10 acres</b>.</p>
+  <div class="panels">
+    <div class="card panel">
+      <h3><span class="tag">A</span>Before the forecast</h3>
+      <p>Gray is inside Monday's perimeter. Hatched is where the forecast started burning beyond it,
+        from the 07:04 satellite detections (dots). Together they're <b>burned before</b>: this ground
+        can't count for or against the forecast.</p>
+      <svg id="pA" role="img" aria-label="Map A: Monday's perimeter and the forecast's satellite-seeded start beyond it"></svg>
+      <div class="legend" id="lA"></div>
+    </div>
+    <div class="card panel">
+      <h3><span class="tag">B</span>The forecast</h3>
+      <p>When the forecast expects fire to arrive. Squares it expects within 12 hours (dark purple)
+        are its prediction for this window. Later arrivals don't count at 12 hours.</p>
+      <svg id="pB" role="img" aria-label="Map B: forecast arrival times; dark squares within 12 hours"></svg>
+      <div class="legend" id="lB"></div>
+    </div>
+    <div class="card panel">
+      <h3><span class="tag">C</span>What happened</h3>
+      <p>Tuesday 18:10's perimeter (red line) and the ground that burned beyond what had burned before
+        (pink). Dots are the satellite detections during the window.</p>
+      <svg id="pC" role="img" aria-label="Map C: the perimeter at the window's end and the satellite detections in the window"></svg>
+      <div class="legend" id="lC"></div>
+    </div>
+    <div class="card panel">
+      <h3><span class="tag">D</span>The score</h3>
+      <p>Lay B over C. Each square of new ground is a <b>hit</b> (predicted and burned), a
+        <b>false alarm</b> (predicted, didn't burn) or a <b>miss</b> (burned, not predicted).</p>
+      <svg id="pD" role="img" aria-label="Map D: hits, false alarms and misses"></svg>
+      <div class="legend" id="lD"></div>
+    </div>
+  </div>
+
+  <h2><span class="n">3</span>The calculation</h2>
+  <p>Count the squares in map D. Burned-before squares are left out entirely.</p>
+  <div class="calc">
+    <div class="counts">
+      <div class="count" data-bg="hit"><div class="k">Hits</div><div class="v"><span data-v="hit"></span> squares</div><div class="s"><span data-v="hitAc"></span> acres · predicted and burned</div></div>
+      <div class="count" data-bg="falseAlarm"><div class="k">False alarms</div><div class="v"><span data-v="fa"></span> squares</div><div class="s"><span data-v="faAc"></span> acres · predicted, didn't burn</div></div>
+      <div class="count" data-bg="miss"><div class="k">Misses</div><div class="v"><span data-v="miss"></span> squares</div><div class="s"><span data-v="missAc"></span> acres · burned, not predicted</div></div>
+    </div>
+    <div class="card" style="padding:0">
+      <div class="formula"><div class="name">Precision</div>
+        <div class="eq">hits ÷ (hits + false alarms) = <span class="frac"><span data-v="hit"></span> ÷ <span data-v="pred"></span></span></div>
+        <div class="res" data-v="P"></div>
+        <div class="what">Of the ground the forecast said would burn, how much did.</div></div>
+      <div class="formula"><div class="name">Recall</div>
+        <div class="eq">hits ÷ (hits + misses) = <span class="frac"><span data-v="hit"></span> ÷ <span data-v="act"></span></span></div>
+        <div class="res" data-v="R"></div>
+        <div class="what">Of the ground that burned, how much the forecast called.</div></div>
+      <div class="formula"><div class="name">IoU</div>
+        <div class="eq">hits ÷ (hits + false alarms + misses) = <span class="frac"><span data-v="hit"></span> ÷ <span data-v="union"></span></span></div>
+        <div class="res" data-v="IoU"></div>
+        <div class="what">How much the predicted and the burned areas overlap: 100% only if they match exactly.</div></div>
+      <div class="formula"><div class="name">Hotspot capture</div>
+        <div class="eq">detections inside the prediction ÷ detections on new ground = <span class="frac"><span data-v="hsIn"></span> ÷ <span data-v="hsNew"></span></span></div>
+        <div class="res" data-v="HS"></div>
+        <div class="what">The separate satellite check. The detection on burned-before ground is left out.
+          (The pipeline weighs each detection by the ground its satellite pixel covers, about 375 m across.)</div></div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <h3>Why the forecast's own start counts as burned</h3>
+    <p>Pyrecast treats the hatched squares as already burning when it starts, so it never predicts
+      fire arriving there. If we only removed Monday's perimeter, those <span data-v="start"></span>
+      squares would count as fire the forecast missed, though it was never trying to predict them.</p>
+    <p>Recall would fall from <span data-v="R"></span> to <span data-v="R0"></span>
+      (<span data-v="hit"></span> ÷ <span data-v="act0"></span>), and IoU from <span data-v="IoU"></span>
+      to <span data-v="IoU0"></span>. Precision wouldn't change. In real runs this start reaches a median
+      of about 2,400 acres beyond the perimeter.</p>
+  </div>
+
+  <h2><span class="n">4</span>The rest of the rules</h2>
+  <ul class="rules">
+    <li><b>Five versions per run.</b> Each forecast comes in five weather scenarios (the 10th to 90th
+      percentile). Each is scored on its own.</li>
+    <li><b>Many horizons.</b> Every run is scored at 12 and 24 hours and 2, 3, 4, 5, 7, 10 and 14 days,
+      each against the perimeter mapped closest to that window's end.</li>
+    <li><b>Perimeter times.</b> A perimeter is timed by when it was mapped. When that time is missing or
+      doesn't look right, we use when it was last edited instead, and record which.</li>
+    <li><b>What's shown by default.</b> A score appears in the map and the report's default view only if
+      the perimeter was mapped within 3 hours of the window's end, at least 10 acres burned that
+      weren't burned before, and no more than 10% of that growth fell off the edge of the forecast's map.</li>
+    <li><b>When the forecast's start wasn't saved.</b> For about 8% of runs, our archive missed the
+      forecast's first hour. Then every satellite detection up to the run stands in for its start.</li>
+    <li><b>Why hotspots are only a side check.</b> Satellites pass a few times a day and can't see through
+      thick smoke or cloud, so missing detections don't mean the ground didn't burn. Hotspots feed the
+      capture check only, never precision.</li>
+    <li><b>Same grid throughout.</b> The perimeters and detections are laid onto the forecast's own grid,
+      and every area above is a count of its squares.</li>
+  </ul>
+
+  <footer>Technical details, including how perimeter times are checked, are in the project's
+    <a href="https://github.com/pasha594/fire-forecast-eval#metric-definitions">README</a>.
+    The numbers on this page are computed from the example's grids as it loads.</footer>
+</main>
+
+<script>
+"use strict";
+// ---------------------------------------------------------------- the example fire
+// Each string is one row of the grid, west to east; each square is 10 acres.
+// B: inside Monday's perimeter · S: where the forecast started burning beyond it
+const BEFORE = [
+  "................",
+  "................",
+  "....BBBS........",
+  "...BBBBBS.......",
+  "..BBBBBBBS......",
+  "..BBBBBBBS......",
+  "..BBBBBBSS......",
+  "...BBBBBS.......",
+  "....BBBS........",
+  "................",
+  "................",
+];
+// the forecast's arrival time: 1 within 12h (this window), 2 within 24h, 3 later
+const FORECAST = [
+  "................",
+  "........2.......",
+  "........112.....",
+  ".........112....",
+  "..........112...",
+  "..........1123..",
+  "..........1123..",
+  ".........11123..",
+  "........12223...",
+  ".......2223.....",
+  "................",
+];
+// x: burned by the window's end, beyond what had burned before (inside Tuesday 18:10's perimeter)
+const ACTUAL = [
+  "................",
+  "......xxx.......",
+  "........xxx.....",
+  ".........xxx....",
+  "..........xx....",
+  "..........x.....",
+  "................",
+  ".........x......",
+  "................",
+  "................",
+  "................",
+];
+const PASS_AT_RUN = [[2, 7], [3, 8], [4, 9], [5, 9], [6, 8], [7, 8]];   // [row, col]: 07:04 detections
+const IN_WINDOW = [[1, 7], [2, 9], [3, 10], [4, 11], [3, 11], [6, 9]];  // 13:25 and 14:05 detections
+const ACRES = 10, ROWS = BEFORE.length, COLS = BEFORE[0].length, CELL = 22, PAD = 2;
+
+const P = window.Palette, pal = P.get(), S = P.SCORE, TOA = P.toaColors();
+const INK = "#3b1d29", NEW_BURN = "#f6d3cd", BEFORE_LIGHT = "#d9d5ce", HOT_OLD = P.hotspotColor(150), HOT_NEW = P.hotspotColor(2);
+const RING_IN = "#0a5c36", RING_OUT = "#7a1010";
+
+const at = (g, r, c) => g[r][c];
+const before = (r, c) => at(BEFORE, r, c) !== ".";
+const predicted = (r, c) => at(FORECAST, r, c) === "1";
+const burned = (r, c) => at(ACTUAL, r, c) === "x";
+function classOf(r, c) {
+  if (before(r, c)) return "base";
+  if (predicted(r, c)) return burned(r, c) ? "hit" : "falseAlarm";
+  return burned(r, c) ? "miss" : null;
+}
+
+// ---------------------------------------------------------------- the numbers
+const n = { hit: 0, fa: 0, miss: 0, start: 0 };
+for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+  const k = classOf(r, c);
+  if (k === "hit") n.hit++; else if (k === "falseAlarm") n.fa++; else if (k === "miss") n.miss++;
+  if (at(BEFORE, r, c) === "S") n.start++;
+}
+const hsNew = IN_WINDOW.filter(([r, c]) => !before(r, c));
+const hsIn = hsNew.filter(([r, c]) => predicted(r, c));
+const pct = x => `${Math.round(100 * x)}%`;
+const V = {
+  hit: n.hit, fa: n.fa, miss: n.miss, start: n.start,
+  hitAc: n.hit * ACRES, faAc: n.fa * ACRES, missAc: n.miss * ACRES,
+  pred: n.hit + n.fa, act: n.hit + n.miss, union: n.hit + n.fa + n.miss,
+  P: pct(n.hit / (n.hit + n.fa)), R: pct(n.hit / (n.hit + n.miss)), IoU: pct(n.hit / (n.hit + n.fa + n.miss)),
+  hsIn: hsIn.length, hsNew: hsNew.length, HS: pct(hsIn.length / hsNew.length),
+  // had only the perimeter been removed: the start's squares (all inside the 18:10 perimeter) become misses
+  act0: n.hit + n.miss + n.start, R0: pct(n.hit / (n.hit + n.miss + n.start)),
+  IoU0: pct(n.hit / (n.hit + n.fa + n.miss + n.start)),
+};
+for (const el of document.querySelectorAll("[data-v]")) el.textContent = V[el.dataset.v];
+for (const el of document.querySelectorAll("[data-bg]")) el.style.background = S[el.dataset.bg];
+
+// ---------------------------------------------------------------- drawing
+const NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (parent) parent.append(e);
+  return e;
+}
+const X = c => PAD + c * CELL, Y = r => PAD + r * CELL;
+
+function gridSvg(id) {
+  const svg = document.getElementById(id);
+  svg.setAttribute("viewBox", `0 0 ${COLS * CELL + 2 * PAD} ${ROWS * CELL + 2 * PAD}`);
+  const defs = svgEl("defs", {}, svg);
+  const hatch = svgEl("pattern", { id: `${id}-hatch`, width: 6, height: 6, patternUnits: "userSpaceOnUse",
+                                    patternTransform: "rotate(45)" }, defs);
+  svgEl("rect", { width: 6, height: 6, fill: BEFORE_LIGHT }, hatch);
+  svgEl("line", { x1: 0, y1: 0, x2: 0, y2: 6, stroke: S.base, "stroke-width": 3 }, hatch);
+  svgEl("rect", { x: PAD, y: PAD, width: COLS * CELL, height: ROWS * CELL, fill: "#fbf8f2" }, svg);
+  return svg;
+}
+function cell(svg, r, c, fill, opacity = 1) {
+  svgEl("rect", { x: X(c), y: Y(r), width: CELL, height: CELL, fill, "fill-opacity": opacity }, svg);
+}
+function gridLines(svg) {
+  const g = svgEl("g", { stroke: INK, "stroke-opacity": 0.07, "stroke-width": 1 }, svg);
+  for (let c = 0; c <= COLS; c++) svgEl("line", { x1: X(c), y1: Y(0), x2: X(c), y2: Y(ROWS) }, g);
+  for (let r = 0; r <= ROWS; r++) svgEl("line", { x1: X(0), y1: Y(r), x2: X(COLS), y2: Y(r) }, g);
+}
+function outline(svg, inside, color, width, dash) {
+  // the edges between squares inside and outside a set: its perimeter, drawn square by square
+  let d = "";
+  const inn = (r, c) => r >= 0 && r < ROWS && c >= 0 && c < COLS && inside(r, c);
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    if (!inn(r, c)) continue;
+    if (!inn(r - 1, c)) d += `M${X(c)} ${Y(r)}h${CELL}`;
+    if (!inn(r + 1, c)) d += `M${X(c)} ${Y(r + 1)}h${CELL}`;
+    if (!inn(r, c - 1)) d += `M${X(c)} ${Y(r)}v${CELL}`;
+    if (!inn(r, c + 1)) d += `M${X(c + 1)} ${Y(r)}v${CELL}`;
+  }
+  svgEl("path", { d, fill: "none", stroke: color, "stroke-width": width, "stroke-linecap": "square",
+                  ...(dash ? { "stroke-dasharray": dash } : {}) }, svg);
+}
+function dot(svg, r, c, fill) {
+  svgEl("circle", { cx: X(c) + CELL / 2, cy: Y(r) + CELL / 2, r: 4.6, fill, stroke: "#fff", "stroke-width": 1.5 }, svg);
+}
+function ring(svg, r, c, color) {
+  svgEl("circle", { cx: X(c) + CELL / 2, cy: Y(r) + CELL / 2, r: 4.2, fill: "#fff", stroke: color, "stroke-width": 2.2 }, svg);
+}
+function legend(id, items) {
+  document.getElementById(id).innerHTML = items.map(([kind, color, label]) =>
+    `<span><i class="sw ${kind}" style="${kind === "ring" ? `border-color:${color}` : kind === "line" ? `border-top-color:${color}` : `background:${color}`}"></i>${label}</span>`).join("");
+}
+const each = fn => { for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) fn(r, c); };
+
+// A: before the forecast
+{
+  const svg = gridSvg("pA");
+  each((r, c) => {
+    if (at(BEFORE, r, c) === "B") cell(svg, r, c, S.base);
+    else if (at(BEFORE, r, c) === "S") cell(svg, r, c, "url(#pA-hatch)");
+  });
+  gridLines(svg);
+  outline(svg, (r, c) => at(BEFORE, r, c) === "B", pal.perimeter, 2.5, "5 3");
+  for (const [r, c] of PASS_AT_RUN) dot(svg, r, c, HOT_OLD);
+  legend("lA", [["", S.base, "Monday's perimeter"],
+                ["", `repeating-linear-gradient(135deg, ${S.base} 0 2px, ${BEFORE_LIGHT} 2px 4px)`, `forecast's start beyond it · ${n.start} squares`],
+                ["dot", HOT_OLD, "satellite detections at 07:04"]]);
+}
+// B: the forecast
+{
+  const svg = gridSvg("pB");
+  each((r, c) => {
+    if (before(r, c)) cell(svg, r, c, BEFORE_LIGHT);
+    const f = at(FORECAST, r, c);
+    if (f === "1") cell(svg, r, c, TOA[0]);
+    else if (f !== ".") cell(svg, r, c, TOA[+f], 0.35);
+  });
+  gridLines(svg);
+  legend("lB", [["", TOA[0], `within 12 hours · ${V.pred} squares`],
+                ["", TOA[2] + "59", "later (not counted at 12h)"],
+                ["", BEFORE_LIGHT, "burned before"]]);
+}
+// C: what happened
+{
+  const svg = gridSvg("pC");
+  each((r, c) => {
+    if (before(r, c)) cell(svg, r, c, BEFORE_LIGHT);
+    else if (burned(r, c)) cell(svg, r, c, NEW_BURN);
+  });
+  gridLines(svg);
+  outline(svg, (r, c) => before(r, c) || burned(r, c), pal.perimeter, 3);
+  for (const [r, c] of IN_WINDOW) dot(svg, r, c, HOT_NEW);
+  legend("lC", [["line", pal.perimeter, "Tuesday 18:10 perimeter"],
+                ["", NEW_BURN, `new burned ground · ${V.act} squares`],
+                ["dot", HOT_NEW, "detections 13:25–14:05"]]);
+}
+// D: the score
+{
+  const svg = gridSvg("pD");
+  each((r, c) => { const k = classOf(r, c); if (k) cell(svg, r, c, S[k]); });
+  gridLines(svg);
+  for (const [r, c] of IN_WINDOW) ring(svg, r, c, before(r, c) ? "#9b978f" : predicted(r, c) ? RING_IN : RING_OUT);
+  legend("lD", [["", S.hit, `hit · ${n.hit}`], ["", S.falseAlarm, `false alarm · ${n.fa}`],
+                ["", S.miss, `miss · ${n.miss}`], ["", S.base, "burned before (left out)"],
+                ["ring", RING_IN, "detection inside the prediction"], ["ring", RING_OUT, "outside it"]]);
+}
+
+// ---------------------------------------------------------------- the timeline
+{
+  const svg = document.getElementById("timeline");
+  const T0 = 12, T1 = 48, x = h => 30 + (h - T0) / (T1 - T0) * 840;   // hours from Monday 00:00
+  const AXIS = 128, RUN = 24 + 7 + 4 / 60, END = RUN + 12;
+  const text = (s, attrs) => { const t = svgEl("text", { "font-size": 13, fill: INK, ...attrs }, svg); t.textContent = s; return t; };
+  // the window
+  svgEl("rect", { x: x(RUN), y: AXIS - 16, width: x(END) - x(RUN), height: 32, rx: 4, fill: TOA[0], "fill-opacity": 0.16 }, svg);
+  text("12-hour scoring window: Tue 07:04 → 19:04", { x: (x(RUN) + x(END)) / 2, y: AXIS + 36, "text-anchor": "middle", "font-weight": 600, fill: TOA[0] });
+  // axis and day ticks
+  svgEl("line", { x1: x(T0), y1: AXIS, x2: x(T1), y2: AXIS, stroke: INK, "stroke-opacity": 0.35, "stroke-width": 1.5 }, svg);
+  for (let h = T0; h <= T1; h += 6) {
+    svgEl("line", { x1: x(h), y1: AXIS - 4, x2: x(h), y2: AXIS + 4, stroke: INK, "stroke-opacity": 0.35 }, svg);
+    const day = ["Mon", "Tue", "Wed"][Math.floor(h / 24)], hh = String(h % 24).padStart(2, "0");
+    text(`${day} ${hh}:00`, { x: x(h), y: 204, "text-anchor": "middle", "font-size": 12, fill: "#806c74" });
+  }
+  // events above the axis: [hour, title, subtitle, color, kind]
+  const events = [
+    [15 + 40 / 60, "Perimeter mapped · Mon 15:40", "the before picture", pal.perimeter, "perim"],
+    [RUN, "Forecast run · Tue 07:04", "starts from the perimeter + this pass", "#c98a1b", "run"],
+    [24 + 18 + 10 / 60, "Perimeter mapped · Tue 18:10", "the after picture", pal.perimeter, "perim"],
+  ];
+  for (const [h, title, sub, color, kind] of events) {
+    svgEl("line", { x1: x(h), y1: 50, x2: x(h), y2: AXIS, stroke: color, "stroke-width": 1.5, "stroke-dasharray": "3 3" }, svg);
+    if (kind === "perim") svgEl("rect", { x: x(h) - 6, y: AXIS - 6, width: 12, height: 12, rx: 2, fill: "#fff", stroke: color, "stroke-width": 2.5 }, svg);
+    else svgEl("path", { d: `M${x(h)} ${AXIS - 9}l9 9l-9 9l-9 -9z`, fill: "#ffbd5a", stroke: color, "stroke-width": 1.5 }, svg);
+    text(title, { x: x(h), y: 24, "text-anchor": "middle", "font-weight": 700 });
+    text(sub, { x: x(h), y: 42, "text-anchor": "middle", "font-size": 12, fill: "#6b555d" });
+  }
+  // satellite passes: the one the run started from, and the two inside the window
+  svgEl("circle", { cx: x(RUN) - 16, cy: AXIS, r: 5, fill: HOT_OLD, stroke: "#fff", "stroke-width": 1.5 }, svg);
+  for (const h of [24 + 13 + 25 / 60, 24 + 14 + 5 / 60]) svgEl("circle", { cx: x(h), cy: AXIS, r: 5, fill: HOT_NEW, stroke: "#fff", "stroke-width": 1.5 }, svg);
+  text("satellite detections", { x: x(24 + 13.75), y: AXIS - 24, "text-anchor": "middle", "font-size": 12, fill: HOT_NEW, "font-weight": 600 });
+  svgEl("line", { x1: x(END), y1: AXIS - 16, x2: x(END), y2: AXIS + 16, stroke: TOA[0], "stroke-width": 2 }, svg);
+}
+</script>
+</body>
+</html>
