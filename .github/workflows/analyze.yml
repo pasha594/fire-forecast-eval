@@ -13,6 +13,10 @@ on:
         description: Compute everything but publish nothing (results as a run artifact)
         type: boolean
         default: false
+      only:
+        description: "One fire's slug (e.g. ca-dome): score and publish just it (its skill file, start footprints, merged index); metrics.csv stays as published"
+        type: string
+        default: ""
 
 concurrency:
   # a dry run never holds up (or waits for) the scheduled publishing runs
@@ -43,7 +47,11 @@ jobs:
           restore-keys: raw-analyze-
       - name: "Dry run - sync + analyze, publish nothing"
         if: ${{ inputs.dry_run && !inputs.skill_only }}
-        run: python analyze.py --sync
+        env:
+          ONLY: ${{ inputs.only }}
+        run: |
+          [[ -z "$ONLY" || "$ONLY" =~ ^[a-z0-9-]+$ ]] || { echo "bad slug: $ONLY"; exit 1; }
+          python analyze.py --sync ${ONLY:+--only "$ONLY"}
       - name: Dry run summary (vs the published metrics.csv)
         if: ${{ inputs.dry_run && !inputs.skill_only }}
         run: |
@@ -86,7 +94,10 @@ jobs:
           S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
           S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
           S3_BUCKET: ${{ vars.S3_BUCKET || 'fire-forecast-archive' }}
-        run: python analyze.py --sync --publish
+          ONLY: ${{ inputs.only }}
+        run: |
+          [[ -z "$ONLY" || "$ONLY" =~ ^[a-z0-9-]+$ ]] || { echo "bad slug: $ONLY"; exit 1; }
+          python analyze.py --sync --publish ${ONLY:+--only "$ONLY"}
       - name: Rebuild skill files from the published metrics.csv
         if: ${{ inputs.skill_only }}
         env:

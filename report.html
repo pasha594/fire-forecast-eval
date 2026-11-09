@@ -192,7 +192,11 @@ function filtered() {
   const model = document.getElementById("fModel").value, chosen = document.getElementById("fChosen").value;
   // only when the data says which time each perimeter used (older metrics.csv files don't)
   const mappedOnly = !document.getElementById("fMappedWrap").hidden && document.getElementById("fMapped").checked;
-  return DATA.filter(r =>
+  // an older metrics.csv (fixed horizons, until the first exact-lead run publishes): its rows
+  // were only meaningful under the old default filters, so those still apply to it
+  const legacy = r => r.chosen === undefined &&
+    !(r.act_new_acres !== null && r.act_new_acres >= 10 && Math.abs(r.actual_offset_h) <= 3 && r.act_offgrid_frac <= 0.10);
+  return DATA.filter(r => !legacy(r) &&
     (!model || r.model === model) && (!chosen || r.chosen === chosen) &&
     (!mappedOnly || (r.actual_time_basis === "mapped" &&
                      (!r.baseline_perim_ms || r.baseline_time_basis === "mapped"))));
