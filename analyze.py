@@ -996,23 +996,13 @@ def build_skill(csv_path, out_dir):
     return len(index), sum(index.values())
 
 
-def publish_skill(client, bucket, csv_path):
-    n_fires, n_rows = build_skill(csv_path, SKILL_DIR)
-    index = SKILL_DIR / "index.json"
-    files = sorted(SKILL_DIR.glob("*.json"))
-    # the start footprints the skill files name, uploaded first so a page never meets a
-    # name before its file; on a --skill-only rebuild there are none here, and the bucket
-    # keeps the last full run's
-    masks = []
-    for p in files:
-        if p != index:
-            doc = json.loads(p.read_text())
-            masks += [START_DIR / doc["slug"] / f"{run_ts}.tif" for run_ts in doc.get("starts", {})]
-    masks = [m for m in masks if m.exists()]
-
-    def put(p):
-        client.upload_file(str(p), bucket, f"skill/{p.name}",
-                           ExtraArgs={"ContentType": "application/json"})
+def publish_starts(client, bucket):
+    """Upload the start footprint of every run compute() scored with one, to
+    skill/start/<slug>/<run_ts>.tif. Every run, not just the ones the skill files name:
+    the report redraws whichever row it's asked to, default filters or not. Called before
+    metrics.csv goes up, so a page never meets a row whose footprint isn't there yet; a
+    --skill-only rebuild has none here, and the bucket keeps the last full run's."""
+    masks = sorted(START_DIR.glob("*/*.tif"))
 
     def put_mask(p):
         client.upload_file(str(p), bucket, f"skill/start/{p.parent.name}/{p.name}",
@@ -1020,11 +1010,25 @@ def publish_skill(client, bucket, csv_path):
 
     with concurrent.futures.ThreadPoolExecutor(SKILL_UPLOAD_WORKERS) as ex:
         list(ex.map(put_mask, masks))
+    log(f"published {len(masks)} start footprints")
+    return len(masks)
+
+
+def publish_skill(client, bucket, csv_path):
+    # the start footprints the skill files name are already up (publish_starts)
+    n_fires, n_rows = build_skill(csv_path, SKILL_DIR)
+    index = SKILL_DIR / "index.json"
+    files = sorted(SKILL_DIR.glob("*.json"))
+
+    def put(p):
+        client.upload_file(str(p), bucket, f"skill/{p.name}",
+                           ExtraArgs={"ContentType": "application/json"})
+
+    with concurrent.futures.ThreadPoolExecutor(SKILL_UPLOAD_WORKERS) as ex:
         list(ex.map(put, [p for p in files if p != index]))
     # index last, so it never lists a slug whose file is not uploaded yet
     put(index)
-    log(f"published skill files: {n_fires} fires, {n_rows} rows, {len(files)} files, "
-        f"{len(masks)} start footprints")
+    log(f"published skill files: {n_fires} fires, {n_rows} rows, {len(files)} files")
 
 
 def skill_only():
@@ -1126,6 +1130,7 @@ def main():
     if args.publish:
         import collect
         client, bucket = collect.make_r2()
+        publish_starts(client, bucket)   # before metrics.csv, which names them
         client.upload_file(str(REPO / "data" / "metrics.csv"), bucket, "metrics.csv",
                            ExtraArgs={"ContentType": "text/csv"})
         log("published metrics.csv to bucket")

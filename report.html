@@ -442,8 +442,11 @@ async function renderInspection(row) {
       if (!INS.cacheGj.has(ms)) INS.cacheGj.set(ms, await fetchArchive(BUCKET_KEYS.perim(row, ms), true));
       return INS.cacheGj.get(ms);
     };
+    // a start footprint that won't load doesn't stop the drawing: it's drawn from the
+    // baseline perimeter alone, and the stats say so (startLost)
+    let startLost = false;
     const [baseGj, actGj, startMask] = await Promise.all([getGj(row.baseline_perim_ms), getGj(row.actual_perim_ms),
-                                                         fetchStartMask(row, meta)]);
+      fetchStartMask(row, meta).catch(() => { startLost = true; return null; })]);
     const baseMask = baseGj ? rasterizeMask(projectRings(baseGj, fwd), meta) : new Uint8Array(meta.width * meta.height);
     // burned before = the baseline perimeter + the start footprint
     if (startMask) for (let i = 0; i < baseMask.length; i++) baseMask[i] |= startMask[i];
@@ -538,7 +541,11 @@ async function renderInspection(row) {
       `<td>${fmtA(row.act_new_acres - row.inter_acres)} ac</td><td>${fmtA(row.burned_before_acres ?? row.baseline_acres)} ac</td>` +
       `<td>${row.precision ?? ""}</td><td>${row.recall ?? ""}</td></tr></tbody></table>` +
       `<p class="note">precision = hit / (hit + false&nbsp;alarm) · recall = hit / (hit + miss). Small ` +
-      `differences vs the pipeline come from canvas vs GDAL polygon rasterization at the pixel edge.</p>`;
+      `differences vs the pipeline come from canvas vs GDAL polygon rasterization at the pixel edge.</p>` +
+      (startLost ? `<p class="note" style="color:var(--warn)">The start footprint this row was scored with ` +
+        `(${fmtA(Math.max(0, (row.burned_before_acres ?? 0) - (row.baseline_acres ?? 0)))} ac beyond the baseline) ` +
+        `couldn't be loaded, so the in-browser row counts only the baseline perimeter as burned before ` +
+        `and won't match the pipeline's.</p>` : "");
   } catch (e) {
     stats.innerHTML = `<p class="note" style="color:var(--warn)">couldn't render: ${e && (e.message || e)}</p>`;
   } finally {

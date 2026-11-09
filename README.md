@@ -66,8 +66,8 @@ skill/{slug}.json  {"v": 3, "slug", "generated", "filters": {...},
                     "starts": {"<run_ts>": "pyrecast" | "hotspots", ...},
                     "runs": {"<run_ts>": {"<pct>": [[H, precision, recall, iou,
                       baseline_perim_ms, actual_perim_ms, actual_offset_h, actual_mapped], ...]}}}
-skill/start/{slug}/{run_ts}.tif   the start footprint each run in "starts" was scored with
-                    (uint8, 1 = burned when the run began, on the forecast's grid)
+skill/start/{slug}/{run_ts}.tif   the start footprint a run was scored with, for every run
+                    scored with one (uint8, 1 = burned when the run began, on the forecast's grid)
 ```
 
 Rows use the metrics report's default filters exactly (actual growth ≥ 10 acres,
@@ -82,9 +82,12 @@ before the run), the scored perimeter's hours from the window end (2 decimals), 
 then offers no hits & misses view. v3 adds `starts`: the runs whose burned-before
 area takes in a start footprint beyond the baseline perimeter (see Metric
 definitions), and where it came from; the map and report add
-`skill/start/{slug}/{run_ts}.tif` to the baseline when they redraw a row. A
-`--skill-only` rebuild uploads no footprints: the last full run's stay in the
-bucket. On localhost the map reads `data/skill/` first,
+`skill/start/{slug}/{run_ts}.tif` to the baseline when they redraw a row. Footprints
+go up for every run scored with one, not just the runs in `starts`, since the report
+redraws rows outside the default filters too, and they go up before `metrics.csv`,
+so no published row names a footprint that isn't there yet. If one still won't load,
+the report draws the row without it and says so. A `--skill-only` rebuild uploads no
+footprints: the last full run's stay in the bucket. On localhost the map reads `data/skill/` first,
 so `analyze.py` output can be checked before it's published. Fires that
 drop out keep a stale `skill/{slug}.json` in the bucket, but are no longer
 listed. To rebuild just these files from the already-published `metrics.csv`
