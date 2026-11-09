@@ -2,8 +2,11 @@
 """Growth-only precision/recall of archived ELMFIRE forecasts vs Cornea perimeters.
 
 Reads the archive in raw/ (populate with `collect.py --local`, or sync a bucket
-with --sync-url) and writes data/metrics.csv. One row per
-(fire, forecast run, percentile, horizon) that has ground truth close enough.
+with --sync-url) and writes data/metrics.csv. One row per (model, fire, forecast run,
+percentile, perimeter): each run is scored against perimeters at each perimeter's own
+time (its exact lead, no tolerance), as scored_perimeters() picks them, and every row is
+kept (no growth, offset or off-grid filters). score_grid() is the scorer every model
+uses (the FARSITE hindcast calls it too).
 
   analyze.py                          compute metrics
   analyze.py --sync-url https://pub-xxx.r2.dev   sync bucket -> raw/ first
@@ -35,7 +38,16 @@ import numpy as np
 # run_ts is UTC (tif Last-Modified ≈ run_ts + ~3h processing lag).
 TOA_TO_HOURS = 1.0
 
-HORIZONS_H = (12, 24, 48, 72, 96, 120, 168, 240, 336)
+# Each run is scored against perimeters over its first SCORE_DAYS days (a day = 24 h from
+# the run's start), each at its own time: every perimeter with a mapped time; on a day with
+# none, the latest perimeter published that day (timed by its last edit, not a re-publish of
+# an earlier shape); and, so no analysis shown before Nov 2026 is lost, the perimeter the
+# previous method scored at each of its fixed lead times (OLD_HORIZONS_H: the one nearest
+# run + H within ACTUAL_TOL_H, shown when within OLD_MAX_OFFSET_H), rescored at its own time.
+SCORE_DAYS = 7
+OLD_HORIZONS_H = (12, 24, 48, 72, 96, 120, 168, 240, 336)
+OLD_MAX_OFFSET_H = 3
+MODEL = "pyrecast"
 PUBLIC_BUCKET_URL = "https://f005.backblazeb2.com/file/fire-forecast-archive"
 # baseline = latest perimeter mapped <= run + this. run_ts is cut to the minute, and is
 # the time of whatever the run started from: sometimes a perimeter, usually a satellite pass
@@ -52,7 +64,7 @@ START_CODES = (400, 401)
 START_FILE = "start.tif"           # raw/forecast_archive/<slug>/<run_ts>/, the granule as published
 START_NONE = "start.none.json"     # beside it when no archived tar holds that granule: {"checked": [pct, ...]}
 START_PCT_ORDER = ("50", "30", "70", "10", "90")
-ACTUAL_TOL_H = 12.0      # actual = perimeter mapped (else edited/published) within +/- this of run + H
+ACTUAL_TOL_H = 12.0      # the previous method: perimeter mapped (else edited/published) within +/- this of run + H
 # Perimeter times (see PerimeterSet): a snapshot's file key / Cornea date is its last
 # EDIT (poly_DateCurrent), a median ~17h after the polygon was mapped. The mapped time is
 # poly_PolygonDateTime, used only if it is plausible and the geometry still matches the
@@ -70,22 +82,38 @@ RAW = REPO / "raw"
 SKILL_DIR = REPO / "data" / "skill"
 START_DIR = SKILL_DIR / "start"    # <slug>/<run_ts>.tif, published as skill/start/...
 
-# must stay equal to report.html's default filter inputs
-SKILL_FILTERS = {"min_act_new_acres": 10, "max_abs_offset_h": 3, "max_offgrid_frac": 0.10}
 SKILL_UPLOAD_WORKERS = 16
+SKILL_INDEX_EVERY_S = 300   # --publish: the merged skill index goes up at most this often mid-run
 
-CSV_COLUMNS = ["slug", "cornea_id", "run_ts", "run_dt_utc", "percentile",
-               "horizon_h", "valid_dt_utc", "baseline_perim_ms", "baseline_time_utc",
+# lead_h: hours from the run's start to the perimeter's time (mapped, else last edited);
+# day: 1-7 (24 h periods from the run's start; later only for "previous" picks);
+# chosen: why that perimeter is scored (see scored_perimeters): mapped | daily | previous
+CSV_COLUMNS = ["model", "slug", "cornea_id", "run_ts", "run_dt_utc", "percentile",
+               "lead_h", "day", "chosen", "baseline_perim_ms", "baseline_time_utc",
                "baseline_time_basis", "baseline_offset_h", "actual_perim_ms", "actual_time_utc",
-               "actual_time_basis", "actual_offset_h", "pixel_m", "baseline_acres",
+               "actual_time_basis", "pixel_m", "baseline_acres",
                "start_basis", "start_acres", "burned_before_acres", "pred_total_acres", "pred_new_acres", "act_new_acres", "inter_acres",
                "precision", "recall", "iou", "act_outside_acres", "act_offgrid_frac",
                "hs_n", "hs_new_acres", "hs_hit_acres", "hs_capture",
-               "expired_run", "notes"]
+               "hs_artifact_n", "hs_transient_n", "expired_run", "notes"]
 
 # satellite active-fire footprint radii (m): VIIRS 375m px, MODIS 1km px
 HS_RADIUS_VIIRS = 187.5
 HS_RADIUS_MODIS = 500.0
+# Detections that don't look like the fire are left out of the hotspot metric instead
+# of counting as misses against the forecast (see HotspotSet._screen):
+#  artifact:  farther than HS_ARTIFACT_M from the perimeter current when it was detected,
+#             and its footprint never touches a perimeter mapped after it. Without a
+#             perimeter before it, or until one is mapped after it, it can't be judged
+#             and is kept.
+#  transient: no other detection within HS_PERSIST_M on any satellite's nearest pass
+#             before or after its own (its own satellite's included), so a source that
+#             revisits rarely, like Landsat every 8-16 days, is confirmed by the daily
+#             ones. A radius, not the same spot: the detected location shifts between
+#             passes with the view angle and as the fire moves.
+HS_ARTIFACT_M = 1000.0
+HS_PERSIST_M = 1000.0
+HS_PASS_GAP_S = 20 * 60   # one source's detections closer in time than this are one overpass
 
 
 def log(msg):
@@ -401,8 +429,9 @@ class PerimeterSet:
         self.corrections = {}   # mapped time -> sorted [(edit dt, epochms)] of that capture
         self.published = []     # sorted [(edit dt, epochms)]: every snapshot
         self.time_of = {}       # epochms -> (time, basis) for every snapshot
+        self.republished = set()   # edited snapshots that re-publish an earlier snapshot's shape
         self.unreadable = 0
-        by_capture = {}
+        by_capture, shape_of = {}, {}
         idx = load_json(RAW / "perimeter_archive" / slug / "index.json")
         for item in (idx or {}).get("index", []):
             path, date = item.get("path"), item.get("date")
@@ -423,6 +452,7 @@ class PerimeterSet:
             pr = parts[0][1] if parts else {}
             edited = parse_iso(date)
             self.published.append((edited, epochms))
+            shape_of[epochms] = hash(json.dumps([g for g, _ in parts], sort_keys=True))
             cap, disc = pr.get("poly_PolygonDateTime"), pr.get("attr_FireDiscoveryDateTime")
             # plausible: at most CAPTURE_LATE_S after its own edit, and no earlier than a day
             # before discovery (61 days before the edit if discovery is unknown): catches
@@ -449,6 +479,11 @@ class PerimeterSet:
                 self.timeline.append((mapped, same[-1][1], "mapped"))
         self.timeline.sort()
         self.published.sort()
+        seen = set()
+        for _, e in self.published:
+            if shape_of.get(e) in seen and self.time_of.get(e, (None, ""))[1] == "edited":
+                self.republished.add(e)
+            seen.add(shape_of.get(e))
         self._geom_utm = {}   # (epochms, crs_str) -> shapely geom in raster CRS
         self._mask = {}       # (epochms, grid_sig) -> bool ndarray
 
@@ -531,10 +566,14 @@ class HotspotSet:
     """Timestamped VIIRS/MODIS detections for one fire. Unlike perimeters these
     carry exact acquisition times, so windows need no tolerance: a detection
     either falls inside (run, run+H] or it doesn't. Footprints are rasterized
-    at instrument resolution (VIIRS 375m px -> r=187.5m, MODIS 1km -> r=500m)."""
+    at instrument resolution (VIIRS 375m px -> r=187.5m, MODIS 1km -> r=500m).
 
-    def __init__(self, slug):
-        self.pts = []  # (dt, lon, lat, radius_m)
+    Every detection is screened once against the fire's whole record (see
+    HS_ARTIFACT_M): only those that pass are scored; the rest are left out of
+    the metric, neither captured nor missed."""
+
+    def __init__(self, slug, ps=None):
+        self.pts = []  # (dt, lon, lat, radius_m, source)
         for p in sorted((RAW / "hotspot_archive" / slug).glob("*.geojson")):
             try:
                 gj = json.loads(p.read_text())
@@ -554,19 +593,127 @@ class HotspotSet:
                 src = (pr.get("source") or "").lower()
                 r = (HS_RADIUS_MODIS if ("terra" in src or "aqua" in src or "modis" in src)
                      else HS_RADIUS_VIIRS)
-                self.pts.append((dt, c[0], c[1], r))
-        self.pts.sort(key=lambda x: x[0])
+                self.pts.append((dt, c[0], c[1], r, src))
+        self.pts.sort(key=lambda x: (x[0], x[4]))
+        # "ok", "artifact" or "transient", per detection
+        self.status = (self._screen(ps) if ps is not None and ps.timeline and self.pts
+                       else ["ok"] * len(self.pts))
         self._mask = {}
 
-    def mask(self, t0, t1, crs, transform, shape_):
+    def _screen(self, ps):
+        import shapely
+        from rasterio.warp import transform as warp_transform
+        n = len(self.pts)
+        lons = np.array([p[1] for p in self.pts])
+        lats = np.array([p[2] for p in self.pts])
+        zone = int((np.median(lons) + 180) // 6) % 60 + 1
+        crs = f"EPSG:{(32600 if np.median(lats) >= 0 else 32700) + zone}"
+        xs, ys = (np.asarray(v) for v in warp_transform("EPSG:4326", crs, lons.tolist(), lats.tolist()))
+        status = np.full(n, "ok", dtype=object)
+
+        # 1. artifacts: far from the perimeter current at detection, never inside a later one
+        current, groups = {}, {}
+        for i, p in enumerate(self.pts):
+            if p[0] not in current:
+                c = ps.latest_at_or_before(p[0])
+                current[p[0]] = c[1] if c else None
+            if current[p[0]] is not None:
+                groups.setdefault(current[p[0]], []).append(i)
+
+        def near(epochms, idx, dist):
+            """which detections idx lie within dist (m, scalar or per detection) of a perimeter"""
+            # prepared containment first, distance only for the few outside: plain
+            # distance() on a 47k-vertex perimeter cost ~17s for one fire
+            g = ps.geom_utm(epochms, crs)
+            shapely.prepare(g)
+            pts = shapely.points(xs[idx], ys[idx])
+            out = shapely.intersects(g, pts)
+            rest = ~out
+            if rest.any():
+                out[rest] = shapely.dwithin(g, pts[rest], np.broadcast_to(dist, out.shape)[rest])
+            return out
+
+        far = np.zeros(n, dtype=bool)
+        for epochms, idx in groups.items():
+            idx = np.asarray(idx)
+            far[idx] = ~near(epochms, idx, HS_ARTIFACT_M)
+        far_idx = np.flatnonzero(far)
+        if far_idx.size:
+            t = np.array([self.pts[i][0].timestamp() for i in far_idx])
+            r = np.array([self.pts[i][3] for i in far_idx])
+            judged = np.zeros(far_idx.size, dtype=bool)    # some perimeter was mapped after it
+            touched = np.zeros(far_idx.size, dtype=bool)   # and its footprint touches one of those
+            for pt, epochms, _ in ps.timeline:
+                later = t < pt.timestamp()
+                judged |= later
+                chk = later & ~touched
+                if chk.any():
+                    touched[chk] = near(epochms, far_idx[chk], r[chk])
+            status[far_idx[judged & ~touched]] = "artifact"
+
+        # 2. transients, among the rest: a pass is one source's detections less than
+        # HS_PASS_GAP_S apart; a detection needs one within HS_PERSIST_M on some
+        # source's nearest pass before or after its own (its own source's included)
+        by_src = {}
+        for i in np.flatnonzero(status == "ok"):
+            by_src.setdefault(self.pts[i][4], []).append(i)
+        passes = {}   # source -> its passes in time order
+        for s, idx in by_src.items():
+            runs, run = [], [idx[0]]
+            for a, b in zip(idx, idx[1:]):
+                if (self.pts[b][0] - self.pts[a][0]).total_seconds() > HS_PASS_GAP_S:
+                    runs.append(run)
+                    run = []
+                run.append(b)
+            runs.append(run)
+            passes[s] = [np.asarray(r) for r in runs]
+        starts = {s: np.array([self.pts[r[0]][0].timestamp() for r in pl])
+                  for s, pl in passes.items()}
+        r2 = HS_PERSIST_M ** 2
+
+        def confirmed(a, b):
+            """which of pass a's detections have one of pass b's within HS_PERSIST_M"""
+            out = np.zeros(a.size, dtype=bool)
+            step = max(1, 2_000_000 // b.size)   # caps the pairwise block at ~16 MB
+            for s in range(0, a.size, step):
+                aa = a[s:s + step]
+                out[s:s + step] = (((xs[aa, None] - xs[None, b]) ** 2 +
+                                    (ys[aa, None] - ys[None, b]) ** 2) <= r2).any(axis=1)
+            return out
+
+        for s0, pl0 in passes.items():
+            for k, ix in enumerate(pl0):
+                nb = []
+                for s, pl in passes.items():
+                    if s == s0:
+                        j = k   # its own source: the passes either side of this one
+                        before, after = j - 1, j + 1
+                    else:       # another: its last pass starting before, first after
+                        j = int(np.searchsorted(starts[s], starts[s0][k]))
+                        before, after = j - 1, j
+                    nb += [pl[x] for x in (before, after) if 0 <= x < len(pl)]
+                ok = (confirmed(ix, np.concatenate(nb)) if nb
+                      else np.zeros(ix.size, dtype=bool))
+                status[ix[~ok]] = "transient"
+        return status.tolist()
+
+    def mask(self, t0, t1, crs, transform, shape_, screened=True):
+        """-> (footprint mask of the screened-in detections in (t0, t1], how many there
+        are, {"artifact": n, "transient": n} of those in the window left out).
+        screened=False takes every detection (RunStart: what a run was seeded from)."""
         from rasterio import features
         from rasterio.warp import transform as warp_transform
         from shapely.geometry import Point, mapping
-        key = (t0, t1, str(crs), tuple(transform)[:6], shape_)
+        key = (t0, t1, str(crs), tuple(transform)[:6], shape_, screened)
         if key not in self._mask:
-            sel = [p for p in self.pts if t0 < p[0] <= t1]
+            win = [i for i, p in enumerate(self.pts) if t0 < p[0] <= t1]
+            sel = [self.pts[i] for i in win if self.status[i] == "ok" or not screened]
+            left_out = {"artifact": 0, "transient": 0}
+            for i in win:
+                if self.status[i] != "ok" and screened:
+                    left_out[self.status[i]] += 1
             if not sel:
-                self._mask[key] = (np.zeros(shape_, dtype=bool), 0)
+                self._mask[key] = (np.zeros(shape_, dtype=bool), 0, left_out)
             else:
                 xs, ys = warp_transform("EPSG:4326", crs,
                                         [p[1] for p in sel], [p[2] for p in sel])
@@ -574,7 +721,7 @@ class HotspotSet:
                          for x, y, p in zip(xs, ys, sel)]
                 m = features.rasterize(geoms, out_shape=shape_, transform=transform,
                                        fill=0, dtype="uint8").astype(bool)
-                self._mask[key] = (m, len(sel))
+                self._mask[key] = (m, len(sel), left_out)
         return self._mask[key]
 
 
@@ -619,7 +766,7 @@ class RunStart:
                 m = on_grid(*self._src, crs, tfm, shape_)
             elif self.basis == "hotspots":
                 m = self._hs.mask(datetime(1970, 1, 1, tzinfo=timezone.utc), self._run_dt,
-                                  crs, tfm, shape_)[0]
+                                  crs, tfm, shape_, screened=False)[0]
             else:
                 m = np.zeros(shape_, dtype=bool)
             self._grids[key] = m
@@ -636,7 +783,95 @@ def write_start_mask(path, m, crs, tfm):
         ds.write(m.astype(np.uint8), 1)
 
 
-def compute(only_slug=None):
+def scored_perimeters(ps, run_dt):
+    """The perimeters a run is scored against, each at its own time -> sorted
+    [(time, epochms, basis, chosen, day)], day = 24 h periods from the run's start:
+      mapped    every perimeter with a mapped time in the run's first SCORE_DAYS days
+      daily     on a day with none, the latest perimeter published that day: timed by its
+                last edit (its mapped time unknown), not a re-publish of an earlier shape
+      previous  the perimeter the previous method scored at each of its lead times (nearest
+                run + H within ACTUAL_TOL_H, shown when within OLD_MAX_OFFSET_H), so no analysis
+                shown before is lost; it may lie beyond SCORE_DAYS (the old 10 and 14 days)"""
+    end = run_dt + timedelta(days=SCORE_DAYS)
+    day = lambda t: int(((t - run_dt).total_seconds() - 1e-6) // 86400) + 1
+    out = {}
+    for t, e, b in ps.timeline:
+        if b == "mapped" and run_dt < t <= end:
+            out[e] = (t, e, b, "mapped")
+    timed_days = {day(t) for t, *_ in out.values()}
+    for k in range(1, SCORE_DAYS + 1):
+        if k in timed_days:
+            continue
+        d0, d1 = run_dt + timedelta(days=k - 1), run_dt + timedelta(days=k)
+        cands = [(t, e, b) for t, e, b in ps.timeline
+                 if b == "edited" and d0 < t <= d1 and e not in ps.republished]
+        if cands:
+            t, e, b = max(cands)
+            out[e] = (t, e, b, "daily")
+    for H in OLD_HORIZONS_H:
+        a = ps.nearest(run_dt + timedelta(hours=H), ACTUAL_TOL_H)
+        if a and abs(a[2]) <= OLD_MAX_OFFSET_H and a[0] > run_dt and a[1] not in out:
+            out[a[1]] = (a[0], a[1], a[3], "previous")
+    return sorted((t, e, b, c, day(t)) for t, e, b, c in out.values())
+
+
+def score_grid(toa_h, valid, crs, tfm, grid_box, ps, hs, run_dt, perims, before, b_geom, start_extra):
+    """Growth-only scores of one forecast (time of arrival in hours since run_dt on a grid)
+    against each perimeter in perims (scored_perimeters), at the perimeter's own time: the
+    predicted area is where the forecast has burned by then. The same for every model.
+      before       bool grid mask of what had burned when the run began: the baseline
+                   perimeter plus every model's start for the run (one common start)
+      b_geom       the baseline perimeter in the grid's CRS, or None
+      start_extra  bool grid mask of the part of `before` beyond the baseline
+    No growth: precision 0 and IoU 0 if the forecast predicted growth, recall blank; all
+    blank if neither grew. -> [dict] of the per-perimeter columns"""
+    px_area = abs(tfm.a * tfm.e)
+    out = []
+    for a_dt, a_ems, a_basis, chosen, day in perims:
+        lead = (a_dt - run_dt).total_seconds() / 3600.0
+        A = ps.mask(a_ems, crs, tfm, toa_h.shape)
+        pred = valid & (toa_h <= lead)
+        pred_new = pred & ~before
+        act_new = A & ~before
+        inter = pred_new & act_new
+        n_pred, n_act, n_int = int(pred_new.sum()), int(act_new.sum()), int(inter.sum())
+        n_union = n_pred + n_act - n_int
+        hs_mask, hs_n, hs_left_out = hs.mask(run_dt, a_dt, crs, tfm, toa_h.shape)
+        hs_new = hs_mask & ~before
+        n_hs_new = int(hs_new.sum())
+        n_hs_hit = int((pred_new & hs_new).sum())
+        # the share of the growth beyond the forecast's grid (recorded, not filtered on): the
+        # start footprint lies on the grid, so only the in-grid part loses its cells
+        a_geom = ps.geom_utm(a_ems, crs)
+        act_new_geom = a_geom.difference(b_geom) if b_geom else a_geom
+        outside = act_new_geom.difference(grid_box)
+        new_area = max(outside.area, act_new_geom.area - int((A & start_extra).sum()) * px_area)
+        out.append({
+            "lead_h": round(lead, 2), "day": day, "chosen": chosen,
+            "actual_perim_ms": a_ems, "actual_time_utc": a_dt.strftime(ISO_Z),
+            "actual_time_basis": a_basis,
+            "pred_total_acres": acres(int(pred.sum()), px_area),
+            "pred_new_acres": acres(n_pred, px_area),
+            "act_new_acres": acres(n_act, px_area),
+            "inter_acres": acres(n_int, px_area),
+            "precision": round(n_int / n_pred, 4) if n_pred else "",
+            "recall": round(n_int / n_act, 4) if n_act else "",
+            "iou": round(n_int / n_union, 4) if n_union else "",
+            "act_outside_acres": round(outside.area / SQM_PER_ACRE, 1),
+            "act_offgrid_frac": round(outside.area / new_area, 4) if new_area > 0 else 0.0,
+            "hs_n": hs_n,
+            "hs_new_acres": acres(n_hs_new, px_area),
+            "hs_hit_acres": acres(n_hs_hit, px_area),
+            "hs_capture": round(n_hs_hit / n_hs_new, 4) if n_hs_new else "",
+            "hs_artifact_n": hs_left_out["artifact"],
+            "hs_transient_n": hs_left_out["transient"],
+        })
+    return out
+
+
+def compute(only_slug=None, on_fire=None):
+    """Score every archived run, newest fires first (a fire's newest run decides). on_fire,
+    if given, is called with (slug, rows) as each fire finishes, to publish it right away."""
     import rasterio
     from shapely.geometry import box
 
@@ -649,18 +884,34 @@ def compute(only_slug=None):
     perimsets = {}
     hssets = {}
     rows = []
-    skipped = {"no_match": 0, "no_perims": 0, "no_horizon": 0, "missing_tif": 0,
+    skipped = {"no_match": 0, "no_perims": 0, "no_perimeter_to_score": 0, "missing_tif": 0,
                "unreadable_perims": 0}
     starts = {"pyrecast": 0, "hotspots": 0, "": 0}
     # each run's start footprint, as scored, for the pages (published by publish_skill)
     import shutil
     shutil.rmtree(START_DIR / only_slug if only_slug else START_DIR, ignore_errors=True)
 
-    for run_key in sorted(manifest["runs"]):
+    # newest fires first (by each fire's newest run), a fire's runs together
+    newest = {}
+    for e in manifest["runs"].values():
+        newest[e["slug"]] = max(newest.get(e["slug"], ""), e["run_ts"])
+    order = sorted(manifest["runs"], key=lambda k: (newest[manifest["runs"][k]["slug"]],
+                                                    manifest["runs"][k]["slug"], k), reverse=True)
+    fire_rows, cur_slug = [], None
+
+    def fire_done():
+        if on_fire and cur_slug and fire_rows:
+            on_fire(cur_slug, list(fire_rows))
+        fire_rows.clear()
+
+    for run_key in order:
         entry = manifest["runs"][run_key]
         slug = entry["slug"]
         if only_slug and slug != only_slug:
             continue
+        if slug != cur_slug:
+            fire_done()
+            cur_slug = slug
         m = matches["matches"].get(slug)
         if not m:
             skipped["no_match"] += 1
@@ -678,20 +929,15 @@ def compute(only_slug=None):
             skipped["no_perims"] += 1
             continue
         if slug not in hssets:
-            hssets[slug] = HotspotSet(slug)
+            hssets[slug] = HotspotSet(slug, ps)
         hs = hssets[slug]
         hs._mask.clear()  # keyed per grid+window; new run = new grid, drop old
 
         run_dt = datetime.strptime(entry["run_ts"], "%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc)
         baseline = ps.latest_at_or_before(run_dt + timedelta(hours=BASELINE_TOL_H))
-        # horizons that have ground truth close enough — cheap pre-check
-        horizons = []
-        for H in HORIZONS_H:
-            actual = ps.nearest(run_dt + timedelta(hours=H), ACTUAL_TOL_H)
-            if actual:
-                horizons.append((H, actual))
-        if not horizons:
-            skipped["no_horizon"] += 1
+        perims = scored_perimeters(ps, run_dt)
+        if not perims:
+            skipped["no_perimeter_to_score"] += 1
             continue
         start = RunStart(run_key, run_dt, hs)
         starts[start.basis] += 1
@@ -722,65 +968,32 @@ def compute(only_slug=None):
                 write_start_mask(START_DIR / slug / f"{entry['run_ts']}.tif", S, crs, tfm)
                 start_written = True
 
-            for H, (a_dt, a_ems, a_off, a_basis) in horizons:
-                A = ps.mask(a_ems, crs, tfm, arr.shape)
-                pred = valid & (toa_h <= H)
-                pred_new = pred & ~BS
-                act_new = A & ~BS
-                inter = pred_new & act_new
-                n_pred, n_act, n_int = int(pred_new.sum()), int(act_new.sum()), int(inter.sum())
-                n_union = n_pred + n_act - n_int
-                hs_mask, hs_n = hs.mask(run_dt, run_dt + timedelta(hours=H), crs, tfm, arr.shape)
-                hs_new = hs_mask & ~BS
-                n_hs_new = int(hs_new.sum())
-                n_hs_hit = int((pred_new & hs_new).sum())
-
-                # the share of the growth beyond the forecast's grid: the start footprint
-                # lies on the grid, so only the in-grid part loses its cells
-                a_geom = ps.geom_utm(a_ems, crs)
-                act_new_geom = a_geom.difference(b_geom) if b_geom else a_geom
-                outside = act_new_geom.difference(grid_box)
-                new_area = max(outside.area, act_new_geom.area - int((A & S & ~B).sum()) * px_area)
-                offgrid_frac = outside.area / new_area if new_area > 0 else 0.0
-
-                notes = [] if baseline else ["baseline=none"]
-                rows.append({
-                    "slug": slug, "cornea_id": m["cornea_id"],
+            notes = [] if baseline else ["baseline=none"]
+            for sc in score_grid(toa_h, valid, crs, tfm, grid_box, ps, hs, run_dt, perims,
+                                 BS, b_geom, S & ~B):
+                row = {
+                    "model": MODEL, "slug": slug, "cornea_id": m["cornea_id"],
                     "run_ts": entry["run_ts"],
                     "run_dt_utc": run_dt.strftime(ISO_Z),
-                    "percentile": pct, "horizon_h": H,
-                    "valid_dt_utc": (run_dt + timedelta(hours=H)).strftime(ISO_Z),
+                    "percentile": pct,
                     "baseline_perim_ms": baseline[1] if baseline else "",
                     "baseline_time_utc": baseline[0].strftime(ISO_Z) if baseline else "",
                     "baseline_time_basis": baseline[2] if baseline else "",
                     "baseline_offset_h": (round((baseline[0] - run_dt).total_seconds() / 3600, 2)
                                           if baseline else ""),
-                    "actual_perim_ms": a_ems,
-                    "actual_time_utc": a_dt.strftime(ISO_Z),
-                    "actual_time_basis": a_basis,
-                    "actual_offset_h": round(a_off, 2),
                     "pixel_m": round(abs(tfm.a), 1),
                     "baseline_acres": acres(int(B.sum()), px_area),
                     "start_basis": start.basis,
                     "start_acres": acres(int(S.sum()), px_area),
                     "burned_before_acres": acres(int(BS.sum()), px_area),
-                    "pred_total_acres": acres(int(pred.sum()), px_area),
-                    "pred_new_acres": acres(n_pred, px_area),
-                    "act_new_acres": acres(n_act, px_area),
-                    "inter_acres": acres(n_int, px_area),
-                    "precision": round(n_int / n_pred, 4) if n_pred else "",
-                    "recall": round(n_int / n_act, 4) if n_act else "",
-                    "iou": round(n_int / n_union, 4) if n_union else "",
-                    "act_outside_acres": round(outside.area / SQM_PER_ACRE, 1),
-                    "act_offgrid_frac": round(offgrid_frac, 4),
-                    "hs_n": hs_n,
-                    "hs_new_acres": acres(n_hs_new, px_area),
-                    "hs_hit_acres": acres(n_hs_hit, px_area),
-                    "hs_capture": round(n_hs_hit / n_hs_new, 4) if n_hs_new else "",
                     "expired_run": entry.get("expired", False),
                     "notes": ";".join(notes),
-                })
-        log(f"{run_key}: {len(horizons)} horizons x pcts done")
+                    **sc,
+                }
+                rows.append(row)
+                fire_rows.append(row)
+        log(f"{run_key}: {len(perims)} perimeters x pcts done")
+    fire_done()
 
     out = REPO / "data" / "metrics.csv"
     out.parent.mkdir(exist_ok=True)
@@ -804,86 +1017,121 @@ def _r3(s):
     return None if v is None else round(v, 3)
 
 
-def _passes_skill_filters(r):
-    # blank offset / off-grid count as 0, as report.html's null coercion does
-    grow = _num(r["act_new_acres"])
-    off = _num(r["actual_offset_h"]) or 0.0
-    offgrid = _num(r["act_offgrid_frac"]) or 0.0
-    return (grow is not None and grow >= SKILL_FILTERS["min_act_new_acres"]
-            and abs(off) <= SKILL_FILTERS["max_abs_offset_h"]
-            and offgrid <= SKILL_FILTERS["max_offgrid_frac"])
-
-
 def _perim_id(s):
     return int(float(s)) if s else None
 
 
-def build_skill(csv_path, out_dir):
-    """Per-fire skill files for map.html from a metrics CSV: out_dir/<slug>.json
-    + out_dir/index.json, rows filtered like the report's default view.
+def skill_entry(r):
+    """A metrics row as a skill-file row: [lead_h, precision, recall, iou, baseline_perim_ms,
+    actual_perim_ms, 0, actual_mapped]. The scores, then what the map needs to redraw the
+    calculation: the perimeter archive ids (null baseline when none was mapped before the
+    run), the scored perimeter's hours from the window end (always 0 now: each perimeter is
+    scored at its own time; v3 files carry the old offset), and 1 if that time is when it
+    was mapped, 0 if it's its last edit."""
+    basis = r.get("actual_time_basis")
+    return [round(float(r["lead_h"]), 2),
+            _r3(r["precision"]), _r3(r["recall"]), _r3(r["iou"]),
+            _perim_id(r["baseline_perim_ms"]), _perim_id(r["actual_perim_ms"]),
+            0, None if not basis else int(basis == "mapped")]
 
-    A row is [horizon_h, precision, recall, iou, baseline_perim_ms, actual_perim_ms,
-    actual_offset_h, actual_mapped]: the scores, then what the map needs to redraw
-    the calculation (the perimeter archive ids, null baseline when none was mapped
-    before the run; the scored perimeter's hours from the window end; 1 if that time
-    is when it was mapped, 0 if it's its last edit, null in older CSVs that don't say).
-    v3 adds "starts": {run_ts: "pyrecast" | "hotspots"} for the runs scored with a start
-    footprint beyond the baseline (see START_VAR), published as skill/start/<slug>/<run_ts>.tif;
-    the pages add it to the baseline perimeter. Returns (fires, rows)."""
-    fires, starts = {}, {}
+
+def skill_doc(slug, rows, generated):
+    """map.html's skill file for one fire from its metrics rows (every row: no filters).
+    v4: rows at each perimeter's exact lead (skill_entry); "starts": {run_ts: "pyrecast" |
+    "hotspots"} for the runs scored with a start footprint beyond the baseline (see
+    START_VAR), published as skill/start/<slug>/<run_ts>.tif, which the pages add to the
+    baseline perimeter."""
+    runs, starts = {}, {}
+    for r in rows:
+        if r.get("model", MODEL) != MODEL:
+            continue
+        if r.get("start_basis") and (_num(str(r.get("start_acres") or "")) or 0) > 0:
+            starts[r["run_ts"]] = r["start_basis"]
+        runs.setdefault(r["run_ts"], {}).setdefault(str(r["percentile"]), []).append(skill_entry(r))
+    runs = {run_ts: {pct: sorted(by_pct[pct], key=lambda e: e[0]) for pct in sorted(by_pct, key=int)}
+            for run_ts, by_pct in sorted(runs.items())}
+    n = sum(len(v) for by_pct in runs.values() for v in by_pct.values())
+    return {"v": 4, "slug": slug, "generated": generated, "method": "exact-lead",
+            "score_days": SCORE_DAYS, "starts": dict(sorted(starts.items())), "runs": runs}, n
+
+
+def build_skill(csv_path, out_dir):
+    """Per-fire skill files for map.html from a metrics CSV: out_dir/<slug>.json (skill_doc)
+    + out_dir/index.json {slug: rows}. Returns (fires, rows)."""
+    by_slug = {}
     with open(csv_path, newline="") as fh:
         for r in csv.DictReader(fh):
-            if not _passes_skill_filters(r):
-                continue
-            if r.get("start_basis") and (_num(r.get("start_acres")) or 0) > 0:
-                starts.setdefault(r["slug"], {})[r["run_ts"]] = r["start_basis"]
-            basis = r.get("actual_time_basis")
-            off = _num(r["actual_offset_h"])
-            entry = [int(float(r["horizon_h"])),
-                     _r3(r["precision"]), _r3(r["recall"]), _r3(r["iou"]),
-                     _perim_id(r["baseline_perim_ms"]), _perim_id(r["actual_perim_ms"]),
-                     None if off is None else round(off, 2),
-                     None if not basis else int(basis == "mapped")]
-            (fires.setdefault(r["slug"], {}).setdefault(r["run_ts"], {})
-             .setdefault(r["percentile"], []).append(entry))
-
+            if r.get("lead_h") in (None, ""):
+                continue      # an older CSV (fixed horizons): rebuild from a full compute
+            by_slug.setdefault(r["slug"], []).append(r)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     for p in out_dir.glob("*.json"):
         p.unlink()
     generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     index = {}
-    for slug in sorted(fires):
-        runs = {run_ts: {pct: sorted(by_pct[pct], key=lambda e: e[0])
-                         for pct in sorted(by_pct, key=int)}
-                for run_ts, by_pct in sorted(fires[slug].items())}
-        index[slug] = sum(len(v) for by_pct in runs.values() for v in by_pct.values())
-        doc = {"v": 3, "slug": slug, "generated": generated,
-               "filters": SKILL_FILTERS, "starts": dict(sorted(starts.get(slug, {}).items())),
-               "runs": runs}
+    for slug in sorted(by_slug):
+        doc, n = skill_doc(slug, by_slug[slug], generated)
+        if not n:
+            continue
+        index[slug] = n
         (out_dir / f"{slug}.json").write_text(json.dumps(doc, separators=(",", ":")))
     (out_dir / "index.json").write_text(json.dumps(
         {"v": 1, "generated": generated, "slugs": index}, separators=(",", ":")))
     return len(index), sum(index.values())
 
 
-def publish_skill(client, bucket, csv_path):
-    n_fires, n_rows = build_skill(csv_path, SKILL_DIR)
-    index = SKILL_DIR / "index.json"
-    files = sorted(SKILL_DIR.glob("*.json"))
-    # the start footprints the skill files name, uploaded first so a page never meets a
-    # name before its file; on a --skill-only rebuild there are none here, and the bucket
-    # keeps the last full run's
-    masks = []
-    for p in files:
-        if p != index:
-            doc = json.loads(p.read_text())
-            masks += [START_DIR / doc["slug"] / f"{run_ts}.tif" for run_ts in doc.get("starts", {})]
-    masks = [m for m in masks if m.exists()]
+class FirePublisher:
+    """--publish: each fire's skill file (and its runs' start footprints) goes up as soon
+    as compute() finishes it, newest fires first, so recent fires update first. The index
+    goes up merged with the bucket's (fires not reached yet keep their last files) at most
+    every SKILL_INDEX_EVERY_S; the full publish after compute() replaces everything."""
 
-    def put(p):
-        client.upload_file(str(p), bucket, f"skill/{p.name}",
-                           ExtraArgs={"ContentType": "application/json"})
+    def __init__(self, client, bucket):
+        import requests
+        self.client, self.bucket = client, bucket
+        try:
+            self.index = http_get(requests.Session(), f"{PUBLIC_BUCKET_URL}/skill/index.json").json()["slugs"]
+        except Exception as e:
+            log(f"no published skill index to merge into ({e}); starting empty")
+            self.index = {}
+        self.generated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.last_index, self.n = 0.0, 0
+
+    def __call__(self, slug, rows):
+        try:
+            for p in sorted((START_DIR / slug).glob("*.tif")):
+                self.client.upload_file(str(p), self.bucket, f"skill/start/{slug}/{p.name}",
+                                        ExtraArgs={"ContentType": "image/tiff"})
+            doc, n = skill_doc(slug, rows, self.generated)
+            if not n:
+                return
+            self.client.put_object(Bucket=self.bucket, Key=f"skill/{slug}.json",
+                                   Body=json.dumps(doc, separators=(",", ":")).encode(),
+                                   ContentType="application/json")
+            self.index[slug] = n
+            self.n += 1
+            if time.time() - self.last_index >= SKILL_INDEX_EVERY_S:
+                self.put_index()
+        except Exception as e:   # the full publish at the end still covers this fire
+            log(f"early publish of {slug} failed: {e}")
+
+    def put_index(self):
+        self.client.put_object(Bucket=self.bucket, Key="skill/index.json",
+                               Body=json.dumps({"v": 1, "generated": self.generated, "slugs": self.index},
+                                               separators=(",", ":")).encode(),
+                               ContentType="application/json")
+        self.last_index = time.time()
+        log(f"early publish: {self.n} fires up so far")
+
+
+def publish_starts(client, bucket):
+    """Upload the start footprint of every run compute() scored with one, to
+    skill/start/<slug>/<run_ts>.tif. Every run, not just the ones the skill files name:
+    the report redraws whichever row it's asked to, default filters or not. Called before
+    metrics.csv goes up, so a page never meets a row whose footprint isn't there yet; a
+    --skill-only rebuild has none here, and the bucket keeps the last full run's."""
+    masks = sorted(START_DIR.glob("*/*.tif"))
 
     def put_mask(p):
         client.upload_file(str(p), bucket, f"skill/start/{p.parent.name}/{p.name}",
@@ -891,11 +1139,25 @@ def publish_skill(client, bucket, csv_path):
 
     with concurrent.futures.ThreadPoolExecutor(SKILL_UPLOAD_WORKERS) as ex:
         list(ex.map(put_mask, masks))
+    log(f"published {len(masks)} start footprints")
+    return len(masks)
+
+
+def publish_skill(client, bucket, csv_path):
+    # the start footprints the skill files name are already up (publish_starts)
+    n_fires, n_rows = build_skill(csv_path, SKILL_DIR)
+    index = SKILL_DIR / "index.json"
+    files = sorted(SKILL_DIR.glob("*.json"))
+
+    def put(p):
+        client.upload_file(str(p), bucket, f"skill/{p.name}",
+                           ExtraArgs={"ContentType": "application/json"})
+
+    with concurrent.futures.ThreadPoolExecutor(SKILL_UPLOAD_WORKERS) as ex:
         list(ex.map(put, [p for p in files if p != index]))
     # index last, so it never lists a slug whose file is not uploaded yet
     put(index)
-    log(f"published skill files: {n_fires} fires, {n_rows} rows, {len(files)} files, "
-        f"{len(masks)} start footprints")
+    log(f"published skill files: {n_fires} fires, {n_rows} rows, {len(files)} files")
 
 
 def skill_only():
@@ -993,10 +1255,15 @@ def main():
         slug, run_ts, pct, h = args.overlay
         overlay(slug, run_ts, pct, int(h))
         return
-    compute(only_slug=args.only)
+    client = bucket = None
     if args.publish:
         import collect
-        client, bucket = collect.make_r2()
+        client, bucket = collect.make_r2()   # before computing, so missing S3_* env fails fast
+    compute(only_slug=args.only, on_fire=FirePublisher(client, bucket) if args.publish else None)
+    if not args.publish:   # local / dry run: the skill files the page would get, in data/skill
+        log("built skill files (not published): %d fires, %d rows" % build_skill(REPO / "data" / "metrics.csv", SKILL_DIR))
+    if args.publish:
+        publish_starts(client, bucket)   # before metrics.csv, which names them
         client.upload_file(str(REPO / "data" / "metrics.csv"), bucket, "metrics.csv",
                            ExtraArgs={"ContentType": "text/csv"})
         log("published metrics.csv to bucket")

@@ -9,5 +9,8 @@ data/skill/
 .wrangler/
 node_modules/
 
+# wrangler local secrets (relay/.dev.vars holds FIRMS_KEY)
+.dev.vars
+
 # FARSITE hindcast working dir (farsite/common.py)
 farsite/work/

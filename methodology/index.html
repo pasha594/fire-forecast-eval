@@ -93,18 +93,18 @@
 
   <h2><span class="n">1</span>The timeline</h2>
   <div class="card timeline"><div class="scroll"><svg id="timeline" viewBox="0 0 900 214" role="img"
-    aria-label="Timeline: perimeter mapped Monday 15:40; forecast run Tuesday 07:04 right after a satellite pass; satellite detections at 13:25 and 14:05; perimeter mapped Tuesday 18:10; the 12-hour scoring window runs from 07:04 to 19:04 Tuesday."></svg></div></div>
+    aria-label="Timeline: perimeter mapped Monday 15:40; forecast run Tuesday 07:04 right after a satellite pass; satellite detections at 13:25 and 14:05; perimeter mapped Tuesday 18:10; the forecast is scored at that perimeter's time, the window running from 07:04 to 18:10 Tuesday (11.1 hours)."></svg></div></div>
   <ol class="steps">
     <li><b>Monday 15:40:</b> firefighters map the fire's perimeter. It's the latest one before the
       forecast, so it's our <b>before</b> picture.</li>
     <li><b>Tuesday 07:04:</b> a satellite passes over and detects heat. Pyrecast starts its forecast
       right then, from the perimeter <em>plus</em> those satellite detections, which reach beyond the
       perimeter where the fire has grown since Monday.</li>
-    <li>We score the forecast at fixed times after it starts. This example uses <b>12 hours</b>, so
-      the window runs from 07:04 to <b>19:04</b>. (Real runs are also scored at 24 hours and 2, 3,
-      4, 5, 7, 10 and 14 days.)</li>
-    <li><b>Tuesday 18:10:</b> a new perimeter is mapped, 0.9 hours before the window ends. It's our
-      <b>after</b> picture. A score needs a perimeter mapped within 3 hours of the window's end.</li>
+    <li><b>Tuesday 18:10:</b> a new perimeter is mapped, <b>11.1 hours</b> after the forecast started.
+      It's our <b>after</b> picture, and the forecast is judged by what it expected to have burned by
+      18:10: the window runs from 07:04 to <b>18:10</b>.</li>
+    <li>Every perimeter in the forecast's first 7 days gets its own score like this, each at its own
+      time, so a run is scored many times, never at made-up times between perimeters.</li>
     <li>Satellite passes at 13:25 and 14:05 detect heat during the window: a second, separate check.</li>
   </ol>
 
@@ -122,9 +122,9 @@
     </div>
     <div class="card panel">
       <h3><span class="tag">B</span>The forecast</h3>
-      <p>When the forecast expects fire to arrive. Squares it expects within 12 hours (dark purple)
-        are its prediction for this window. Later arrivals don't count at 12 hours.</p>
-      <svg id="pB" role="img" aria-label="Map B: forecast arrival times; dark squares within 12 hours"></svg>
+      <p>When the forecast expects fire to arrive. Squares it expects to have burned by 18:10 (dark
+        purple) are its prediction for this perimeter. Later arrivals don't count against this one.</p>
+      <svg id="pB" role="img" aria-label="Map B: forecast arrival times; dark squares burned by 18:10"></svg>
       <div class="legend" id="lB"></div>
     </div>
     <div class="card panel">
@@ -187,18 +187,28 @@
   <ul class="rules">
     <li><b>Five versions per run.</b> Each forecast comes in five weather scenarios (the 10th to 90th
       percentile). Each is scored on its own.</li>
-    <li><b>Many horizons.</b> Every run is scored at 12 and 24 hours and 2, 3, 4, 5, 7, 10 and 14 days,
-      each against the perimeter mapped closest to that window's end.</li>
+    <li><b>Which perimeters.</b> Each run is scored against every perimeter with a mapped time in its
+      first 7 days (a day is 24 hours from the run's start). On a day with none, the latest perimeter
+      published that day is used instead, timed by its last edit; a copy of an earlier shape is
+      skipped. The perimeters scored before November 2026 are kept too, rescored at their own time.</li>
     <li><b>Perimeter times.</b> A perimeter is timed by when it was mapped. When that time is missing or
-      doesn't look right, we use when it was last edited instead, and record which.</li>
-    <li><b>What's shown by default.</b> A score appears in the map and the report's default view only if
-      the perimeter was mapped within 3 hours of the window's end, at least 10 acres burned that
-      weren't burned before, and no more than 10% of that growth fell off the edge of the forecast's map.</li>
+      doesn't look right, we use when it was last edited instead, and record which (the map shows
+      those in italics).</li>
+    <li><b>Everything is shown.</b> There's no minimum growth and no off-grid rule: growth beyond the
+      edge of the forecast's map counts as a miss. When the fire didn't grow, recall is blank, and
+      precision and IoU are 0 if the forecast predicted growth.</li>
+    <li><b>Every model the same way.</b> Pyrecast and FARSITE are scored by the same code, against the
+      same perimeters, with one common "burned before": the perimeter at run time plus each model's
+      own start.</li>
     <li><b>When the forecast's start wasn't saved.</b> For about 8% of runs, our archive missed the
       forecast's first hour. Then every satellite detection up to the run stands in for its start.</li>
     <li><b>Why hotspots are only a side check.</b> Satellites pass a few times a day and can't see through
       thick smoke or cloud, so missing detections don't mean the ground didn't burn. Hotspots feed the
       capture check only, never precision.</li>
+    <li><b>Detections that don't look like the fire are left out.</b> The capture check skips a detection
+      that's more than 1 km from the fire and that no later perimeter ever reaches, and one that no
+      satellite's nearest pass, before or after, also saw within 1 km. These count neither for nor
+      against the forecast. On four test fires that was about 2 in 100 detections.</li>
     <li><b>Same grid throughout.</b> The perimeters and detections are laid onto the forecast's own grid,
       and every area above is a count of its squares.</li>
   </ul>
@@ -226,7 +236,7 @@ const BEFORE = [
   "................",
   "................",
 ];
-// the forecast's arrival time: 1 within 12h (this window), 2 within 24h, 3 later
+// the forecast's arrival time: 1 by 18:10 (this perimeter, 11.1h after the run), 2 within 24h, 3 later
 const FORECAST = [
   "................",
   "........2.......",
@@ -374,8 +384,8 @@ const each = fn => { for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c+
     else if (f !== ".") cell(svg, r, c, TOA[+f], 0.35);
   });
   gridLines(svg);
-  legend("lB", [["", TOA[0], `within 12 hours · ${V.pred} squares`],
-                ["", TOA[2] + "59", "later (not counted at 12h)"],
+  legend("lB", [["", TOA[0], `by 18:10 · ${V.pred} squares`],
+                ["", TOA[2] + "59", "later (not counted against this perimeter)"],
                 ["", BEFORE_LIGHT, "burned before"]]);
 }
 // C: what happened
@@ -407,11 +417,11 @@ const each = fn => { for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c+
 {
   const svg = document.getElementById("timeline");
   const T0 = 12, T1 = 48, x = h => 30 + (h - T0) / (T1 - T0) * 840;   // hours from Monday 00:00
-  const AXIS = 128, RUN = 24 + 7 + 4 / 60, END = RUN + 12;
+  const AXIS = 128, RUN = 24 + 7 + 4 / 60, END = 24 + 18 + 10 / 60;   // scored at the perimeter's time
   const text = (s, attrs) => { const t = svgEl("text", { "font-size": 13, fill: INK, ...attrs }, svg); t.textContent = s; return t; };
   // the window
   svgEl("rect", { x: x(RUN), y: AXIS - 16, width: x(END) - x(RUN), height: 32, rx: 4, fill: TOA[0], "fill-opacity": 0.16 }, svg);
-  text("12-hour scoring window: Tue 07:04 → 19:04", { x: (x(RUN) + x(END)) / 2, y: AXIS + 36, "text-anchor": "middle", "font-weight": 600, fill: TOA[0] });
+  text("Scored at the perimeter's time: Tue 07:04 → 18:10 (11.1 h)", { x: (x(RUN) + x(END)) / 2, y: AXIS + 36, "text-anchor": "middle", "font-weight": 600, fill: TOA[0] });
   // axis and day ticks
   svgEl("line", { x1: x(T0), y1: AXIS, x2: x(T1), y2: AXIS, stroke: INK, "stroke-opacity": 0.35, "stroke-width": 1.5 }, svg);
   for (let h = T0; h <= T1; h += 6) {

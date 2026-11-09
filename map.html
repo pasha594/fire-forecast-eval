@@ -134,6 +134,41 @@
   #perimlist { padding: 2px 8px; }
   #perimlist label.row { margin: 0; padding: 4px 0; border-bottom: 1px solid var(--grid); }
   #perimlist label.row:last-child { border-bottom: 0; }
+  /* incident maps (Incibrief's tiled IAP / ops sheets): grouped by operational day, newest
+     first, as Incibrief's Maps tab lists them; each row a sheet, its PDF beside it */
+  #iaplist h3 { position: sticky; top: 0; z-index: 1; margin: 0; padding: 5px 8px 3px; background: var(--surface);
+                border-bottom: 1px solid var(--grid); color: var(--label);
+                font: 600 var(--fs-meta)/var(--lh-meta) var(--font-sans); }
+  #iaplist h3 span { font-weight: 400; color: var(--muted); }
+  .iap-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+              border-bottom: 1px solid var(--grid); }
+  .iap-item:last-child { border-bottom: 0; }
+  .iap-item:hover { background: var(--hover); }
+  .iap-item.sel { background: var(--selected); }
+  .iap-row { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 8px; align-items: center;
+             min-width: 0; padding: 4px 0 4px 8px; border: 0; background: none; color: var(--ink);
+             font: var(--fs-label)/var(--lh-label) var(--font-sans); text-align: left; cursor: pointer; }
+  .iap-row:disabled { cursor: default; color: var(--muted); }
+  .iap-row img, .iap-row .ph { width: 40px; height: 30px; object-fit: cover; border: 1px solid var(--grid);
+                               border-radius: 3px; background: var(--page); }
+  .iap-row b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .iap-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                   color: var(--muted); font-size: var(--fs-meta); line-height: var(--lh-meta); }
+  .iap-item > a { padding: 0 8px; font-size: var(--fs-meta); }
+  #iapCtl { display: flex; flex-direction: column; gap: var(--sp-2); }
+  #iapCtl[hidden] { display: none; }
+  .iap-acts { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-label); }
+  .iap-acts label.row { flex: 1; margin: 0; }
+  .iap-acts button { padding: 0; border: 0; background: none; color: var(--link, var(--ink)); font: inherit;
+                     text-decoration: underline; cursor: pointer; }
+  #iapNote:empty { display: none; }
+  /* the run's analysis names the incident maps that were out when the run started */
+  .iap-run { margin: var(--sp-2) 0 0; font-size: var(--fs-label); line-height: 1.6; }
+  .iap-run .iap-chip { margin: 0 2px 2px 0; padding: 1px 7px; border: 1px solid var(--axis); border-radius: 999px;
+                       background: var(--surface); color: var(--ink); font: inherit; font-size: var(--fs-meta);
+                       cursor: pointer; }
+  .iap-run .iap-chip:hover { border-color: var(--muted); }
+  .iap-run .iap-chip.on { border-color: var(--ink-2); background: var(--selected); font-weight: 600; }
   #firelist div { padding: 5px 8px; cursor: pointer; border-bottom: 1px solid var(--grid); }
   #firelist div:hover { background: var(--hover); }
   #firelist div.sel { background: var(--selected); font-weight: 600; }
@@ -349,6 +384,19 @@
   .map-tip { pointer-events: none; }
   .map-tip .maplibregl-popup-content { padding: 4px 8px; border-radius: 4px; color: var(--ink);
                                        font: 12px/1.35 var(--font-sans); box-shadow: 0 1px 4px rgba(59, 29, 41, 0.3); }
+  /* a clicked hotspot: every attribute the feed gives, pinned until closed (see hotDetailHtml) */
+  .hot-pop .maplibregl-popup-content { padding: 8px 10px; border-radius: 6px; color: var(--ink);
+                                       font: var(--fs-label)/var(--lh-label) var(--font-sans);
+                                       box-shadow: 0 1px 4px rgba(59, 29, 41, 0.3); }
+  .hot-pop .maplibregl-popup-close-button { padding: 0 6px; font-size: 16px; color: var(--ink-2); }
+  .hot-pop .maplibregl-popup-close-button:hover { background: var(--hover); color: var(--ink); }
+  .hot-pop h4 { margin: 0 18px 6px 0; font-weight: 700; font-size: var(--fs-label); }
+  .hot-pop dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; }
+  .hot-pop dt { color: var(--label); white-space: nowrap; }
+  .hot-pop dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .hot-pop dd small { color: var(--muted); font-size: var(--fs-meta); }
+  .hot-pop .hp-note { margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--grid); color: var(--muted);
+                      font-size: var(--fs-meta); line-height: var(--lh-meta); }
   .maplibregl-ctrl-attrib { font: 11px/1.4 var(--font-sans); }
   /* Settings → Timeline: docked along the bottom of the map, as Incibrief does (wide
      enough, it takes the larger type and the column of lane names; see .tl-in) */
@@ -380,13 +428,15 @@
   .ruler-label { pointer-events: none; padding: 2px 6px; border-radius: 4px; background: var(--surface); color: var(--ink);
                  font: 600 12px/16px var(--font-sans); font-variant-numeric: tabular-nums; white-space: nowrap;
                  box-shadow: 0 1px 4px rgba(59, 29, 41, 0.3); }
-  /* forecast metrics: 9 horizon columns have to fit the 292px content width */
+  /* forecast metrics: a column per scored perimeter, at its exact lead; more than fit the
+     292px content width scroll sideways */
   /* fixed height (a full table): the section must not change size as runs change */
-  .skill-box { height: 58px; overflow-x: auto; }   /* a narrow phone panel scrolls the table, not clips it */
+  /* (room for the sideways scrollbar under the three rows when a run has many perimeters) */
+  .skill-box { height: 72px; overflow-x: auto; overflow-y: hidden; }
   .skill-empty { margin: 0; color: var(--muted); font-size: var(--fs-meta); line-height: var(--lh-meta); }
   .skill { border-collapse: collapse; font-size: 11px; line-height: 13px;
            font-variant-numeric: tabular-nums; }
-  .skill th, .skill td { width: 25.5px; padding: 0; text-align: center; font-weight: 400; }
+  .skill th, .skill td { min-width: 25.5px; padding: 0 1px; text-align: center; font-weight: 400; white-space: nowrap; }
   .skill tr > :first-child { width: 61px; text-align: left; white-space: nowrap; color: var(--ink-2); }
   .skill thead th { color: var(--muted); font-size: var(--fs-micro); font-variant-numeric: normal; }
   .skill tbody th span { color: var(--muted); }
@@ -401,6 +451,8 @@
   .skill.pick .colhov .sk-h, .skill thead th .sk-h:hover { background: var(--hover); color: var(--ink); }
   .skill.pick td.colhov { box-shadow: inset 0 0 0 1px var(--muted); }
   .skill thead th.sel .sk-h { background: var(--ink); color: #fff; font-weight: 600; }
+  /* a perimeter timed by its last edit (its mapped time unknown) */
+  .skill thead th.untimed { font-style: italic; }
   .skill td.sel { box-shadow: inset 0 0 0 1.5px var(--ink); color: var(--ink); font-weight: 600; }
   .skill-pick { margin: 0; }
   .skill-pick b { color: var(--ink); font-weight: 600; }
@@ -550,6 +602,24 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
     </div>
   </div>
 
+  <div class="sec fire-only" id="iapSec">
+    <div class="sec-head"><h2>Incident maps <span class="src">NIFC · Incibrief</span></h2></div>
+    <div class="picker" id="iapPicker">
+      <button type="button" id="iapBtn" class="dropbtn" disabled>Select a fire</button>
+      <div id="iaplist" class="dropdown" hidden></div>
+    </div>
+    <div id="iapCtl" hidden>
+      <label class="ctl"><span class="ctl-head"><span>Opacity</span><b id="iapOpVal"></b></span>
+        <input type="range" id="iapOp" min="0.1" max="1" step="0.05"></label>
+      <div class="iap-acts">
+        <label class="row" title="Show the newest version of this sheet uploaded by the timeline's playhead"><input type="checkbox" id="iapFollow">Follow the timeline</label>
+        <button type="button" id="iapZoom">Zoom to</button>
+        <a id="iapPdf" target="_blank" rel="noopener">PDF</a>
+      </div>
+      <p class="note" id="iapNote"></p>
+    </div>
+  </div>
+
   <div class="sec fire-only">
     <div class="sec-head"><h2>Hotspots <span class="src">NASA VIIRS</span></h2></div>
     <!-- the timeline; docked (Settings → Timeline) it moves to #tlDock under the map -->
@@ -579,20 +649,23 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
       <b>How these numbers are calculated</b>
       <p>This run is scored against <b>NIFC fire perimeters</b> — hotspots are not used.</p>
       <ul>
-        <li><b>Predicted:</b> where the forecast's time of arrival is within the horizon.</li>
-        <li><b>Actual:</b> the NIFC perimeter mapped closest to run time + horizon (timed by its last edit when it has no reliable mapped time).</li>
+        <li><b>Actual:</b> each NIFC perimeter in the 7 days after the run, scored at its own time:
+          every one with a mapped time, the latest one published on a day without one (timed by its
+          last edit, shown in <i>italics</i>), and the perimeters scored before November 2026.</li>
+        <li><b>Predicted:</b> where the forecast's time of arrival is before that perimeter's time.</li>
         <li><b>Growth only:</b> what had burned when the run began is removed from both, so only new spread counts: the latest perimeter mapped before the run, and where the forecast itself started burning (Pyrecast adds satellite detections to the perimeter).</li>
       </ul>
       <p><b>Precision</b> = overlap ÷ predicted growth<br><b>Recall</b> = overlap ÷ actual growth<br>
         <b>IoU</b> = overlap ÷ area either one covers</p>
-      <p class="muted">A horizon is shown only when the fire grew at least 10 acres, a perimeter was
-        mapped (or last edited) within 3h of it, and at most 10% of the growth fell outside the forecast's area —
-        the metrics report's default filters.</p>
+      <p class="muted">Every perimeter is shown: no minimum growth, timing window or off-grid
+        filter. When the fire didn't grow, recall is blank and precision and IoU are 0 if the
+        forecast predicted growth.</p>
       <p><a href="methodology/">A worked example →</a></p>
     </div>
     <div class="skill-box"><table class="skill" id="skillTable"></table>
       <p class="skill-empty" id="skillEmpty" hidden></p></div>
     <p class="note skill-pick" id="skillPick" hidden></p>
+    <p class="note iap-run" id="iapRun" hidden></p>
     <div id="scoreKey" hidden></div>
   </div>
 </div>
@@ -916,12 +989,173 @@ function tipText(feat) {
   const r = state.hot && state.hot.recs[p.id];
   return r ? `${r.src || "?"} ${fmtDT(r.t)} · FRP ${r.frp ?? "?"} · conf ${r.conf ?? "?"}` : "";
 }
+
+// A click on a detection pins every attribute of its NASA FIRMS record. Cornea's
+// /hotspots feed passes on only part of each FIRMS row (no bright_t31/ti5, scan, track,
+// daynight, version or type, nor Terra vs Aqua), so the card shows Cornea's fields at
+// once, then swaps in the whole row from FIRMS (see firmsRecord).
+// Cornea source -> [satellite, instrument, its pixel at nadir, FIRMS product family]
+const HOT_SOURCES = {
+  "SNPP": ["Suomi NPP (N)", "VIIRS", "375 m", "VIIRS_SNPP"],
+  "NOAA-20": ["NOAA-20 (N20)", "VIIRS", "375 m", "VIIRS_NOAA20"],
+  "NOAA-21": ["NOAA-21 (N21)", "VIIRS", "375 m", "VIIRS_NOAA21"],
+  "MODIS": ["Terra or Aqua", "MODIS", "1 km", "MODIS"],
+  "Landsat/L8": ["Landsat 8 (L8)", "OLI", "30 m", "LANDSAT"],
+  "Landsat/L9": ["Landsat 9 (L9)", "OLI-2", "30 m", "LANDSAT"],
+};
+const HOT_MISSING = "bright_t31 / bright_ti5, scan, track, daynight, version, type";
+// FIRMS's satellite codes, each instrument's [fire, background] brightness channels, and type codes
+const FIRMS_SAT = { N: "Suomi NPP", N20: "NOAA-20", N21: "NOAA-21", Terra: "Terra", Aqua: "Aqua",
+                    L8: "Landsat 8", L9: "Landsat 9" };
+const HOT_CHANNELS = { VIIRS: ["I-4", "I-5"], MODIS: ["21/22", "31"] };
+const FIRMS_TYPE = { 0: "presumed vegetation fire", 1: "active volcano", 2: "other static land source", 3: "offshore" };
+
+// FIRMS is asked through the relay, which holds the key (relay/src/index.js). Each sensor
+// has an archive product (_SP: reprocessed, final, the only one with `type`) up to a month
+// or two ago and a near-real-time one (_NRT) after it; Landsat has only _NRT. A FIRMS row is
+// the clicked detection when it's the nearest within FIRMS_MATCH_MIN minutes and its
+// instrument's FIRMS_MATCH_KM: the archive moves MODIS rows a little, and their times by minutes
+const FIRMS_RELAY = `${RELAY}/firms`;
+const FIRMS_MATCH_MIN = 15, FIRMS_MATCH_KM = { VIIRS: 0.5, MODIS: 1.5, LANDSAT: 0.1 };
+let firmsAvailP = null;
+async function getText(url) {
+  const res = await fetch(url);
+  const text = await res.text();
+  if (!res.ok) throw new Error(text.trim().slice(0, 160) || `HTTP ${res.status}`);
+  return text;
+}
+function parseCsv(text) {
+  // FIRMS's CSV: a header row, then plain comma-separated values (nothing quoted)
+  const [head, ...lines] = text.trim().split(/\r?\n/), keys = head.split(",");
+  return lines.filter(Boolean).map(l => { const v = l.split(","); return Object.fromEntries(keys.map((k, i) => [k, v[i]])); });
+}
+function firmsAvail() {
+  // product -> [first, last] day it holds ("YYYY-MM-DD"), asked once a page (again after a failure)
+  if (!firmsAvailP) {
+    firmsAvailP = getText(`${FIRMS_RELAY}/availability`)
+      .then(t => Object.fromEntries(parseCsv(t).map(p => [p.data_id, [p.min_date, p.max_date]])));
+    firmsAvailP.catch(() => { firmsAvailP = null; });
+  }
+  return firmsAvailP;
+}
+async function firmsRecord(r) {
+  // {product, row} for detection r (row null when FIRMS has no match), or null when no FIRMS
+  // product covers it; throws when the lookup fails
+  const fam = (HOT_SOURCES[r.src] || [])[3];
+  if (!fam) return null;
+  const day = new Date(r.t).toISOString().slice(0, 10), avail = await firmsAvail();
+  const product = [`${fam}_SP`, `${fam}_NRT`].find(p => avail[p] && avail[p][0] <= day && day <= avail[p][1]);
+  if (!product) return null;
+  const d = 0.02, box = [Math.max(-180, r.lon - d), Math.max(-90, r.lat - d), Math.min(180, r.lon + d), Math.min(90, r.lat + d)];
+  const rows = parseCsv(await getText(`${FIRMS_RELAY}/area?source=${product}` +
+    `&bbox=${box.map(v => v.toFixed(4)).join(",")}&days=1&date=${day}`));
+  const sat = { "Landsat/L8": "L8", "Landsat/L9": "L9" }[r.src];   // one Landsat product holds both
+  let row = null, best = FIRMS_MATCH_KM[fam.startsWith("VIIRS") ? "VIIRS" : fam] * 1000;
+  for (const x of rows) {
+    const t = parseAcq(x);
+    if ((sat && x.satellite !== sat) || t === null || Math.abs(t - r.t) > FIRMS_MATCH_MIN * 60e3) continue;
+    const m = groundMeters({ lat: r.lat, lng: r.lon }, { lat: +x.latitude, lng: +x.longitude });
+    if (m <= best) { row = x; best = m; }
+  }
+  return { product, row };
+}
+
+const hotPop = new maplibregl.Popup({ className: "hot-pop", offset: 8, maxWidth: "320px", closeOnClick: false });
+hotPop.on("close", () => { hotPop.rec = null; });
+function hotRec(feat) {
+  // the detection behind a dot: the hotspot layer's, or the analysis frame's ring
+  const p = feat.properties;
+  if (feat.layer.id === "hot") return (state.hot && state.hot.recs[p.id]) || null;
+  if (feat.layer.id === "score-hot") return (state.fc && state.fc.dets && state.fc.dets[p.i]) || null;
+  return null;
+}
+function hotConf(c) {
+  // MODIS 0-100 %; VIIRS l / n / h; Landsat L / M / H
+  if (c == null || c === "") return "—";
+  const s = String(c);
+  if (/^\d+(\.\d+)?$/.test(s)) return `${Math.round(+s)} %`;
+  const word = { l: "low", n: "nominal", m: "medium", h: "high" }[s.toLowerCase()];
+  return word ? `${word} <small>(${esc(s)})</small>` : esc(s);
+}
+function hotDetailHtml(r, cap, fx) {
+  // detection r's card: its FIRMS row when fx (firmsRecord's answer) has one, else Cornea's
+  // fields and why (fx undefined: still looking; {error}: the lookup failed)
+  const [sat0, inst0, px] = HOT_SOURCES[r.src] || [r.src || "?", "?", null];
+  const num = v => (v == null || v === "" ? null : esc(String(v)));
+  const unit = (v, u, note) => (num(v) ? `${num(v)} ${u}` + (note ? ` <small>· ${note}</small>` : "") : "—");
+  const row = fx && fx.row, inst = (row && row.instrument) || inst0, ch = HOT_CHANNELS[inst] || [];
+  const satName = row && (FIRMS_SAT[row.satellite] || row.satellite);
+  const t = row ? parseAcq(row) : r.t;
+  const rows = [
+    ["Satellite", row ? esc(satName) + (satName !== row.satellite ? ` <small>(${esc(row.satellite)})</small>` : "") : esc(sat0)],
+    ["Instrument", esc(inst) + (px ? ` <small>· ${px} pixel at nadir</small>` : "")],
+    ["Acquired", `${new Date(t).toISOString().slice(0, 16).replace("T", " ")} UTC`],
+    ["", `${fmtDT(t)} <small>your time</small>`],
+  ];
+  if (row) {
+    const sp = fx.product.endsWith("_SP"), dn = { D: "day", N: "night" }[row.daynight];
+    rows.push(
+      ["Day / night", dn ? `${dn} <small>(${esc(row.daynight)})</small>` : num(row.daynight) || "—"],
+      ["Location", `${num(row.latitude)}, ${num(row.longitude)}`],
+      ...(row.path != null ? [["Path / row", `${num(row.path)} / ${num(row.row)}`]] : []),
+      // MODIS and VIIRS give the pixel's size in km; Landsat's scan and track are as FIRMS gives them
+      ["Scan × track", num(row.scan) ? `${num(row.scan)} × ${num(row.track)}` +
+        (ch.length ? " km <small>· across × along track</small>" : "") : "—"],
+      ["Brightness", unit(row.bright_ti4 ?? row.brightness, "K", ch[0] && `channel ${ch[0]}`)],
+      ["Background", unit(row.bright_ti5 ?? row.bright_t31, "K", ch[1] && `channel ${ch[1]}`)],
+      ["FRP", unit(row.frp, "MW")],
+      ["Confidence", hotConf(row.confidence)],
+      ["Version", num(row.version) ? `${num(row.version)} <small>· ${sp ? "standard (archive)" : "near real-time"}</small>` : "—"],
+      ["Type", num(row.type) ? `${FIRMS_TYPE[row.type] || num(row.type)} <small>(${num(row.type)})</small>`
+        : `—${sp ? "" : " <small>· archive data only</small>"}`]);
+  } else {
+    rows.push(
+      ["Location", `${num(r.lat)}, ${num(r.lon)}`],
+      ["Brightness", unit(r.bright, "K", ch[0] && `channel ${ch[0]}`)],
+      ["FRP", unit(r.frp, "MW")],
+      ["Confidence", hotConf(r.conf)]);
+  }
+  if (cap != null) rows.push(["Forecast", cap ? "inside" : "outside"]);
+  const missing = `Not in Cornea's feed: ${HOT_MISSING}${r.src === "MODIS" ? "; Terra vs Aqua" : ""}.`;
+  const kind = (HOT_SOURCES[r.src] || [])[3] || "";
+  const note = row ? `From NASA FIRMS, ${fx.product}` +
+      (fx.product.endsWith("_SP") ? " (reprocessed: it can differ a little from the hover label's live numbers)" : "")
+    : fx === undefined ? "Looking up the full record in NASA FIRMS…"
+    : fx === null ? `No FIRMS product covers this detection. ${missing}`
+    : fx.error ? `The FIRMS lookup failed (${esc(fx.error)}). ${missing}`
+    : `No record in FIRMS ${fx.product} within ${FIRMS_MATCH_MIN} min and ` +
+      `${FIRMS_MATCH_KM[kind.startsWith("VIIRS") ? "VIIRS" : kind]} km of this one. ${missing}`;
+  const head = row ? `${satName} · ${inst}` : r.src && r.src !== inst ? `${r.src} · ${inst}` : inst;   // MODIS names both
+  return `<h4>${esc(head)}</h4><dl>` +
+    rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("") + "</dl>" +
+    `<div class="hp-note">${note}</div>`;
+}
+function showHotDetail(feat) {
+  const r = hotRec(feat);
+  if (!r) { hotPop.remove(); return; }
+  tip.remove();
+  const cap = feat.layer.id === "score-hot" ? feat.properties.cap === 1 : null;
+  const draw = fx => hotPop.setHTML(hotDetailHtml(r, cap, fx));
+  hotPop.setLngLat([r.lon, r.lat]);
+  draw(r.firms);   // its FIRMS record once looked up (kept on r), else Cornea's fields meanwhile
+  hotPop.addTo(map);
+  hotPop.rec = r;
+  if (r.firms !== undefined) return;
+  // one lookup per detection; a failed one is tried again on the next click
+  if (!r.firmsP) r.firmsP = firmsRecord(r).then(fx => (r.firms = fx), e => { r.firmsP = null; return { error: e.message }; });
+  r.firmsP.then(fx => { if (hotPop.rec === r) draw(fx); });
+}
+
 map.on("mousemove", ev => {
   // measuring: no hover labels, and the ruler follows the pointer (see rulerMove)
   if (ruler.on) { map.getCanvas().style.cursor = ""; tip.remove(); rulerMove(ev.lngLat); return; }
+  // over a pinned hotspot's card: no label under it
+  if (ev.originalEvent.target.closest && ev.originalEvent.target.closest(".hot-pop")) { tip.remove(); return; }
   const feat = featureAt(ev.point);
-  map.getCanvas().style.cursor = feat && feat.layer.id === "fires" ? "pointer" : "";
-  const text = feat && tipText(feat);
+  const hot = feat && (feat.layer.id === "hot" || feat.layer.id === "score-hot");
+  map.getCanvas().style.cursor = feat && (feat.layer.id === "fires" || hot) ? "pointer" : "";
+  // the pinned detection's own label would sit on top of its card
+  const text = feat && !(hot && hotPop.rec && hotRec(feat) === hotPop.rec) && tipText(feat);
   if (text) tip.setLngLat(ev.lngLat).setText(text).addTo(map);
   else tip.remove();
 });
@@ -930,7 +1164,11 @@ map.on("click", ev => {
   if (ruler.on) { rulerClick(ev.lngLat); return; }   // a click places a ruler end, never picks a fire
   const feat = featureAt(ev.point);
   if (feat && feat.layer.id === "fires") select(feat.properties.slug);
+  // a detection pins its attributes; a click anywhere else lets them go
+  if (feat && (feat.layer.id === "hot" || feat.layer.id === "score-hot")) showHotDetail(feat);
+  else hotPop.remove();
 });
+document.addEventListener("keydown", ev => { if (ev.key === "Escape") hotPop.remove(); });
 
 const state = {
   fires: [],            // [{slug, title, cornea_id, centroid:[lon,lat], runs:[ts...]}]
@@ -959,6 +1197,10 @@ const state = {
   ovWin: "All",         // no-selection overview: recency filter (a RECENCY key), page, rows per page
   ovPage: 0,
   ovSize: 10,
+  // incident maps (see "incident maps"): the fire's sheets from Incibrief's manifest, the
+  // one picked, whether its newest version by the playhead stands in, and what is drawn
+  iap: { maps: [], id: null, follow: false, drawn: null,
+         opacity: Math.min(Math.max(+remembered("cornea-iap-opacity", "0.75") || 0.75, 0.1), 1) },
 };
 
 async function getJson(url, signal) {
@@ -1140,6 +1382,7 @@ function wirePickers() {
     if (!perims.hidden && !ev.target.closest("#perimPicker")) perims.hidden = true;
   });
   document.addEventListener("keydown", ev => { if (ev.key === "Escape") perims.hidden = true; });
+  wireIap();
 
   // the metrics "?" opens on hover/focus; a click pins it open (touch has no hover)
   const helpBtn = document.getElementById("skillHelpBtn"), help = document.getElementById("skillHelp");
@@ -1267,6 +1510,7 @@ function deselect() {
   map.jumpTo(OVERVIEW_VIEW);   // before refreshWms, whose 3D ease a jump would cut short
   refreshWms();             // with no run this only removes the forecast layer
   clearPerims();
+  clearIap();
   refreshHotspots();        // bumps hotSeq, aborts hotspot/history requests, drops hotspots + burn scar
   clearTimeout(hotFetchTimer);
   layoutHotTimeline(defaultHotSpan());
@@ -1302,6 +1546,7 @@ async function select(slug) {
   }).join("");
   refreshWms();
   loadSkill(f, seq);
+  loadIap(f, seq);
   // perimeters first: the hotspot query box is sized from the perimeter bounds
   await loadPerims(f, seq);
   if (state.seq !== seq) return;
@@ -1379,6 +1624,7 @@ function refreshWms() {
   dropCanvas("fclive");
   map.getSource("iso").setData(EMPTY);
   map.getSource("scorehot").setData(EMPTY);
+  if (hotPop.rec && state.fc && state.fc.dets && state.fc.dets.includes(hotPop.rec)) hotPop.remove();   // its ring is gone
   state.fc = state.toaGrid = null;
   note.textContent = "";
   note.className = "note";
@@ -1945,7 +2191,8 @@ async function renderIsochrones(f, run, pct, note, token) {
 
 // ---------------------------------------------------------------- forecast metrics
 
-// skill/<slug>.json rows are [horizon_h, precision, recall, iou]
+// skill/<slug>.json rows are [lead_h, precision, recall, iou, ...]: v4 at each perimeter's
+// exact lead (analyze.skill_entry), v3 at the old fixed horizons
 const SKILL_ROWS = [["Precision", 1], ["Recall", 2], ["IoU", 3]];
 
 async function loadSkill(f, seq) {
@@ -1961,8 +2208,16 @@ async function loadSkill(f, seq) {
   else { renderSkill(); renderHotMarks(); }
 }
 
-const hLab = h => (h >= 168 && h % 24 === 0 ? `${h / 24}d` : `${h}h`);
-const NOT_SCORED = "Not scored for this run and percentile: it needs at least 10 acres of growth and a perimeter mapped (or last edited) within 3h of a horizon.";
+// a lead in a column head: hours under two days, else days to one decimal ("17h", "2.7d")
+const hLab = h => (h < 48 ? `${Math.round(h)}h` : `${(h / 24).toFixed(1).replace(/\.0$/, "")}d`);
+// spelled out ("17h", "2d 17h")
+function hLong(h) {
+  if (h < 48) return `${Math.round(h)}h`;
+  let d = Math.floor(h / 24), r = Math.round(h - 24 * d);
+  if (r === 24) { d++; r = 0; }
+  return r ? `${d}d ${r}h` : `${d}d`;
+}
+const NOT_SCORED = "Not scored for this run and percentile: no perimeter was mapped or published in the 7 days after it.";
 
 function scoredRows() {
   // the selected run and percentile's skill rows (its scored horizons), [] when none
@@ -1974,6 +2229,7 @@ function scoredRows() {
 
 function renderSkill() {
   // the selected run and percentile's scored horizons, or why there are none
+  renderIapRun();
   const doc = state.sel && state.skill.get(state.sel);
   const rows = scoredRows();
   const table = document.getElementById("skillTable"), empty = document.getElementById("skillEmpty");
@@ -1990,19 +2246,25 @@ function renderSkill() {
   const at = r => (pick && canScore(r) ? ` data-h="${r[0]}"${r[0] === on ? ' class="sel"' : ""}` : "");
   const cell = (v, r) => (typeof v === "number" && isFinite(v)
     ? `<td${at(r)} style="--v:${Math.min(Math.max(v, 0), 1)}">${Math.round(100 * v)}</td>` : `<td${at(r)}>—</td>`);
+  const untimed = r => r[7] === 0, timed = r => (untimed(r) ? " (perimeter timed by its last edit: its mapped time is unknown)" : "");
   const head = r => (pick && canScore(r)
     ? `<button type="button" class="sk-h" data-h="${r[0]}" aria-pressed="${r[0] === on}" ` +
-      `title="${r[0] === on ? "Close the analysis" : `Map the ${hLab(r[0])} analysis: hits and misses against the perimeter`}">${hLab(r[0])}</button>`
-    : hLab(r[0]));
+      `title="${r[0] === on ? "Close the analysis" : `Map the analysis ${hLong(r[0])} after the run: hits and misses against that perimeter${timed(r)}`}">${hLab(r[0])}</button>`
+    : `<span title="${hLong(r[0])} after the run${timed(r)}">${hLab(r[0])}</span>`);
+  const thAt = r => {
+    const a = at(r), c = untimed(r) ? "untimed" : "";
+    if (!c) return a;
+    return a.includes('class="') ? a.replace('class="', `class="${c} `) : `${a} class="${c}"`;
+  };
   table.classList.toggle("pick", pick);
   table.innerHTML =
-    `<thead><tr><th></th>${rows.map(r => `<th scope="col"${at(r)}>${head(r)}</th>`).join("")}</tr></thead><tbody>` +
+    `<thead><tr><th></th>${rows.map(r => `<th scope="col"${thAt(r)}>${head(r)}</th>`).join("")}</tr></thead><tbody>` +
     SKILL_ROWS.map(([name, i]) => `<tr><th scope="row">${name} <span>%</span></th>` +
       `${rows.map(r => cell(r[i], r)).join("")}</tr>`).join("") + "</tbody>";
   // (with an analysis on, its key below says what's shown and closes it)
   if (!pick || on != null) return;
   hint.hidden = false;
-  hint.textContent = "Click a horizon to map its hits and misses";
+  hint.textContent = "Each column is a perimeter, at its time after the run. Click one to map its hits and misses";
 }
 
 // ---------------------------------------------------------------- a run's analysis
@@ -2241,9 +2503,12 @@ function scoreKeyHtml(row, sc, reason = "", hs = null) {
     return `<span title="${name}: ${what}"><i style="background:${Palette.SCORE[key]}"></i>${name}<b>${v}</b></span>`;
   }).join("");
   const off = row[6];
-  const perim = typeof off === "number"
-    ? `Scored against the perimeter ${row[7] === 1 ? "mapped" : "last edited"} <b>${fmtShortDT(end + off * HOUR)}</b>, ` +
-      `${Math.abs(off).toFixed(1)}h ${off < 0 ? "before" : "after"} the window end` : "";
+  // v4: each perimeter is scored at its own time (offset 0); v3 rows carry the old offset
+  const perim = typeof off !== "number" ? ""
+    : !off ? (row[7] === 1 ? `Scored against the perimeter mapped at <b>${fmtShortDT(end)}</b>`
+      : `Scored against the perimeter last edited <b>${fmtShortDT(end)}</b> (its mapped time is unknown, so it's timed by its last edit)`)
+    : `Scored against the perimeter ${row[7] === 1 ? "mapped" : "last edited"} <b>${fmtShortDT(end + off * HOUR)}</b>, ` +
+      `${Math.abs(off).toFixed(1)}h ${off < 0 ? "before" : "after"} the window end`;
   const before = !sc || !sc.startBasis ? ""
     : `Burned before includes <b>${fmtAc(sc.startAc)}</b> beyond the perimeter at run time: ` +
       (sc.startBasis === "pyrecast" ? "where the forecast started burning, seeded from satellite detections"
@@ -2255,7 +2520,7 @@ function scoreKeyHtml(row, sc, reason = "", hs = null) {
       (hs.capped ? " (some missing: a day exceeded the API cap)" : "");
   const rings = sc && hs && !hs.failed ? '<span class="sk-ring" style="border-color:#0a5c36" title="inside the forecast"></span>' +
     '<span class="sk-ring" style="border-color:#7a1010" title="outside the forecast"></span>' : "";
-  return `<div class="score-key"><div class="sk-head"><span><b>Analysis</b> · ${hLab(H)} after the run, to <b>${fmtShortDT(end)}</b></span>${back}</div>` +
+  return `<div class="score-key"><div class="sk-head"><span><b>Analysis</b> · ${hLong(H)} after the run, to <b>${fmtShortDT(end)}</b></span>${back}</div>` +
     `<div class="sk-grid">${cls}</div>` + (dets ? `<div class="sk-dets">${rings}<span>${dets}</span></div>` : "") +
     (perim || before ? `<div class="note sk-foot">${[perim, before].filter(Boolean).join(". ")}</div>` : "") + "</div>";
 }
@@ -2286,7 +2551,8 @@ function loadWindowDetections(f, w, box) {
         const k = `${pr.acq_date}|${pr.acq_time}|${c[0]}|${c[1]}|${pr.source}`;
         if (seen.has(k)) continue;
         seen.add(k);
-        dets.push({ lon: c[0], lat: c[1], t, src: pr.source, frp: pr.frp, conf: pr.confidence });
+        dets.push({ lon: c[0], lat: c[1], t, src: pr.source, frp: pr.frp, conf: pr.confidence,
+                    bright: pr.brightness });
       }
       if (feats.length < HOT_LIMIT) break;   // complete through today
       if (last === d) { capped = true; d++; }   // one day alone over the cap: the rest of it is out of reach
@@ -2345,11 +2611,12 @@ async function renderScore(f, run, pct, token) {
   const got = await detsP;
   if (token !== state.wmsSeq) return;
   let nIn = 0;
-  const features = (got ? got.dets : []).map(r => {
+  state.fc.dets = got ? got.dets : [];   // a ring's attributes, by its index (see hotRec)
+  const features = state.fc.dets.map((r, i) => {
     const cap = inside(r.lon, r.lat) ? 1 : 0;
     nIn += cap;
     return { type: "Feature", geometry: { type: "Point", coordinates: [r.lon, r.lat] },
-             properties: { cap, t: r.t, src: r.src, frp: r.frp, conf: r.conf } };
+             properties: { cap, t: r.t, src: r.src, frp: r.frp, conf: r.conf, i } };
   });
   map.getSource("scorehot").setData({ type: "FeatureCollection", features });
   if (state.hotSpan) renderHotspots();   // on the analysis frame, the rings stand in for the hotspots
@@ -2436,6 +2703,223 @@ function releaseScorePerims() {
   if (!sp || !sp.set) return;
   const now = pickedPerims();
   if (now.size === sp.set.size && [...now].every(e => sp.set.has(e))) pickPerims(sp.prev);
+}
+
+// ---------------------------------------------------------------- incident maps
+
+// Incident maps are Incibrief's: the IAP, operations, air ops, progression... GeoPDFs from
+// the NIFC incident-map FTP, which its worker mirrors, georeferences and tiles into its
+// public bucket. Nothing is processed here. The page reads the fire's manifest there by its
+// Cornea id, as Incibrief's Maps tab does, and draws a sheet's tiles as Incibrief draws them
+// (256 px XYZ tiles, 75% opacity), under the forecast so a sheet never hides it. Follow the
+// timeline swaps in the newest version of the sheet uploaded by the playhead (Incibrief's
+// timeline series). A run's analysis lists the sheets out by the run's start.
+const INCIBRIEF = "https://f005.backblazeb2.com/file/responder-debrief-data";
+const IAP_RANK = [["ops", 0], ["iap", 1], ["brief", 2], ["airops", 3], ["evac", 4], ["trans", 5],
+                  ["pio", 6], ["suprep", 7], ["repair", 7], ["own", 8]];   // Incibrief's order
+const iapUrl = p => INCIBRIEF + p.replace(/[#?&,+[\]]/g, encodeURIComponent);
+const fireKey = id => String(id || "").replace(/[{}]/g, "").toLowerCase();
+const iapSeries = e => `${e.product}|${e.sheet || ""}|${e.orientation || ""}`;
+function iapTime(e) {
+  // when a sheet came out: its FTP upload, else its generated time (fire-local, for order
+  // only), else noon on its operational day
+  for (const s of [e.uploaded_at, e.generated_at_local && `${e.generated_at_local}:00Z`, e.op_date && `${e.op_date}T12:00:00Z`]) {
+    const t = s ? Date.parse(s) : NaN;
+    if (Number.isFinite(t)) return t;
+  }
+  return null;
+}
+function iapRank(e) {
+  if (e.kind === "qr") return 10;
+  const p = String(e.product || "").toLowerCase(), hit = IAP_RANK.find(([k]) => p.startsWith(k));
+  return hit ? hit[1] : 9;
+}
+const byIap = (a, b) => iapRank(a) - iapRank(b) || (a.period === "night") - (b.period === "night") ||
+  String(a.filename).localeCompare(String(b.filename));
+const iapLabel = e => `${e.product_label || e.product}${e.kind === "qr" ? " (QR)" : ""}`;
+const iapDay = d => { const [y, m, dd] = d.split("-").map(Number); return new Date(y, m - 1, dd); };
+
+function clearIap() {
+  const btn = document.getElementById("iapBtn"), el = document.getElementById("iaplist");
+  el.hidden = true;
+  el.innerHTML = "";
+  btn.disabled = true;
+  btn.textContent = "Select a fire";
+  Object.assign(state.iap, { maps: [], id: null });
+  dropIap();
+  renderIapCtl();
+  renderIapRun();
+}
+
+async function loadIap(f, seq) {
+  clearIap();
+  const btn = document.getElementById("iapBtn");
+  if (!f.cornea_id) { btn.textContent = "No Cornea match for this fire"; return; }
+  btn.textContent = "Loading…";
+  let m = null;
+  try { m = await getJson(`${INCIBRIEF}/catalogs/incidents/id/${fireKey(f.cornea_id)}.json`); }
+  catch (e) { m = null; }
+  if (state.seq !== seq) return;
+  // a manifest is only ever the fire's own (Incibrief keys it by the Cornea id)
+  const maps = m && fireKey(m.cornea_id) === fireKey(f.cornea_id) ? (m.maps || []).filter(e => e.kind !== "mobile") : [];
+  state.iap.maps = maps;
+  if (!maps.length) { btn.textContent = "None published for this fire"; renderIapRun(); return; }
+  btn.disabled = false;
+  renderIapList();
+  renderIapCtl();
+  renderIapRun();
+}
+
+function renderIapList() {
+  // grouped by operational day, newest first (undated last); in a day, Incibrief's order
+  const groups = new Map();
+  for (const e of state.iap.maps) {
+    const k = e.op_date || "";
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(e);
+  }
+  const days = [...groups.keys()].sort((a, b) => (!a) - (!b) || (a < b ? 1 : a > b ? -1 : 0));
+  const shown = iapShown();
+  document.getElementById("iaplist").innerHTML = days.map(d => {
+    const head = d ? `${fmtDate(iapDay(d).getTime())} <span>${iapDay(d).toLocaleDateString(undefined, { weekday: "long" })}</span>` : "Undated";
+    return `<h3>${head}</h3>` + groups.get(d).sort(byIap).map(e => {
+      const t = iapTime(e), can = !!(e.georeferenced && e.tiles);
+      const meta = [e.uploaded_at ? `uploaded ${fmtDT(t)}` : e.period ? (e.period === "day" ? "Day" : "Night") : "",
+                    can ? "" : e.georeferenced ? "still rendering" : "not georeferenced"].filter(Boolean).join(" · ");
+      const thumb = e.preview_url ? `<img src="${esc(iapUrl(e.preview_url))}" alt="" loading="lazy">` : `<span class="ph"></span>`;
+      const on = shown && (e.id === state.iap.id || e.id === shown.id);
+      return `<div class="iap-item${on ? " sel" : ""}"><button type="button" class="iap-row" data-id="${esc(e.id)}"${can ? "" : " disabled"}` +
+        ` title="${can ? (on ? "Take it off the map" : "Show it on the map") : "Can't be drawn on the map: open the PDF"}">` +
+        `${thumb}<span><b>${esc(iapLabel(e))}</b><small>${esc(meta)}</small></span></button>` +
+        `<a href="${esc(iapUrl(e.pdf_url) + "?v=" + (e.rev || 1))}" target="_blank" rel="noopener" title="Open the PDF">PDF</a></div>`;
+    }).join("");
+  }).join("");
+}
+
+function iapShown() {
+  // the sheet on the map: the one picked, or, following the timeline, the newest version of
+  // its series uploaded by the playhead (else its earliest)
+  const pick = state.iap.maps.find(e => e.id === state.iap.id);
+  if (!pick || !state.iap.follow || !state.hotSpan) return pick || null;
+  const vs = state.iap.maps.filter(e => e.tiles && iapSeries(e) === iapSeries(pick) && iapTime(e) != null)
+    .sort((a, b) => iapTime(a) - iapTime(b));
+  const p = hotPlayhead();
+  let v = vs[0] || pick;
+  for (const e of vs) if (iapTime(e) <= p) v = e;
+  return v;
+}
+
+function dropIap() {
+  if (map.getLayer("iap")) map.removeLayer("iap");
+  if (map.getSource("iap")) map.removeSource("iap");
+  state.iap.drawn = null;
+}
+
+function drawIap() {
+  const e = iapShown();
+  if (!e || !e.tiles) { dropIap(); renderIapCtl(); return; }
+  const key = `${e.id}@${e.rev || 1}`;
+  if (state.iap.drawn === key && map.getLayer("iap")) {
+    map.setPaintProperty("iap", "raster-opacity", state.iap.opacity);
+    return;
+  }
+  dropIap();
+  map.addSource("iap", { type: "raster", tiles: [iapUrl(e.tiles.url_template)], tileSize: 256,
+                         minzoom: e.tiles.minzoom, maxzoom: e.tiles.maxzoom, bounds: e.tiles.bounds,
+                         attribution: "incident maps: NIFC, via Incibrief" });
+  // over the basemap, under the forecast (canvas or live tiles) and everything above it
+  const before = ["fc", "fclive", "iso"].find(id => map.getLayer(id));
+  map.addLayer({ id: "iap", type: "raster", source: "iap",
+                 paint: { "raster-opacity": state.iap.opacity, "raster-fade-duration": 0 } }, before);
+  state.iap.drawn = key;
+  renderIapCtl();
+  if (!document.getElementById("iaplist").hidden) renderIapList();
+}
+
+function showIap(id) {
+  // one sheet at a time; picking the one shown takes it off
+  state.iap.id = state.iap.id === id ? null : id;
+  drawIap();
+  renderIapList();
+  renderIapCtl();
+  renderIapRun();
+}
+
+function renderIapCtl() {
+  const e = iapShown(), ctl = document.getElementById("iapCtl"), btn = document.getElementById("iapBtn");
+  ctl.hidden = !e;
+  if (state.iap.maps.length) btn.textContent = e ? `${iapLabel(e)} · ${e.op_date ? fmtDate(iapDay(e.op_date).getTime()) : "undated"}${e.period ? ` ${e.period}` : ""}` : "None shown";
+  if (!e) return;
+  document.getElementById("iapOp").value = state.iap.opacity;
+  document.getElementById("iapOpVal").textContent = `${Math.round(100 * state.iap.opacity)}%`;
+  document.getElementById("iapFollow").checked = state.iap.follow;
+  document.getElementById("iapPdf").href = iapUrl(e.pdf_url) + "?v=" + (e.rev || 1);
+  const t = iapTime(e), z = map.getZoom();
+  document.getElementById("iapNote").textContent = [
+    t != null && e.uploaded_at ? `Uploaded ${fmtDT(t)}` : "",
+    state.iap.follow && e.id !== state.iap.id ? "the newest version by the playhead" : "",
+    e.tiles && z < e.tiles.minzoom ? `zoom in to see it (from zoom ${e.tiles.minzoom})` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+function renderIapRun() {
+  // the run's analysis: the newest version of each sheet out (uploaded) by the run's start
+  const el = document.getElementById("iapRun");
+  const run = state.sel && document.getElementById("selRun").value;
+  if (!run || !state.iap.maps.length) { el.hidden = true; return; }
+  const t0 = runDate(run).getTime(), latest = new Map();
+  for (const e of state.iap.maps) {
+    const t = iapTime(e);
+    if (!e.tiles || t == null || t > t0) continue;
+    const k = iapSeries(e), cur = latest.get(k);
+    if (!cur || iapTime(cur) < t) latest.set(k, e);
+  }
+  const all = [...latest.values()].sort(byIap), top = all.slice(0, 4), shown = iapShown();
+  el.hidden = false;
+  if (!top.length) { el.textContent = "No incident maps were out by this run's start."; return; }
+  el.innerHTML = `<b>Incident maps out by this run's start:</b> ` + top.map(e =>
+    `<button type="button" class="iap-chip${shown && shown.id === e.id ? " on" : ""}" data-id="${esc(e.id)}" ` +
+    `title="${esc(`${iapLabel(e)}, uploaded ${fmtDT(iapTime(e))}: show it on the map`)}">` +
+    `${esc(e.product_label || e.product)} · ${e.op_date ? fmtDate(iapDay(e.op_date).getTime()) : "undated"}</button>`).join("") +
+    (all.length > top.length ? `<button type="button" class="iap-chip" data-open="1">+${all.length - top.length} more</button>` : "");
+}
+
+function wireIap() {
+  const btn = document.getElementById("iapBtn"), el = document.getElementById("iaplist");
+  const open = () => { renderIapList(); openDropdown(el); };
+  btn.addEventListener("click", () => { if (el.hidden) open(); else el.hidden = true; });
+  document.addEventListener("mousedown", ev => { if (!el.hidden && !ev.target.closest("#iapPicker")) el.hidden = true; });
+  document.addEventListener("keydown", ev => { if (ev.key === "Escape") el.hidden = true; });
+  el.addEventListener("click", ev => {
+    const row = ev.target.closest(".iap-row");
+    if (row && !row.disabled) showIap(row.dataset.id);
+  });
+  document.getElementById("iapRun").addEventListener("click", ev => {
+    const chip = ev.target.closest(".iap-chip");
+    if (!chip) return;
+    if (chip.dataset.open) { open(); return; }
+    // the analysis names that version: show it as picked, not followed
+    state.iap.follow = false;
+    if (state.iap.id !== chip.dataset.id) showIap(chip.dataset.id); else showIap(chip.dataset.id);
+  });
+  document.getElementById("iapOp").addEventListener("input", ev => {
+    state.iap.opacity = +ev.target.value;
+    remember("cornea-iap-opacity", String(state.iap.opacity));
+    document.getElementById("iapOpVal").textContent = `${Math.round(100 * state.iap.opacity)}%`;
+    if (map.getLayer("iap")) map.setPaintProperty("iap", "raster-opacity", state.iap.opacity);
+  });
+  document.getElementById("iapFollow").addEventListener("change", ev => {
+    state.iap.follow = ev.target.checked;
+    drawIap();
+    renderIapCtl();
+    renderIapRun();
+  });
+  document.getElementById("iapZoom").addEventListener("click", () => {
+    const e = iapShown();
+    if (e && e.tiles) map.fitBounds([[e.tiles.bounds[0], e.tiles.bounds[1]], [e.tiles.bounds[2], e.tiles.bounds[3]]],
+                                   { padding: 48, duration: 800 });
+  });
+  map.on("zoomend", () => { if (state.iap.drawn) renderIapCtl(); });
 }
 
 // ---------------------------------------------------------------- perimeters
@@ -3007,7 +3491,7 @@ function labelScoreLane(items, act) {
   }
   const r = act.row, pc = v => (typeof v === "number" ? Math.round(100 * v) : "—");
   setLaneLabel("score", `${hLab(act.h)} <span class="sc">P ${pc(r[1])} · R ${pc(r[2])}</span>`,
-               `Analysis on the map: ${hLab(act.h)} after the run, to ${fmtDT(act.t)} · precision ${pc(r[1])}% · recall ${pc(r[2])}%`);
+               `Analysis on the map: ${hLong(act.h)} after the run, to ${fmtDT(act.t)} · precision ${pc(r[1])}% · recall ${pc(r[2])}%`);
 }
 
 function renderScoreGlyph() {
@@ -3157,7 +3641,7 @@ function laneHover(lane, clientX, picked) {
   const act = laneActive(kind, items);
   if (kind === "score") {
     const pc = v => (typeof v === "number" ? `${Math.round(100 * v)}%` : "—");
-    showTip(`${hLab(c.h)} after the run, to ${fmtDT(c.t)} · precision ${pc(c.row[1])} · recall ${pc(c.row[2])}` +
+    showTip(`${hLong(c.h)} after the run, to ${fmtDT(c.t)} · precision ${pc(c.row[1])} · recall ${pc(c.row[2])}` +
       (act && act.h === c.h ? " · on the map" : ""), tx, lane);
     return;
   }
@@ -3333,6 +3817,7 @@ function clearHotspots() {
   const H = state.hot;
   if (H && H.req) H.req.ctl.abort();
   map.getSource("hot").setData(EMPTY);
+  if (hotPop.rec && hotPop.rec === (H && H.recs[hotPop.rec.id])) hotPop.remove();   // its detection is gone
   dropCanvas("scar");
   scar.grid = null;
   state.hot = null;
@@ -3415,7 +3900,8 @@ async function ensureHotCoverage(historyOnly) {
     if (H.keys.has(key)) continue;
     H.keys.add(key);
     const day = dayOf(t), r = { lat: c[1], lon: c[0], t, src: props.source, date: props.acq_date,
-                                time: props.acq_time, frp: props.frp, conf: props.confidence, id: H.recs.length };
+                                time: props.acq_time, frp: props.frp, conf: props.confidence,
+                                bright: props.brightness, id: H.recs.length };
     H.recs.push(r);
     if (!H.days.has(day)) H.days.set(day, []);
     H.days.get(day).push(r);
@@ -3447,6 +3933,7 @@ function hotPlayhead() {
 function renderHotspots() {
   const p = hotPlayhead();
   labelPlayhead();
+  if (state.iap.follow) drawIap();   // the sheet's version follows the playhead
   // on the analysis frame its rings stand in for the hotspots (see scoreAtFrame)
   const frame = scoreAtFrame();
   map.setLayoutProperty("score-hot", "visibility", frame ? "visible" : "none");

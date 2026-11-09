@@ -20,8 +20,8 @@ typically about one newly mapped perimeter per fire-day).
 | `.github/workflows/analyze.yml` | cron 2x daily: syncs ToA+perimeters on the runner, recomputes and publishes `metrics.csv` + per-fire `skill/*.json` to the bucket — no laptop needed; `report.html` falls back to the bucket copy |
 | `analyze.py` | local: syncs the archive, computes growth-only P/R → `data/metrics.csv` |
 | `report.html` | static Plotly report over `data/metrics.csv` |
-| `map.html` | interactive MapLibre map, flat or over 3D terrain, over Cornea perimeter history + hotspots. Forecasts are decoded in the browser from the archive (all variables/percentiles); runs still on pyrecast are read live through `relay/` (its WMS tiles for the hourly variables, its raw time-of-arrival coverage until the archive has it) |
-| `relay/` | Cloudflare Worker (free plan) that passes pyrecast's geoserver through with CORS headers, which its geoserver refuses to send for any site but pyrecast.org; GetMap and GetCoverage only. Deploy with `cd relay && npx wrangler deploy` |
+| `map.html` | interactive MapLibre map, flat or over 3D terrain, over Cornea perimeter history + hotspots. Forecasts are decoded in the browser from the archive (all variables/percentiles); runs still on pyrecast are read live through `relay/` (its WMS tiles for the hourly variables, its raw time-of-arrival coverage until the archive has it). Incident maps (IAP / ops GeoPDFs) are Incibrief's: the page reads the fire's manifest from Incibrief's public bucket by Cornea id (`catalogs/incidents/id/<cornea_id>.json`) and overlays its tiles; nothing is processed here. Fires Incibrief wrote no manifest for show none |
+| `relay/` | Cloudflare Worker (free plan) that passes pyrecast's geoserver through with CORS headers, which its geoserver refuses to send for any site but pyrecast.org; GetMap and GetCoverage only. It also fetches a clicked hotspot's full NASA FIRMS record (`/firms/area`, `/firms/availability`) with the `FIRMS_KEY` secret, so the key stays out of the public page. Deploy with `cd relay && npx wrangler deploy` |
 | `overrides.json` | manual slug→cornea_id match overrides (string forces, null skips) |
 
 Archive layout (bucket or local `raw/`):
@@ -62,29 +62,31 @@ bucket, e.g. `https://f005.backblazeb2.com/file/fire-forecast-archive/skill/inde
 
 ```
 skill/index.json   {"v": 1, "generated": "<UTC ISO>", "slugs": {"<slug>": <scored rows>, ...}}
-skill/{slug}.json  {"v": 3, "slug", "generated", "filters": {...},
+skill/{slug}.json  {"v": 4, "slug", "generated", "method": "exact-lead", "score_days": 7,
                     "starts": {"<run_ts>": "pyrecast" | "hotspots", ...},
-                    "runs": {"<run_ts>": {"<pct>": [[H, precision, recall, iou,
-                      baseline_perim_ms, actual_perim_ms, actual_offset_h, actual_mapped], ...]}}}
-skill/start/{slug}/{run_ts}.tif   the start footprint each run in "starts" was scored with
-                    (uint8, 1 = burned when the run began, on the forecast's grid)
+                    "runs": {"<run_ts>": {"<pct>": [[lead_h, precision, recall, iou,
+                      baseline_perim_ms, actual_perim_ms, 0, actual_mapped], ...]}}}
+skill/start/{slug}/{run_ts}.tif   the start footprint a run was scored with, for every run
+                    scored with one (uint8, 1 = burned when the run began, on the forecast's grid)
 ```
 
-Rows use the metrics report's default filters exactly (actual growth ≥ 10 acres,
-perimeter offset within ±3h, off-grid growth ≤ 10%; blank offset/off-grid count as
-0), entries are sorted by `H`, scores are rounded to 3 decimals (`null` when
-undefined), and `index.json` lists only fires with ≥ 1 scored row. The last four
-fields (v2) let the map redraw a row's calculation as hits and misses: the two
-perimeter archive ids (`baseline_perim_ms` is `null` when no perimeter was mapped
-before the run), the scored perimeter's hours from the window end (2 decimals), and
-`actual_mapped` 1 when that time is when it was mapped, 0 when it's its last edit,
-`null` for older CSVs that don't say. v1 files have the first four only, and the map
-then offers no hits & misses view. v3 adds `starts`: the runs whose burned-before
+v4 (Nov 2026) holds every metrics row (no filters), one per scored perimeter, sorted by
+`lead_h`: the perimeter's hours after the run (2 decimals). Scores are rounded to 3
+decimals (`null` when undefined, e.g. recall when the fire didn't grow), and
+`index.json` lists only fires with ≥ 1 scored row. The last four fields let the map
+redraw a row's calculation as hits and misses: the two perimeter archive ids
+(`baseline_perim_ms` is `null` when no perimeter was mapped before the run), 0 (each
+perimeter is scored at its own time; v3 files had the old offset from a fixed horizon
+here), and `actual_mapped` 1 when that time is when it was mapped, 0 when it's its last
+edit (the map shows those in italics). v3 files (fixed horizons, filtered) still load. v3 adds `starts`: the runs whose burned-before
 area takes in a start footprint beyond the baseline perimeter (see Metric
 definitions), and where it came from; the map and report add
-`skill/start/{slug}/{run_ts}.tif` to the baseline when they redraw a row. A
-`--skill-only` rebuild uploads no footprints: the last full run's stay in the
-bucket. On localhost the map reads `data/skill/` first,
+`skill/start/{slug}/{run_ts}.tif` to the baseline when they redraw a row. Footprints
+go up for every run scored with one, not just the runs in `starts`, since the report
+redraws rows outside the default filters too, and they go up before `metrics.csv`,
+so no published row names a footprint that isn't there yet. If one still won't load,
+the report draws the row without it and says so. A `--skill-only` rebuild uploads no
+footprints: the last full run's stay in the bucket. On localhost the map reads `data/skill/` first,
 so `analyze.py` output can be checked before it's published. Fires that
 drop out keep a stale `skill/{slug}.json` in the bucket, but are no longer
 listed. To rebuild just these files from the already-published `metrics.csv`
@@ -112,6 +114,10 @@ checked (`analyze.py --skill-only`, needs the `S3_*` env).
    to your Cloudflare account in a browser the first time), then set `RELAY` in `map.html` to the
    printed `*.workers.dev` URL. The free plan allows 100k requests a day; the map makes one per tile
    (only for runs still on pyrecast) and one per live time-of-arrival raster.
+   The hotspot card's FIRMS lookups need the key as a Worker secret: `cd relay && npx wrangler secret put FIRMS_KEY`
+   (a free MAP_KEY from firms.modaps.eosdis.nasa.gov/api/map_key: 5,000 transactions per 10 minutes; a click
+   costs one, plus one per page load for the products' date ranges). For `npx wrangler dev`, put
+   `FIRMS_KEY=...` in `relay/.dev.vars` (gitignored).
 
 ## Local usage
 
@@ -130,14 +136,14 @@ assumes a single writer. Disable the workflow (or wait for it to finish) first.
 
 ## Metric definitions
 
-For a forecast issued at `run_ts`, percentile `p`, window `H` hours (a worked
-example is on the site at `/methodology`):
+For a forecast issued at `run_ts`, percentile `p`, scored against perimeter A at its
+own time, `lead_h` hours after the run (a worked example is on the site at `/methodology`):
 
 - **baseline B** = latest Cornea perimeter mapped (or, lacking a reliable mapped time, last edited) by the end of `run_ts`'s minute, as published by then, rasterized onto the forecast's own UTM grid — never one from after the run. (`run_ts` is cut to the minute.)
 - **start S** = where the forecast itself started burning. Pyrecast seeds its runs with satellite detections on top of the perimeter (`run_ts` is usually a VIIRS overpass to the minute), so its start reaches well beyond B — a median ~2,400 ac, even when B was mapped within a minute of the run. Its time of arrival is never set there, so growth into S can't be predicted; counted as growth, it was all misses (median recall was ~0.19 instead of ~0.68 before S was subtracted, Nov 2026). S is the first granule of the run's `hours-since-burned` output (values 400 burned / 401 burning at the start; the same at every percentile), which `analyze.py --sync` fetches with two ranged reads of an archived `{pct}_hours-since-burned.tar` into `raw/forecast_archive/<slug>/<run_ts>/start.tif`. When no archived tar caught that granule (~8% of scored runs), every satellite detection footprint up to `run_ts` stands in for it (it reproduces the real start's recall within a median 0.08). `start_basis` records which (`pyrecast`, `hotspots`, or blank for neither); `start_acres` is S's area and `burned_before_acres` B ∪ S's.
-- **pred_new** = pixels with time-of-arrival ≤ H, minus B ∪ S
-- **actual A** = Cornea perimeter mapped nearest `run_ts + H` within ±12h; failing that, the one last edited nearest it within ±12h; failing that, the one published nearest it within ±12h, at its (earlier) mapped time. The signed offset is recorded either way
-- **precision** = area(pred_new ∩ act_new) / area(pred_new), **recall** = area(pred_new ∩ act_new) / area(act_new), **IoU** = area(pred_new ∩ act_new) / area(pred_new ∪ act_new), where act_new = A − (B ∪ S)
+- **actual A**: each run is scored against every perimeter it picks (`analyze.scored_perimeters`, recorded in `chosen`), over its first 7 days (`day` = 24 h periods from the run's start): every perimeter with a mapped time (`mapped`); on a day with none, the latest perimeter published that day, timed by its last edit and not a re-publish of an earlier shape (`daily`); and the perimeter the previous fixed-horizon method showed at 12h–14d (nearest `run_ts + H` within ±12h, shown when within ±3h), rescored at its own time so no earlier analysis is lost (`previous`)
+- **pred_new** = pixels with time-of-arrival ≤ `lead_h`, minus B ∪ S (every model gets the same B ∪ S: one common start, `analyze.score_grid`)
+- **precision** = area(pred_new ∩ act_new) / area(pred_new), **recall** = area(pred_new ∩ act_new) / area(act_new), **IoU** = area(pred_new ∩ act_new) / area(pred_new ∪ act_new), where act_new = A − (B ∪ S). Every row is kept (no minimum growth, timing or off-grid filter; `act_offgrid_frac` is recorded). No growth: precision and IoU 0 if the forecast predicted growth, recall blank; all blank if neither grew
 
 Treating all of S as burned is safe even though S overstates the burned area
 (only ~42% of S beyond B ends up inside the fire's final perimeter, as 375m
@@ -179,6 +185,27 @@ overpass gaps), so a hotspot-based "precision" would punish correct
 predictions; perimeters remain the precision source. The two truths are kept
 separate rather than merged: merging 375m–1km footprints into perimeter truth
 would inflate areas and destroy error attribution.
+
+Detections are screened first, once per fire against its whole record, and the
+ones that don't look like the fire are left out (neither captured nor missed):
+- **artifact** (`hs_artifact_n`): more than 1 km from the perimeter current
+  when it was detected, and its footprint never touches a perimeter mapped
+  after it. With no later perimeter yet it can't be judged and is kept, so a
+  live fire's newest rows can change as perimeters arrive.
+- **transient** (`hs_transient_n`): no other detection within 1 km on any
+  satellite's nearest pass before or after its own, its own satellite
+  included. A pass is one source's detections less than 20 minutes apart; each
+  source's sequence is over passes that detected this fire (non-artifacts
+  only), so cloudy or empty overpasses don't break it. Every satellite's
+  nearest pass counts, not just the one pass right before and after in time:
+  that one often saw the fire somewhere else, and checking only it left out
+  23% of Landsat and 18% of MODIS detections on four test fires (Nov 2026),
+  nearly all of which another satellite's pass confirms. Now 1–2%.
+
+`hs_n` counts only the detections scored; the two `_n` columns count those
+left out in the same window. The start footprint's fallback (detections up to
+the run) takes every detection, screened or not, since it stands in for what
+the run was seeded from.
 
 Growth-only by design: comparing full footprints would be dominated by
 already-burned area. All raw areas are in `metrics.csv` so other metrics can
