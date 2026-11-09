@@ -192,7 +192,11 @@ function filtered() {
   const model = document.getElementById("fModel").value, chosen = document.getElementById("fChosen").value;
   // only when the data says which time each perimeter used (older metrics.csv files don't)
   const mappedOnly = !document.getElementById("fMappedWrap").hidden && document.getElementById("fMapped").checked;
-  return DATA.filter(r =>
+  // an older metrics.csv (fixed horizons, until the first exact-lead run publishes): its rows
+  // were only meaningful under the old default filters, so those still apply to it
+  const legacy = r => r.chosen === undefined &&
+    !(r.act_new_acres !== null && r.act_new_acres >= 10 && Math.abs(r.actual_offset_h) <= 3 && r.act_offgrid_frac <= 0.10);
+  return DATA.filter(r => !legacy(r) &&
     (!model || r.model === model) && (!chosen || r.chosen === chosen) &&
     (!mappedOnly || (r.actual_time_basis === "mapped" &&
                      (!r.baseline_perim_ms || r.baseline_time_basis === "mapped"))));
@@ -540,7 +544,7 @@ async function renderInspection(row) {
       const b = actLayer.getBounds();
       const hs = await (await fetch(`${CORNEA}/hotspots?bbox=${b.getSouth() - 0.15},${b.getWest() - 0.15},${b.getNorth() + 0.15},${b.getEast() + 0.15}&since=${row.run_dt_utc.slice(0, 10)}&limit=50000`)).json();
       const t0 = Date.parse(row.run_dt_utc), t1 = Date.parse(row.valid_dt_utc);
-      let nIn = 0, nCap = 0;
+      let nIn = 0, nCap = 0, nBase = 0;
       const grp = L.layerGroup();
       for (const feat of hs.features || []) {
         const tms = acqMs(feat.properties || {});
@@ -551,18 +555,22 @@ async function renderInspection(row) {
         const rc = Math.floor((meta.ymax - Y) / meta.ph), cc = Math.floor((X - meta.xmin) / meta.pw);
         const k = (rc >= 0 && rc < meta.height && cc >= 0 && cc < meta.width)
           ? clsFlat[rc * meta.width + cc] : 0;
-        const captured = k === CLS.TP || k === CLS.FP;
+        // on ground already burned when the run began: left out of the score (as the
+        // pipeline leaves it out of hotspot capture), drawn gray
+        const captured = k === CLS.TP || k === CLS.FP, before = k === CLS.BASE;
         if (captured) nCap++;
+        if (before) nBase++;
         L.circleMarker([lat, lon], {
           radius: 3.5, weight: 1.5, fillColor: "#fff", fillOpacity: 0.9,
-          color: captured ? "#0a5c36" : "#7a1010",
+          color: captured ? "#0a5c36" : before ? "#898781" : "#7a1010", opacity: before ? 0.6 : 1,
         }).bindTooltip(`${(feat.properties || {}).source || "?"} ` +
           `${fmtDT(tms)} · ` +
-          `${captured ? "inside" : "outside"} prediction`).addTo(grp);
+          (captured ? "inside prediction" : before ? "already burned when the run began: left out" : "outside prediction")).addTo(grp);
       }
       grp.addTo(INS.map);
       INS.layers.push(grp);
-      if (nIn) hsLine = ` · <b>${nIn}</b> detections in window, <b>${nCap}</b> inside prediction`;
+      if (nIn) hsLine = ` · <b>${nIn}</b> detections in window: <b>${nCap}</b> inside prediction, <b>${nIn - nCap - nBase}</b> outside` +
+        (nBase ? `, <b>${nBase}</b> on ground already burned when the run began (gray, left out)` : "");
       // the pipeline's screening isn't per dot here: say how many the score left out
       const nArt = row.hs_artifact_n || 0, nTr = row.hs_transient_n || 0;
       if (nIn && nArt + nTr) hsLine += ` (hotspot capture leaves out <b>${nArt + nTr}</b>: ` +
@@ -575,7 +583,8 @@ async function renderInspection(row) {
       .join(" &nbsp; ") +
       ` &nbsp; <span style="border:2px solid #0a5c36;border-radius:50%;padding:0 4px">&nbsp;</span>` +
       ` / <span style="border:2px solid #7a1010;border-radius:50%;padding:0 4px">&nbsp;</span>` +
-      ` satellite detections in the window (green ring = inside prediction)`;
+      ` / <span style="border:2px solid #898781;border-radius:50%;padding:0 4px">&nbsp;</span>` +
+      ` satellite detections in the window (green ring = inside prediction, gray = already burned when the run began, left out)`;
     const pxAc = meta.pw * meta.ph / 4046.8564224;
     const ac = k => (counts[k] * pxAc);
     const P = counts[2] + counts[3] ? counts[2] / (counts[2] + counts[3]) : null;

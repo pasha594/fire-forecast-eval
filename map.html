@@ -753,7 +753,10 @@ const map = new maplibregl.Map({
       // end), whatever the hotspots' eye says; scrubbed off it, the hotspots take over
       { id: "score-hot", type: "circle", source: "scorehot", layout: { visibility: "none" },
         paint: { "circle-radius": 3.5, "circle-color": "#ffffff", "circle-opacity": 0.9, "circle-stroke-width": 1.5,
-                 "circle-stroke-color": ["case", ["==", ["get", "cap"], 1], "#0a5c36", "#7a1010"] } },
+                 // cap: 1 inside the forecast, 0 outside it, 2 on ground already burned when the run
+                 // began (left out of the score, as analyze.py leaves it out of hotspot capture)
+                 "circle-stroke-color": ["case", ["==", ["get", "cap"], 1], "#0a5c36", ["==", ["get", "cap"], 2], "#898781", "#7a1010"],
+                 "circle-stroke-opacity": ["case", ["==", ["get", "cap"], 2], 0.6, 1] } },
       { id: "fires", type: "circle", source: "fires",
         paint: { "circle-radius": 5, "circle-color": "#eb6834", "circle-opacity": 0.8,
                  "circle-stroke-width": 1.5, "circle-stroke-color": "#52514e" } },
@@ -984,7 +987,7 @@ function tipText(feat) {
   if (feat.layer.id === "perim-fill") return p.tip;
   if (feat.layer.id === "score-hot") {
     return `${p.src || "?"} ${fmtDT(p.t)} · FRP ${p.frp ?? "?"} · conf ${p.conf ?? "?"} · ` +
-      `${p.cap === 1 ? "inside" : "outside"} the forecast`;
+      (p.cap === 1 ? "inside the forecast" : p.cap === 2 ? "already burned when the run began: left out of the score" : "outside the forecast");
   }
   const r = state.hot && state.hot.recs[p.id];
   return r ? `${r.src || "?"} ${fmtDT(r.t)} · FRP ${r.frp ?? "?"} · conf ${r.conf ?? "?"}` : "";
@@ -1115,7 +1118,7 @@ function hotDetailHtml(r, cap, fx) {
       ["FRP", unit(r.frp, "MW")],
       ["Confidence", hotConf(r.conf)]);
   }
-  if (cap != null) rows.push(["Forecast", cap ? "inside" : "outside"]);
+  if (cap != null) rows.push(["Forecast", cap === 1 ? "inside" : cap === 2 ? "already burned when the run began (left out)" : "outside"]);
   const missing = `Not in Cornea's feed: ${HOT_MISSING}${r.src === "MODIS" ? "; Terra vs Aqua" : ""}.`;
   const kind = (HOT_SOURCES[r.src] || [])[3] || "";
   const note = row ? `From NASA FIRMS, ${fx.product}` +
@@ -1134,7 +1137,7 @@ function showHotDetail(feat) {
   const r = hotRec(feat);
   if (!r) { hotPop.remove(); return; }
   tip.remove();
-  const cap = feat.layer.id === "score-hot" ? feat.properties.cap === 1 : null;
+  const cap = feat.layer.id === "score-hot" ? feat.properties.cap : null;
   const draw = fx => hotPop.setHTML(hotDetailHtml(r, cap, fx));
   hotPop.setLngLat([r.lon, r.lat]);
   draw(r.firms);   // its FIRMS record once looked up (kept on r), else Cornea's fields meanwhile
@@ -2473,14 +2476,17 @@ function scoreGrid(geo, key, row, baseGj, actGj, start = null, startBasis = null
 }
 
 function scoreInside(sc) {
-  // (lon, lat) -> whether the forecast takes the spot in: predicted growth, a hit or a
-  // false alarm (as the report counts a detection "inside prediction")
+  // (lon, lat) -> a detection's ring: 1 if the forecast takes the spot in (predicted growth: a
+  // hit or a false alarm), 2 if it had already burned when the run began (burned before: left
+  // out of the score, as analyze.py leaves it out of hotspot capture), else 0 (outside the
+  // forecast; off the grid too)
   const { geo, cls } = sc, utm = utmOf(geo.projection);
   return (lon, lat) => {
     const [X, Y] = utm.forward([lon, lat]);
     const r = Math.floor((geo.ymax - Y) / geo.pixelHeight), c = Math.floor((X - geo.xmin) / geo.pixelWidth);
-    if (r < 0 || r >= geo.height || c < 0 || c >= geo.width) return false;
-    return cls[r][c] === 2 || cls[r][c] === 3;
+    if (r < 0 || r >= geo.height || c < 0 || c >= geo.width) return 0;
+    const k = cls[r][c];
+    return k === 2 || k === 3 ? 1 : k === 1 ? 2 : 0;
   };
 }
 
@@ -2516,9 +2522,12 @@ function scoreKeyHtml(row, sc, reason = "", hs = null) {
   const num = x => x.toLocaleString("en-US");
   const dets = !sc ? "" : !hs ? "Loading the window's satellite detections…"
     : hs.failed ? "Couldn't load the window's satellite detections."
-    : `<b>${num(hs.n)}</b> satellite detections in the window, <b>${num(hs.nIn)}</b> inside the forecast` +
+    : `<b>${num(hs.n)}</b> satellite detections in the window: <b>${num(hs.nIn)}</b> inside the forecast, ` +
+      `<b>${num(hs.n - hs.nIn - (hs.nBefore || 0))}</b> outside it` +
+      (hs.nBefore ? `, and <b>${num(hs.nBefore)}</b> on ground already burned when the run began (gray, left out)` : "") +
       (hs.capped ? " (some missing: a day exceeded the API cap)" : "");
   const rings = sc && hs && !hs.failed ? '<span class="sk-ring" style="border-color:#0a5c36" title="inside the forecast"></span>' +
+    (hs.nBefore ? '<span class="sk-ring" style="border-color:#898781" title="already burned when the run began: left out"></span>' : "") +
     '<span class="sk-ring" style="border-color:#7a1010" title="outside the forecast"></span>' : "";
   return `<div class="score-key"><div class="sk-head"><span><b>Analysis</b> · ${hLong(H)} after the run, to <b>${fmtShortDT(end)}</b></span>${back}</div>` +
     `<div class="sk-grid">${cls}</div>` + (dets ? `<div class="sk-dets">${rings}<span>${dets}</span></div>` : "") +
@@ -2610,17 +2619,18 @@ async function renderScore(f, run, pct, token) {
   key.innerHTML = scoreKeyHtml(row, sc);
   const got = await detsP;
   if (token !== state.wmsSeq) return;
-  let nIn = 0;
+  let nIn = 0, nBefore = 0;
   state.fc.dets = got ? got.dets : [];   // a ring's attributes, by its index (see hotRec)
   const features = state.fc.dets.map((r, i) => {
-    const cap = inside(r.lon, r.lat) ? 1 : 0;
-    nIn += cap;
+    const cap = inside(r.lon, r.lat);
+    nIn += cap === 1;
+    nBefore += cap === 2;
     return { type: "Feature", geometry: { type: "Point", coordinates: [r.lon, r.lat] },
              properties: { cap, t: r.t, src: r.src, frp: r.frp, conf: r.conf, i } };
   });
   map.getSource("scorehot").setData({ type: "FeatureCollection", features });
   if (state.hotSpan) renderHotspots();   // on the analysis frame, the rings stand in for the hotspots
-  key.innerHTML = scoreKeyHtml(row, sc, "", got ? { n: features.length, nIn, capped: got.capped } : { failed: true });
+  key.innerHTML = scoreKeyHtml(row, sc, "", got ? { n: features.length, nIn, nBefore, capped: got.capped } : { failed: true });
 }
 
 // The hotspot playhead moves to the window's end: the analysis frame. There the window's

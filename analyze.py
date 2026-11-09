@@ -1255,13 +1255,22 @@ def main():
         slug, run_ts, pct, h = args.overlay
         overlay(slug, run_ts, pct, int(h))
         return
-    client = bucket = None
+    client = bucket = pub = None
     if args.publish:
         import collect
         client, bucket = collect.make_r2()   # before computing, so missing S3_* env fails fast
-    compute(only_slug=args.only, on_fire=FirePublisher(client, bucket) if args.publish else None)
+        pub = FirePublisher(client, bucket)
+    compute(only_slug=args.only, on_fire=pub)
     if not args.publish:   # local / dry run: the skill files the page would get, in data/skill
         log("built skill files (not published): %d fires, %d rows" % build_skill(REPO / "data" / "metrics.csv", SKILL_DIR))
+        return
+    if args.only:
+        # one fire: its skill file and start footprints went up as it finished; the index goes
+        # up merged with the bucket's. metrics.csv and every other fire stay as published (a
+        # one-fire CSV or index would wipe the rest)
+        pub.put_index()
+        log(f"published {args.only} only (metrics.csv and other fires unchanged)")
+        return
     if args.publish:
         publish_starts(client, bucket)   # before metrics.csv, which names them
         client.upload_file(str(REPO / "data" / "metrics.csv"), bucket, "metrics.csv",
