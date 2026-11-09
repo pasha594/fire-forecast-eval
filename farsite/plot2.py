@@ -14,10 +14,13 @@ import numpy as np
 
 from common import RUNS
 
-COL = {"pyrecast": "#2563eb", "farsite": "#dc2626", "farsite-cal": "#16a34a", "farsite-calr": "#9333ea"}
+COL = {"pyrecast": "#2563eb", "farsite": "#dc2626", "farsite-cal": "#16a34a", "farsite-calr": "#9333ea",
+       "farsite-calbar": "#ca8a04", "farsite-calbarr": "#0891b2"}
 LAB = {"pyrecast": "PyreCast (ELMFIRE)", "farsite": "FARSITE v1 (gusts, uncalibrated)",
        "farsite-cal": "FARSITE calibrated (constant factor)",
-       "farsite-calr": "FARSITE calibrated (factor eases off)"}
+       "farsite-calr": "FARSITE calibrated (factor eases off)",
+       "farsite-calbar": "FARSITE calibrated + control lines (constant)",
+       "farsite-calbarr": "FARSITE calibrated + control lines (eases off)"}
 BIN = 6
 
 

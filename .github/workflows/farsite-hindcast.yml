@@ -1,8 +1,10 @@
 name: farsite-hindcast
 
 # FARSITE hindcast of archived PyreCast runs (pilot; see farsite/README.md).
-# What to run is farsite/targets.json (fires, variant, members, shards); every push to this
-# branch that touches the hindcast code or targets runs it (scoring/docs edits do not).
+# What to run is farsite/targets.json: "runs" lists {slug, variant, only?} entries, plus members
+# and shards. Every push to this branch that touches the hindcast code or targets runs it
+# (scoring/docs edits do not). One run at a time: a new push waits for the run in progress
+# (16 jobs at most, leaving the account's other ~4 runners for other projects).
 # prep builds FARSITE + each fire's landscape once, the matrix splits each fire's runs into
 # contiguous slices (one 4-core runner each), gather merges the slices into one
 # "farsite-results" artifact (data/fires/<slug>/runs[-flavour]/<run_ts>/...).
@@ -16,12 +18,13 @@ on:
       - farsite/common.py
       - farsite/fetch_archive.py
       - farsite/targets.json
+      - farsite/interventions/**
       - .github/workflows/farsite-hindcast.yml
   workflow_dispatch: {}
 
 concurrency:
   group: farsite-hindcast-run
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   FARSITE_WORK: ${{ github.workspace }}/farsite/work
@@ -63,10 +66,10 @@ jobs:
             || { tail -50 build.log; exit 1; }
           ls -la src/TestFARSITE
       - name: Mirror perimeters + hotspots from the archive
-        run: python farsite/fetch_archive.py --no-toa $(jq -r '.slugs[]' farsite/targets.json)
+        run: python farsite/fetch_archive.py --no-toa $(jq -r '[.runs[].slug] | unique | .[]' farsite/targets.json)
       - name: Landscape per fire (LANDFIRE)
         run: |
-          for s in $(jq -r '.slugs[]' farsite/targets.json); do
+          for s in $(jq -r '[.runs[].slug] | unique | .[]' farsite/targets.json); do
             python -u farsite/hindcast.py "$s" --prep-only
           done
       - uses: actions/upload-artifact@v4
@@ -108,11 +111,13 @@ jobs:
           M=$(jq -r '.members' farsite/targets.json)
           N=$(jq -r '.shards' farsite/targets.json)
           C=$(jq -r '.concurrent_runs // 2' farsite/targets.json)
-          V=$(jq -r '.variant // "base"' farsite/targets.json)
           LIMIT=$(jq -r 'if .limit then "--limit \(.limit)" else "" end' farsite/targets.json)
-          ONLY=$(jq -r 'if .only then "--only " + (.only | join(",")) else "" end' farsite/targets.json)
           set -o pipefail
-          for s in $(jq -r '.slugs[]' farsite/targets.json); do
+          mapfile -t ENTRIES < <(jq -c '.runs[]' farsite/targets.json)
+          for e in "${ENTRIES[@]}"; do
+            s=$(jq -r '.slug' <<< "$e")
+            V=$(jq -r '.variant // "base"' <<< "$e")
+            ONLY=$(jq -r 'if .only then "--only " + (.only | join(",")) else "" end' <<< "$e")
             # up to 3 attempts: a crash (e.g. a download that outlasts its retries) loses
             # only the runs in flight, since finished runs (meta.json) are skipped
             for attempt in 1 2 3; do
@@ -122,7 +127,7 @@ jobs:
                 break
               fi
               [ "$attempt" = 3 ] && exit 1
-              echo "::warning::$s shard ${{ matrix.shard }} attempt $attempt failed, retrying"
+              echo "::warning::$s $V shard ${{ matrix.shard }} attempt $attempt failed, retrying"
               sleep 60
             done
           done

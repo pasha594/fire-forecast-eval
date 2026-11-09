@@ -22,9 +22,15 @@ Variants (--variant):
           runs-cal/   the factor holds for the whole forecast
           runs-calr/  the factor's effect (in log space) halves every CAL_HALF_LIFE burn periods,
                       easing back toward uncalibrated at longer leads
-  Every run records cal_* fields in meta.json (factor, observed and replayed acres, window).
+  calbar  cal, plus completed control lines as FARSITE barriers (runs-calbar/, runs-calbarr/):
+        dozer, hand, road-as-line and mixed construction lines from the latest vector IAP ops
+        map published (FTP time) by the run's start, within BARRIER_NEAR_M of the fire
+        (interventions/<slug>.geojson, from interventions.py). The replay uses the lines
+        published by its own start. Fires with no vector maps run as cal.
+  Every run records cal_* fields in meta.json (factor, observed and replayed acres, window),
+  and calbar runs barrier_* fields (map, km of line).
 
-usage: hindcast.py SLUG [--variant base|cal] [--members N] [--workers N] [--concurrent-runs N]
+usage: hindcast.py SLUG [--variant base|cal|calbar] [--members N] [--workers N] [--concurrent-runs N]
                          [--limit N] [--only RUN_TS] [--shard I/N] [--prep-only]
 --shard I/N runs the I-th of N contiguous slices of the run list (GitHub Actions matrix);
 --prep-only builds the landscape and stops.
@@ -42,6 +48,7 @@ import time
 import zlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -74,9 +81,12 @@ LCP_OPTS = dict(ELEVATION_UNIT="METERS", SLOPE_UNIT="DEGREES", ASPECT_UNIT="AZIM
 
 # flavours: output name -> calibration half-life in burn periods (None = constant factor)
 VARIANTS = {
-    "base": dict(gust=True, calib=False, flavors={"base": None}),
-    "cal": dict(gust=False, calib=True, flavors={"cal": None, "calr": 4}),
+    "base": dict(gust=True, calib=False, barriers=False, flavors={"base": None}),
+    "cal": dict(gust=False, calib=True, barriers=False, flavors={"cal": None, "calr": 4}),
+    "calbar": dict(gust=False, calib=True, barriers=True, flavors={"calbar": None, "calbarr": 4}),
 }
+INTERVENTIONS = Path(__file__).resolve().parent / "interventions"
+BARRIER_NEAR_M = 5000.0       # control lines farther than this from the fire are left out
 CAL_WINDOW_H = (20, 54)       # replay from the latest perimeter 20-54 h before the baseline perimeter
 CAL_MEMBERS = 9               # replay members (m00-m08); the median sets the factor
 CAL_RANGE = (0.05, 2.5)       # factor clamp
@@ -213,6 +223,40 @@ def prior_perimeter(slug, run_ts):
     return None
 
 
+_IV = {}
+
+
+def barriers_at(slug, when, near):
+    """Completed control lines from the latest vector ops map published by `when`, within
+    BARRIER_NEAR_M of geometry `near`. -> (lines, map filename or None)"""
+    p = INTERVENTIONS / f"{slug}.geojson"
+    if not p.exists():
+        return [], None
+    if slug not in _IV:
+        _IV[slug] = json.load(open(p))["features"]
+    pubs = sorted({f["properties"]["published"] for f in _IV[slug]})
+    known = [x for x in pubs if datetime.fromisoformat(x.replace("Z", "+00:00")) <= when]
+    if not known:
+        return [], None
+    zone = near.buffer(BARRIER_NEAR_M)
+    fs = [f for f in _IV[slug] if f["properties"]["published"] == known[-1]]
+    lines = [(f["properties"]["kind"], shape(f["geometry"])) for f in fs]
+    return [(k, g) for k, g in lines if g.intersects(zone)], ",".join(sorted({f["properties"]["map"] for f in fs}))
+
+
+def write_barriers(d, lines):
+    """barrier.shp (+ barrier.geojson) in d for FARSITE's barrier slot; none if no lines"""
+    for f in d.glob("barrier.*"):
+        f.unlink()
+    if not lines:
+        return
+    gj = d / "barrier.geojson"
+    json.dump({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {"kind": k}, "geometry": mapping(g)} for k, g in lines]}, open(gj, "w"))
+    subprocess.run(["ogr2ogr", "-f", "ESRI Shapefile", str(d / "barrier.shp"), str(gj), "-a_srs",
+                    "EPSG:5070", "-nlt", "LINESTRING", "-explodecollections"], check=True, capture_output=True)
+
+
 # ---------------------------------------------------------------- members
 def members(slug, run_ts, n):
     rng = random.Random(zlib.crc32(f"{slug}/{run_ts}".encode()))
@@ -284,7 +328,8 @@ def run_member(md, wdir, mem, txt, res=RES_M):
     """One FARSITE member in md, lit from wdir/ign.shp on wdir/scar.lcp. -> (mem, arrival min, secs, err)"""
     md.mkdir(parents=True, exist_ok=True)
     (md / "in.input").write_text(txt)
-    (md / "cmd.txt").write_text(f"{wdir / 'scar.lcp'} {md / 'in.input'} {wdir / 'ign.shp'} 0 {md / 'o'} 0\n")
+    bar = wdir / "barrier.shp" if (wdir / "barrier.shp").exists() else 0
+    (md / "cmd.txt").write_text(f"{wdir / 'scar.lcp'} {md / 'in.input'} {wdir / 'ign.shp'} {bar} {md / 'o'} 0\n")
     asc = md / "o_ArrivalTime.asc"
     t0, err = time.time(), ""
     # FARSITE occasionally blows up on perimeter vertices (40+ CPU-min vs a 22 s median).
@@ -312,7 +357,7 @@ def run_member(md, wdir, mem, txt, res=RES_M):
 
 
 # ---------------------------------------------------------------- calibration (per run)
-def calibrate(slug, run_ts, wdir, mems, pool, res, gust, wxrows, elev_ft):
+def calibrate(slug, run_ts, wdir, mems, pool, res, gust, wxrows, elev_ft, barriers=False):
     """Replay the previous day (perimeter P0 -> the baseline perimeter B) and return the
     burn-period factor that matches its observed growth, with the evidence (cal_* fields)."""
     out = dict(cal_factor=1.0)
@@ -338,6 +383,10 @@ def calibrate(slug, run_ts, wdir, mems, pool, res, gust, wxrows, elev_ft):
         return dict(out, cal_status="no_replay_edge")
     cdir = wdir / "cal"
     write_inputs(slug, cdir, P0, parts)
+    if barriers:
+        lines, src = barriers_at(slug, t0, P0)
+        write_barriers(cdir, lines)
+        out.update(cal_barrier_map=src, cal_barrier_km=round(sum(g.length for _, g in lines) / 1000, 1))
     out["cal_ignition_ac"] = round(sum(p.area for p in parts) / AC)
     with rasterio.open(FIRES / slug / "lcp.tif") as ds:
         p0m = features.rasterize([(mapping(P0), 1)], out_shape=(ds.height, ds.width),
@@ -406,8 +455,15 @@ def do_run(slug, run_ts, wxrows, calrows, n_members, pool, lcp_profile, variant=
     mems = members(slug, run_ts, n_members)
     res = RES_LARGE_M if info["ignition_ac"] > LARGE_IGNITION_AC else RES_M
     meta["res_m"] = list(res)
+    if cfg["barriers"]:
+        lines, src = barriers_at(slug, dt, geom_5070(slug, info["baseline_ms"]))
+        write_barriers(wdir, lines)
+        meta.update(barrier_map=src, barrier_km=round(sum(g.length for _, g in lines) / 1000, 1),
+                    barrier_km_by_kind={k: round(sum(g.length for kk, g in lines if kk == k) / 1000, 1)
+                                        for k in sorted({k for k, _ in lines})})
     if cfg["calib"]:
-        meta.update(calibrate(slug, run_ts, wdir, mems, pool, res, cfg["gust"], calrows, elev_ft))
+        meta.update(calibrate(slug, run_ts, wdir, mems, pool, res, cfg["gust"], calrows, elev_ft,
+                              barriers=cfg["barriers"]))
     fac = meta.get("cal_factor", 1.0)
     jobs = {}
     for fl, half in cfg["flavors"].items():
@@ -442,7 +498,7 @@ def do_run(slug, run_ts, wxrows, calrows, n_members, pool, lcp_profile, variant=
         _finish(d, rows[fl], toas[fl], m, lcp_profile)
         m["wall_secs"] = wall
         if d != wdir:
-            for f in wdir.glob("ign.*"):
+            for f in list(wdir.glob("ign.*")) + list(wdir.glob("barrier.geojson")):
                 shutil.copy(f, d / f.name)
         if (wdir / "cal" / "ign.geojson").exists():
             shutil.copy(wdir / "cal" / "ign.geojson", d / "cal_ign.geojson")
@@ -453,6 +509,9 @@ def do_run(slug, run_ts, wxrows, calrows, n_members, pool, lcp_profile, variant=
     shutil.rmtree(wdir / "cal", ignore_errors=True)
     for ext in ("lcp", "lcp.aux.xml"):
         (wdir / f"scar.{ext}").unlink(missing_ok=True)
+    for f in wdir.glob("barrier.*"):
+        if f.suffix != ".geojson":
+            f.unlink()
     first = out[next(iter(dirs))]
     return dict(first, flavors={fl: m.get("central_new_ac") for fl, m in out.items()})
 
@@ -579,6 +638,7 @@ def main():
             r, m = f.result()
             cal = (f" cal {m.get('cal_status')} x{m.get('cal_factor')} (obs {m.get('cal_obs_ac')} ac vs replay "
                    f"{m.get('cal_pred_ac')} ac over {m.get('cal_window_h')} h), central by flavour {m.get('flavors')}"
+                   + (f", barriers {m.get('barrier_km')} km ({m.get('barrier_map')})" if m.get("barrier_map") else "")
                    if calib else "")
             print(f"  [{i + 1}/{len(run_list)}] {r} {m.get('status')} ign {m.get('ignition_ac')} ac/"
                   f"{m.get('ignition_parts')} parts, det24 {m.get('detections_24h')}, new ac "

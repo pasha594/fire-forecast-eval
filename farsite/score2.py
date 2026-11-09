@@ -41,7 +41,8 @@ DASH_H = (12, 24, 48, 72, 96)
 F = analyze.SKILL_FILTERS
 PASS_GAP_S = 20 * 60
 # FARSITE versions by output dir (see hindcast.py variants); only those present are scored
-FARSITE_DIRS = {"farsite": "runs", "farsite-cal": "runs-cal", "farsite-calr": "runs-calr"}
+FARSITE_DIRS = {"farsite": "runs", "farsite-cal": "runs-cal", "farsite-calr": "runs-calr",
+                "farsite-calbar": "runs-calbar", "farsite-calbarr": "runs-calbarr"}
 
 
 def models_for(slugs):
@@ -198,7 +199,8 @@ def binned(pairs, width):
     return dict(sorted(out.items()))
 
 
-SHORT = {"pyrecast": "P", "farsite": "F", "farsite-cal": "Fcal", "farsite-calr": "Fcalr"}
+SHORT = {"pyrecast": "P", "farsite": "F", "farsite-cal": "Fcal", "farsite-calr": "Fcalr",
+         "farsite-calbar": "Fbar", "farsite-calbarr": "Fbarr"}
 
 
 def summarize(rows, title, models):
