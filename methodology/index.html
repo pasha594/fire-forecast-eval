@@ -168,7 +168,9 @@
         <div class="eq">detections inside the prediction ÷ detections on new ground = <span class="frac"><span data-v="hsIn"></span> ÷ <span data-v="hsNew"></span></span></div>
         <div class="res" data-v="HS"></div>
         <div class="what">The separate satellite check. The detection on burned-before ground is left out.
-          (The pipeline weighs each detection by the ground its satellite pixel covers, about 375 m across.)</div></div>
+          (The pipeline weighs each detection by a disk of ground around it: 375 m across for VIIRS, wide enough that
+          neighbouring detections touch; 500 m for MODIS, whose 1 km pixels are usually much bigger than the fire
+          they caught; and 30 m for Landsat.)</div></div>
     </div>
   </div>
 

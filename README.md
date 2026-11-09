@@ -140,7 +140,7 @@ For a forecast issued at `run_ts`, percentile `p`, scored against perimeter A at
 own time, `lead_h` hours after the run (a worked example is on the site at `/methodology`):
 
 - **baseline B** = latest Cornea perimeter mapped (or, lacking a reliable mapped time, last edited) by the end of `run_ts`'s minute, as published by then, rasterized onto the forecast's own UTM grid — never one from after the run. (`run_ts` is cut to the minute.)
-- **start S** = where the forecast itself started burning. Pyrecast seeds its runs with satellite detections on top of the perimeter (`run_ts` is usually a VIIRS overpass to the minute), so its start reaches well beyond B — a median ~2,400 ac, even when B was mapped within a minute of the run. Its time of arrival is never set there, so growth into S can't be predicted; counted as growth, it was all misses (median recall was ~0.19 instead of ~0.68 before S was subtracted, Nov 2026). S is the first granule of the run's `hours-since-burned` output (values 400 burned / 401 burning at the start; the same at every percentile), which `analyze.py --sync` fetches with two ranged reads of an archived `{pct}_hours-since-burned.tar` into `raw/forecast_archive/<slug>/<run_ts>/start.tif`. When no archived tar caught that granule (~8% of scored runs), every satellite detection footprint up to `run_ts` stands in for it (it reproduces the real start's recall within a median 0.08). `start_basis` records which (`pyrecast`, `hotspots`, or blank for neither); `start_acres` is S's area and `burned_before_acres` B ∪ S's.
+- **start S** = where the forecast itself started burning. Pyrecast seeds its runs with satellite detections on top of the perimeter (`run_ts` is usually a VIIRS overpass to the minute), so its start reaches well beyond B — a median ~2,400 ac, even when B was mapped within a minute of the run. Its time of arrival is never set there, so growth into S can't be predicted; counted as growth, it was all misses (median recall was ~0.19 instead of ~0.68 before S was subtracted, Nov 2026). S is the first granule of the run's `hours-since-burned` output (values 400 burned / 401 burning at the start; the same at every percentile), which `analyze.py --sync` fetches with two ranged reads of an archived `{pct}_hours-since-burned.tar` into `raw/forecast_archive/<slug>/<run_ts>/start.tif`. When no archived tar caught that granule (~8% of scored runs), every satellite detection footprint up to `run_ts` stands in for it. Scored with the stand-in instead of the real start, the 167 runs on four test fires that have both get recall within a median 0.10 of the real-start recall, and precision and IoU within 0.004 (Nov 2026, with the footprint sizes under Hotspot capture; the old, larger MODIS and Landsat footprints gave 0.11 and 0.007). `start_basis` records which (`pyrecast`, `hotspots`, or blank for neither); `start_acres` is S's area and `burned_before_acres` B ∪ S's.
 - **actual A**: each run is scored against every perimeter it picks (`analyze.scored_perimeters`, recorded in `chosen`), over its first 7 days (`day` = 24 h periods from the run's start): every perimeter with a mapped time (`mapped`); on a day with none, the latest perimeter published that day, timed by its last edit and not a re-publish of an earlier shape (`daily`); and the perimeter the previous fixed-horizon method showed at 12h–14d (nearest `run_ts + H` within ±12h, shown when within ±3h), rescored at its own time so no earlier analysis is lost (`previous`)
 - **pred_new** = pixels with time-of-arrival ≤ `lead_h`, minus B ∪ S (every model gets the same B ∪ S: one common start, `analyze.score_grid`)
 - **precision** = area(pred_new ∩ act_new) / area(pred_new), **recall** = area(pred_new ∩ act_new) / area(act_new), **IoU** = area(pred_new ∩ act_new) / area(pred_new ∪ act_new), where act_new = A − (B ∪ S). Every row is kept (no minimum growth, timing or off-grid filter; `act_offgrid_frac` is recorded). No growth: precision and IoU 0 if the forecast predicted growth, recall blank; all blank if neither grew
@@ -177,9 +177,18 @@ time each row used, and report.html can restrict to mapped times only.
 
 **Hotspot capture** (`hs_*` columns) is the deliberately *separate* satellite
 companion metric: detections within exactly `(run, run+H]` (their timestamps
-are precise, so no tolerance is needed), footprint-rasterized at instrument
-resolution (VIIRS 375m px → r=187.5m, MODIS 1km px → r=500m), B ∪ S
-subtracted; `hs_capture` = predicted ∩ hotspot area / hotspot area. It is
+are precise, so no tolerance is needed), each rasterized as a disk around it,
+B ∪ S subtracted; `hs_capture` = predicted ∩ hotspot area / hotspot area. A
+detection is a fire somewhere in its pixel, often far smaller than the pixel,
+so each disk is only as big as it needs to be. VIIRS (375 m px) gets r = 187.5 m,
+the least at which neighbouring detections, 375 m apart at nadir, still touch;
+off-nadir pixels are bigger, and those don't touch. MODIS (1 km px) gets
+r = 250 m, not the full 500 m, which claimed ~194 acres burned per detection;
+its detections are ~1 km apart and don't touch either way. Landsat (30 m px)
+gets r = 15 m; it used to borrow VIIRS's 187.5 m. Every detection also takes the
+grid cell it falls in. The same disks make the `hotspots` stand-in for S and
+decide whether a far-off detection ever touches a later perimeter (Nov 2026;
+before then MODIS was 500 m and Landsat 187.5 m). It is
 recall-flavored only — hotspots undersample burned area (clouds, smoke,
 overpass gaps), so a hotspot-based "precision" would punish correct
 predictions; perimeters remain the precision source. The two truths are kept

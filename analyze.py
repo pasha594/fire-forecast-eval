@@ -98,9 +98,18 @@ CSV_COLUMNS = ["model", "slug", "cornea_id", "run_ts", "run_dt_utc", "percentile
                "hs_n", "hs_new_acres", "hs_hit_acres", "hs_capture",
                "hs_artifact_n", "hs_transient_n", "expired_run", "notes"]
 
-# satellite active-fire footprint radii (m): VIIRS 375m px, MODIS 1km px
+# satellite active-fire footprint radii (m). A detection is a fire somewhere in its pixel,
+# often far smaller than the pixel, so a footprint is only as big as it needs to be:
+#  VIIRS    375 m px: half the pixel, the least at which neighbouring detections (375 m
+#           apart at nadir) still touch; off-nadir pixels are bigger, and theirs don't
+#  MODIS    1 km px: 250 m, half the pixel's half-width. Its detections are ~1 km apart and
+#           don't touch either way; the full 500 m claimed ~194 acres burned per detection
+#  Landsat  30 m px: half the pixel (it used to get VIIRS's 187.5 m)
+# Every detection also takes the grid cell it falls in, which a disk smaller than a cell
+# can miss (HotspotSet.mask).
 HS_RADIUS_VIIRS = 187.5
-HS_RADIUS_MODIS = 500.0
+HS_RADIUS_MODIS = 250.0
+HS_RADIUS_LANDSAT = 15.0
 # Detections that don't look like the fire are left out of the hotspot metric instead
 # of counting as misses against the forecast (see HotspotSet._screen):
 #  artifact:  farther than HS_ARTIFACT_M from the perimeter current when it was detected,
@@ -574,8 +583,8 @@ class PerimeterSet:
 class HotspotSet:
     """Timestamped VIIRS/MODIS detections for one fire. Unlike perimeters these
     carry exact acquisition times, so windows need no tolerance: a detection
-    either falls inside (run, run+H] or it doesn't. Footprints are rasterized
-    at instrument resolution (VIIRS 375m px -> r=187.5m, MODIS 1km -> r=500m).
+    either falls inside (run, run+H] or it doesn't. Footprints are disks sized by
+    instrument (see HS_RADIUS_VIIRS: VIIRS 187.5 m, MODIS 250 m, Landsat 15 m).
 
     Every detection is screened once against the fire's whole record (see
     HS_ARTIFACT_M): only those that pass are scored; the rest are left out of
@@ -601,6 +610,7 @@ class HotspotSet:
                     hour=hm // 100 % 24, minute=hm % 100 % 60, tzinfo=timezone.utc)
                 src = (pr.get("source") or "").lower()
                 r = (HS_RADIUS_MODIS if ("terra" in src or "aqua" in src or "modis" in src)
+                     else HS_RADIUS_LANDSAT if "landsat" in src
                      else HS_RADIUS_VIIRS)
                 self.pts.append((dt, c[0], c[1], r, src))
         self.pts.sort(key=lambda x: (x[0], x[4]))
@@ -728,6 +738,9 @@ class HotspotSet:
                                         [p[1] for p in sel], [p[2] for p in sel])
                 geoms = [(mapping(Point(x, y).buffer(p[3], resolution=8)), 1)
                          for x, y, p in zip(xs, ys, sel)]
+                # and the cell each falls in: a 15 m Landsat disk misses every cell
+                # centre of a 30 m grid about 1 time in 5
+                geoms += [(mapping(Point(x, y)), 1) for x, y in zip(xs, ys)]
                 m = features.rasterize(geoms, out_shape=shape_, transform=transform,
                                        fill=0, dtype="uint8").astype(bool)
                 self._mask[key] = (m, len(sel), left_out)
