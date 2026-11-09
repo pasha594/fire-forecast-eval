@@ -16,7 +16,8 @@ It runs as a 25-member ensemble, published at PyreCast's five percentile levels.
   - Member 0 uses the forecast as published.
   - Each other member scales wind speed by a factor of ×0.6–1.6, shifts wind direction by about ±15°, shifts dead fuel moisture by up to ±2 points, and uses burn periods of 6–10 h.
   - Members are seeded by fire and run, so reruns are reproducible.
-- **Hung members:** a member that runs past 600 s is retried once at half resolution (`coarse_retries` in `meta.json`).
+- **Resolution:** 30 m distance and 60 m perimeter resolution. A run whose active-edge ignition is over 3,000 ac (FARSITE's cost grows with the active perimeter) starts at 60/120 m instead (`res_m` in `meta.json`).
+- **Hung members:** a member that runs past its timeout (600 s locally, 1,500 s on Actions) is retried once at half that resolution (`coarse_retries` in `meta.json`).
 
 ## Running it
 
@@ -24,7 +25,7 @@ GitHub Actions (`.github/workflows/farsite-hindcast.yml`) runs `targets.json` on
 the `farsite-hindcast` branch:
 
 ```json
-{"slugs": ["ca-plaskett"], "members": 25, "shards": 17, "limit": null}
+{"slugs": ["ca-plaskett"], "members": 25, "shards": 52, "concurrent_runs": 1, "limit": null}
 ```
 
 The result is the run's `farsite-results` artifact, laid out as:

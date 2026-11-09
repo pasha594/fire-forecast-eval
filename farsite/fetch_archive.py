@@ -5,6 +5,7 @@ The hindcast needs only perimeters + hotspots (--no-toa); scoring also needs the
 import concurrent.futures as cf
 import json
 import sys
+import time
 import urllib.request
 from collections import Counter
 
@@ -31,12 +32,15 @@ def get(rel):
     if dst.exists() and dst.stat().st_size > 0 and not rel.endswith("index.json"):
         return "cached"
     dst.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        with urllib.request.urlopen(f"{BUCKET}/{rel}", timeout=120) as r:
-            dst.write_bytes(r.read())
-        return "ok"
-    except Exception as e:
-        return f"err {getattr(e, 'code', e)}"
+    for i in range(4):                    # B2 throws the odd 500/503; 404 is final
+        try:
+            with urllib.request.urlopen(f"{BUCKET}/{rel}", timeout=120) as r:
+                dst.write_bytes(r.read())
+            return "ok"
+        except Exception as e:
+            if getattr(e, "code", None) == 404 or i == 3:
+                return f"err {getattr(e, 'code', e)}"
+            time.sleep(5 * (i + 1))
 
 
 if __name__ == "__main__":

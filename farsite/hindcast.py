@@ -16,6 +16,7 @@ outputs: data/fires/SLUG/runs/RUN_TS/{toa_p10..p90.tif, burnprob.tif, members.cs
 import argparse
 import csv
 import json
+import os
 import random
 import shutil
 import subprocess
@@ -40,7 +41,10 @@ import wx
 FARSITE = FARSITE_BIN
 TZ = ZoneInfo("America/Los_Angeles")           # pilot fires are all Pacific time
 HORIZON_H = 96
-MEMBER_TIMEOUT_S = 600            # p99 of 500 normal members was 307 s
+MEMBER_TIMEOUT_S = int(os.environ.get("FARSITE_MEMBER_TIMEOUT_S", 600))  # p99 of 500 Dome members: 307 s
+# FARSITE's cost grows with the active perimeter. Big active edges (Plaskett: 2,500-7,500 ac lit)
+# start at half resolution, as an analyst would for a big fire; a timeout halves it again.
+LARGE_IGNITION_AC, RES_M, RES_LARGE_M = 3000, (30, 60), (60, 120)   # (distance, perimeter) m
 BURN_CENTER = 16.0                              # burn periods centred on 16:00 local
 BASE_MOIST = (5, 6, 8, 30, 90)                  # 1h 10h 100h liveH liveW
 EDGE_BAND_M, HS_PAD_M, MIN_PART_AC = 150.0, 300.0, 1.0
@@ -156,7 +160,7 @@ def members(slug, run_ts, n):
     return out
 
 
-def input_text(start, end, rows, elev_ft, mem):
+def input_text(start, end, rows, elev_ft, mem, res=RES_M):
     s, e = start.astimezone(TZ), end.astimezone(TZ)
     bp0, bp1 = BURN_CENTER - mem["bp"] / 2, BURN_CENTER + mem["bp"] / 2
     hhmm = lambda h: int(h) * 100 + int(round((h % 1) * 60))
@@ -183,8 +187,8 @@ def input_text(start, end, rows, elev_ft, mem):
 FARSITE_START_TIME: {s:%m %d %H%M}
 FARSITE_END_TIME: {e:%m %d %H%M}
 FARSITE_TIMESTEP: 30
-FARSITE_DISTANCE_RES: 30.0
-FARSITE_PERIMETER_RES: 60.0
+FARSITE_DISTANCE_RES: {res[0]:.1f}
+FARSITE_PERIMETER_RES: {res[1]:.1f}
 FARSITE_MIN_IGNITION_VERTEX_DISTANCE: 15.0
 FARSITE_SPOT_GRID_RESOLUTION: 30.0
 FARSITE_SPOT_PROBABILITY: 0.0
@@ -208,7 +212,7 @@ NUMBER_PROCESSORS: 1
     return txt, periods
 
 
-def run_member(rdir, mem, txt, start, end):
+def run_member(rdir, mem, txt, start, end, res=RES_M):
     md = rdir / f"m{mem['m']:02d}"
     md.mkdir(exist_ok=True)
     (md / "in.input").write_text(txt)
@@ -217,8 +221,9 @@ def run_member(rdir, mem, txt, start, end):
     t0, err = time.time(), ""
     # FARSITE occasionally blows up on perimeter vertices (40+ CPU-min vs a 22 s median).
     # Kill at MEMBER_TIMEOUT_S and retry once at half the perimeter/distance resolution.
-    for attempt, t in enumerate((txt, txt.replace("FARSITE_DISTANCE_RES: 30.0", "FARSITE_DISTANCE_RES: 60.0")
-                                       .replace("FARSITE_PERIMETER_RES: 60.0", "FARSITE_PERIMETER_RES: 120.0"))):
+    coarse = (txt.replace(f"FARSITE_DISTANCE_RES: {res[0]:.1f}", f"FARSITE_DISTANCE_RES: {2 * res[0]:.1f}")
+                 .replace(f"FARSITE_PERIMETER_RES: {res[1]:.1f}", f"FARSITE_PERIMETER_RES: {2 * res[1]:.1f}"))
+    for attempt, t in enumerate((txt, coarse)):
         (md / "in.input").write_text(t)
         for old in md.glob("o_*"):
             old.unlink()
@@ -263,11 +268,13 @@ def do_run(slug, run_ts, wxrows, n_members, pool, lcp_profile):
         el = ds.read(1)[max(r - 40, 0):r + 40, max(c - 40, 0):c + 40]
     elev_ft = float(el[el > 0].mean() if (el > 0).any() else 0) * 3.28084
     mems = members(slug, run_ts, n_members)
+    res = RES_LARGE_M if info["ignition_ac"] > LARGE_IGNITION_AC else RES_M
+    meta["res_m"] = list(res)
     futs, periods_by_m = [], {}
     for mem in mems:
-        txt, periods = input_text(start, end, wxrows, elev_ft, mem)
+        txt, periods = input_text(start, end, wxrows, elev_ft, mem, res)
         periods_by_m[mem["m"]] = periods
-        futs.append(pool.submit(run_member, rdir, mem, txt, start, end))
+        futs.append(pool.submit(run_member, rdir, mem, txt, start, end, res))
     toas, rows, fails = {}, [], 0
     base_m = None
     for f in as_completed(futs):

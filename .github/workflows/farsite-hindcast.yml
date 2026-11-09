@@ -20,6 +20,8 @@ env:
   # mbedward/farsite PR #1 head (public domain); the version the pilot ran locally
   FARSITE_REPO: https://github.com/mbedward/farsite
   FARSITE_SHA: e9aee243aeefcfcf457278bafe4816737336a2b3
+  # runners have 6 h/job and nothing else to do: allow slow members longer than the laptop did
+  FARSITE_MEMBER_TIMEOUT_S: 1500
 
 jobs:
   prep:
@@ -48,7 +50,9 @@ jobs:
           cd "$FARSITE_WORK/farsite"
           git fetch --quiet origin pull/1/head
           git checkout --quiet "$FARSITE_SHA"
-          make -C src -j4 > build.log 2>&1 || { tail -50 build.log; exit 1; }
+          # -O2 as in the local pilot build (the makefile's default is an unoptimised -g build)
+          make -C src -j4 CFLAGS="-c -std=c++11 -O2 -w -DUNIX -Wno-deprecated" > build.log 2>&1 \
+            || { tail -50 build.log; exit 1; }
           ls -la src/TestFARSITE
       - name: Mirror perimeters + hotspots from the archive
         run: python farsite/fetch_archive.py --no-toa $(jq -r '.slugs[]' farsite/targets.json)
@@ -93,11 +97,22 @@ jobs:
           mkdir -p "$FARSITE_WORK/logs"
           M=$(jq -r '.members' farsite/targets.json)
           N=$(jq -r '.shards' farsite/targets.json)
+          C=$(jq -r '.concurrent_runs // 2' farsite/targets.json)
           LIMIT=$(jq -r 'if .limit then "--limit \(.limit)" else "" end' farsite/targets.json)
+          set -o pipefail
           for s in $(jq -r '.slugs[]' farsite/targets.json); do
-            python -u farsite/hindcast.py "$s" --members "$M" --workers 4 --concurrent-runs 2 \
-              --shard "${{ matrix.shard }}/$N" $LIMIT 2>&1 | grep --line-buffered -v -i warn \
-              | tee -a "$FARSITE_WORK/logs/shard-${{ matrix.shard }}.log"
+            # up to 3 attempts: a crash (e.g. a download that outlasts its retries) loses
+            # only the runs in flight, since finished runs (meta.json) are skipped
+            for attempt in 1 2 3; do
+              if python -u farsite/hindcast.py "$s" --members "$M" --workers 4 --concurrent-runs "$C" \
+                   --shard "${{ matrix.shard }}/$N" $LIMIT 2>&1 | grep --line-buffered -v -i warn \
+                   | tee -a "$FARSITE_WORK/logs/shard-${{ matrix.shard }}.log"; then
+                break
+              fi
+              [ "$attempt" = 3 ] && exit 1
+              echo "::warning::$s shard ${{ matrix.shard }} attempt $attempt failed, retrying"
+              sleep 60
+            done
           done
       - uses: actions/upload-artifact@v4
         if: always()
