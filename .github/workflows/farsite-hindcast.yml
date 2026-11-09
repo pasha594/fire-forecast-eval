@@ -1,0 +1,153 @@
+name: farsite-hindcast
+
+# FARSITE hindcast of archived PyreCast runs (pilot; see farsite/README.md).
+# What to run is farsite/targets.json; every push to this branch that touches farsite/
+# runs it. prep builds FARSITE + each fire's landscape once, the matrix splits each
+# fire's runs into contiguous slices (one 4-core runner each), gather merges the
+# slices into one "farsite-results" artifact (data/fires/<slug>/runs/<run_ts>/...).
+on:
+  push:
+    branches: [farsite-hindcast]
+    paths: ["farsite/**", ".github/workflows/farsite-hindcast.yml"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: farsite-hindcast
+  cancel-in-progress: true
+
+env:
+  FARSITE_WORK: ${{ github.workspace }}/farsite/work
+  # mbedward/farsite PR #1 head (public domain); the version the pilot ran locally
+  FARSITE_REPO: https://github.com/mbedward/farsite
+  FARSITE_SHA: e9aee243aeefcfcf457278bafe4816737336a2b3
+
+jobs:
+  prep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      shards: ${{ steps.cfg.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet numpy rasterio shapely
+      - id: cfg
+        name: Read targets.json
+        run: |
+          python - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json
+          t = json.load(open("farsite/targets.json"))
+          print("shards=" + json.dumps(list(range(t["shards"]))))
+          EOF
+          cat farsite/targets.json
+      - name: Build FARSITE
+        run: |
+          git clone --quiet "$FARSITE_REPO" "$FARSITE_WORK/farsite"
+          cd "$FARSITE_WORK/farsite"
+          git fetch --quiet origin pull/1/head
+          git checkout --quiet "$FARSITE_SHA"
+          make -C src -j4 > build.log 2>&1 || { tail -50 build.log; exit 1; }
+          ls -la src/TestFARSITE
+      - name: Mirror perimeters + hotspots from the archive
+        run: python farsite/fetch_archive.py --no-toa $(jq -r '.slugs[]' farsite/targets.json)
+      - name: Landscape per fire (LANDFIRE)
+        run: |
+          for s in $(jq -r '.slugs[]' farsite/targets.json); do
+            python -u farsite/hindcast.py "$s" --prep-only
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prep
+          retention-days: 7
+          path: |
+            farsite/work/manifest.json
+            farsite/work/data/raw
+            farsite/work/data/fires
+            farsite/work/farsite/src/TestFARSITE
+
+  run:
+    needs: prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJson(needs.prep.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          sudo apt-get -qq update && sudo apt-get -qq install -y gdal-bin > /dev/null
+          pip install --quiet numpy rasterio shapely
+      - uses: actions/download-artifact@v4
+        with:
+          name: prep
+          path: farsite/work
+      - name: Hindcast this slice
+        run: |
+          chmod +x "$FARSITE_WORK/farsite/src/TestFARSITE"
+          mkdir -p "$FARSITE_WORK/logs"
+          M=$(jq -r '.members' farsite/targets.json)
+          N=$(jq -r '.shards' farsite/targets.json)
+          LIMIT=$(jq -r 'if .limit then "--limit \(.limit)" else "" end' farsite/targets.json)
+          for s in $(jq -r '.slugs[]' farsite/targets.json); do
+            python -u farsite/hindcast.py "$s" --members "$M" --workers 4 --concurrent-runs 2 \
+              --shard "${{ matrix.shard }}/$N" $LIMIT 2>&1 | grep --line-buffered -v -i warn \
+              | tee -a "$FARSITE_WORK/logs/shard-${{ matrix.shard }}.log"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shard-${{ matrix.shard }}
+          retention-days: 7
+          path: |
+            farsite/work/logs
+            farsite/work/data/fires/*/runs
+            farsite/work/data/fires/*/wx
+            !farsite/work/data/fires/*/runs/*/m[0-9][0-9]
+            !farsite/work/data/fires/*/runs/*/scar.*
+
+  gather:
+    needs: run
+    if: always() && needs.run.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: shard-*
+          merge-multiple: true
+          path: farsite/work
+      - uses: actions/download-artifact@v4
+        with:
+          name: prep
+          path: prep
+      - name: Merge + summary
+        run: |
+          for d in prep/data/fires/*/; do
+            s=$(basename "$d"); mkdir -p "farsite/work/data/fires/$s"
+            cp "$d"/lcp.tif "$d"/grid.json "farsite/work/data/fires/$s/"
+          done
+          python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import collections, glob, json
+          print("| fire | runs | ok | no active edge | other | members failed | coarse retries |")
+          print("|---|---|---|---|---|---|---|")
+          by = collections.defaultdict(list)
+          for p in glob.glob("farsite/work/data/fires/*/runs/*/meta.json"):
+              by[p.split("/")[4]].append(json.load(open(p)))
+          for s, ms in sorted(by.items()):
+              st = collections.Counter(m.get("status") for m in ms)
+              print(f"| {s} | {len(ms)} | {st['ok']} | {st['no_active_edge']} | "
+                    f"{len(ms) - st['ok'] - st['no_active_edge']} | "
+                    f"{sum(m.get('failed') or 0 for m in ms)} | {sum(m.get('coarse_retries') or 0 for m in ms)} |")
+          EOF
+          cat "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: farsite-results
+          path: |
+            farsite/work/logs
+            farsite/work/data/fires

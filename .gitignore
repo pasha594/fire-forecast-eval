@@ -8,3 +8,6 @@ data/skill/
 # wrangler (relay/): local cache with the Cloudflare account id
 .wrangler/
 node_modules/
+
+# FARSITE hindcast working dir (farsite/common.py)
+farsite/work/
