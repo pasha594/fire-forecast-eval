@@ -349,6 +349,19 @@
   .map-tip { pointer-events: none; }
   .map-tip .maplibregl-popup-content { padding: 4px 8px; border-radius: 4px; color: var(--ink);
                                        font: 12px/1.35 var(--font-sans); box-shadow: 0 1px 4px rgba(59, 29, 41, 0.3); }
+  /* a clicked hotspot: every attribute the feed gives, pinned until closed (see hotDetailHtml) */
+  .hot-pop .maplibregl-popup-content { padding: 8px 10px; border-radius: 6px; color: var(--ink);
+                                       font: var(--fs-label)/var(--lh-label) var(--font-sans);
+                                       box-shadow: 0 1px 4px rgba(59, 29, 41, 0.3); }
+  .hot-pop .maplibregl-popup-close-button { padding: 0 6px; font-size: 16px; color: var(--ink-2); }
+  .hot-pop .maplibregl-popup-close-button:hover { background: var(--hover); color: var(--ink); }
+  .hot-pop h4 { margin: 0 18px 6px 0; font-weight: 700; font-size: var(--fs-label); }
+  .hot-pop dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0; }
+  .hot-pop dt { color: var(--label); white-space: nowrap; }
+  .hot-pop dd { margin: 0; font-variant-numeric: tabular-nums; }
+  .hot-pop dd small { color: var(--muted); font-size: var(--fs-meta); }
+  .hot-pop .hp-note { margin-top: 6px; padding-top: 5px; border-top: 1px solid var(--grid); color: var(--muted);
+                      font-size: var(--fs-meta); line-height: var(--lh-meta); }
   .maplibregl-ctrl-attrib { font: 11px/1.4 var(--font-sans); }
   /* Settings → Timeline: docked along the bottom of the map, as Incibrief does (wide
      enough, it takes the larger type and the column of lane names; see .tl-in) */
@@ -916,12 +929,173 @@ function tipText(feat) {
   const r = state.hot && state.hot.recs[p.id];
   return r ? `${r.src || "?"} ${fmtDT(r.t)} · FRP ${r.frp ?? "?"} · conf ${r.conf ?? "?"}` : "";
 }
+
+// A click on a detection pins every attribute of its NASA FIRMS record. Cornea's
+// /hotspots feed passes on only part of each FIRMS row (no bright_t31/ti5, scan, track,
+// daynight, version or type, nor Terra vs Aqua), so the card shows Cornea's fields at
+// once, then swaps in the whole row from FIRMS (see firmsRecord).
+// Cornea source -> [satellite, instrument, its pixel at nadir, FIRMS product family]
+const HOT_SOURCES = {
+  "SNPP": ["Suomi NPP (N)", "VIIRS", "375 m", "VIIRS_SNPP"],
+  "NOAA-20": ["NOAA-20 (N20)", "VIIRS", "375 m", "VIIRS_NOAA20"],
+  "NOAA-21": ["NOAA-21 (N21)", "VIIRS", "375 m", "VIIRS_NOAA21"],
+  "MODIS": ["Terra or Aqua", "MODIS", "1 km", "MODIS"],
+  "Landsat/L8": ["Landsat 8 (L8)", "OLI", "30 m", "LANDSAT"],
+  "Landsat/L9": ["Landsat 9 (L9)", "OLI-2", "30 m", "LANDSAT"],
+};
+const HOT_MISSING = "bright_t31 / bright_ti5, scan, track, daynight, version, type";
+// FIRMS's satellite codes, each instrument's [fire, background] brightness channels, and type codes
+const FIRMS_SAT = { N: "Suomi NPP", N20: "NOAA-20", N21: "NOAA-21", Terra: "Terra", Aqua: "Aqua",
+                    L8: "Landsat 8", L9: "Landsat 9" };
+const HOT_CHANNELS = { VIIRS: ["I-4", "I-5"], MODIS: ["21/22", "31"] };
+const FIRMS_TYPE = { 0: "presumed vegetation fire", 1: "active volcano", 2: "other static land source", 3: "offshore" };
+
+// FIRMS is asked through the relay, which holds the key (relay/src/index.js). Each sensor
+// has an archive product (_SP: reprocessed, final, the only one with `type`) up to a month
+// or two ago and a near-real-time one (_NRT) after it; Landsat has only _NRT. A FIRMS row is
+// the clicked detection when it's the nearest within FIRMS_MATCH_MIN minutes and its
+// instrument's FIRMS_MATCH_KM: the archive moves MODIS rows a little, and their times by minutes
+const FIRMS_RELAY = `${RELAY}/firms`;
+const FIRMS_MATCH_MIN = 15, FIRMS_MATCH_KM = { VIIRS: 0.5, MODIS: 1.5, LANDSAT: 0.1 };
+let firmsAvailP = null;
+async function getText(url) {
+  const res = await fetch(url);
+  const text = await res.text();
+  if (!res.ok) throw new Error(text.trim().slice(0, 160) || `HTTP ${res.status}`);
+  return text;
+}
+function parseCsv(text) {
+  // FIRMS's CSV: a header row, then plain comma-separated values (nothing quoted)
+  const [head, ...lines] = text.trim().split(/\r?\n/), keys = head.split(",");
+  return lines.filter(Boolean).map(l => { const v = l.split(","); return Object.fromEntries(keys.map((k, i) => [k, v[i]])); });
+}
+function firmsAvail() {
+  // product -> [first, last] day it holds ("YYYY-MM-DD"), asked once a page (again after a failure)
+  if (!firmsAvailP) {
+    firmsAvailP = getText(`${FIRMS_RELAY}/availability`)
+      .then(t => Object.fromEntries(parseCsv(t).map(p => [p.data_id, [p.min_date, p.max_date]])));
+    firmsAvailP.catch(() => { firmsAvailP = null; });
+  }
+  return firmsAvailP;
+}
+async function firmsRecord(r) {
+  // {product, row} for detection r (row null when FIRMS has no match), or null when no FIRMS
+  // product covers it; throws when the lookup fails
+  const fam = (HOT_SOURCES[r.src] || [])[3];
+  if (!fam) return null;
+  const day = new Date(r.t).toISOString().slice(0, 10), avail = await firmsAvail();
+  const product = [`${fam}_SP`, `${fam}_NRT`].find(p => avail[p] && avail[p][0] <= day && day <= avail[p][1]);
+  if (!product) return null;
+  const d = 0.02, box = [Math.max(-180, r.lon - d), Math.max(-90, r.lat - d), Math.min(180, r.lon + d), Math.min(90, r.lat + d)];
+  const rows = parseCsv(await getText(`${FIRMS_RELAY}/area?source=${product}` +
+    `&bbox=${box.map(v => v.toFixed(4)).join(",")}&days=1&date=${day}`));
+  const sat = { "Landsat/L8": "L8", "Landsat/L9": "L9" }[r.src];   // one Landsat product holds both
+  let row = null, best = FIRMS_MATCH_KM[fam.startsWith("VIIRS") ? "VIIRS" : fam] * 1000;
+  for (const x of rows) {
+    const t = parseAcq(x);
+    if ((sat && x.satellite !== sat) || t === null || Math.abs(t - r.t) > FIRMS_MATCH_MIN * 60e3) continue;
+    const m = groundMeters({ lat: r.lat, lng: r.lon }, { lat: +x.latitude, lng: +x.longitude });
+    if (m <= best) { row = x; best = m; }
+  }
+  return { product, row };
+}
+
+const hotPop = new maplibregl.Popup({ className: "hot-pop", offset: 8, maxWidth: "320px", closeOnClick: false });
+hotPop.on("close", () => { hotPop.rec = null; });
+function hotRec(feat) {
+  // the detection behind a dot: the hotspot layer's, or the analysis frame's ring
+  const p = feat.properties;
+  if (feat.layer.id === "hot") return (state.hot && state.hot.recs[p.id]) || null;
+  if (feat.layer.id === "score-hot") return (state.fc && state.fc.dets && state.fc.dets[p.i]) || null;
+  return null;
+}
+function hotConf(c) {
+  // MODIS 0-100 %; VIIRS l / n / h; Landsat L / M / H
+  if (c == null || c === "") return "—";
+  const s = String(c);
+  if (/^\d+(\.\d+)?$/.test(s)) return `${Math.round(+s)} %`;
+  const word = { l: "low", n: "nominal", m: "medium", h: "high" }[s.toLowerCase()];
+  return word ? `${word} <small>(${esc(s)})</small>` : esc(s);
+}
+function hotDetailHtml(r, cap, fx) {
+  // detection r's card: its FIRMS row when fx (firmsRecord's answer) has one, else Cornea's
+  // fields and why (fx undefined: still looking; {error}: the lookup failed)
+  const [sat0, inst0, px] = HOT_SOURCES[r.src] || [r.src || "?", "?", null];
+  const num = v => (v == null || v === "" ? null : esc(String(v)));
+  const unit = (v, u, note) => (num(v) ? `${num(v)} ${u}` + (note ? ` <small>· ${note}</small>` : "") : "—");
+  const row = fx && fx.row, inst = (row && row.instrument) || inst0, ch = HOT_CHANNELS[inst] || [];
+  const satName = row && (FIRMS_SAT[row.satellite] || row.satellite);
+  const t = row ? parseAcq(row) : r.t;
+  const rows = [
+    ["Satellite", row ? esc(satName) + (satName !== row.satellite ? ` <small>(${esc(row.satellite)})</small>` : "") : esc(sat0)],
+    ["Instrument", esc(inst) + (px ? ` <small>· ${px} pixel at nadir</small>` : "")],
+    ["Acquired", `${new Date(t).toISOString().slice(0, 16).replace("T", " ")} UTC`],
+    ["", `${fmtDT(t)} <small>your time</small>`],
+  ];
+  if (row) {
+    const sp = fx.product.endsWith("_SP"), dn = { D: "day", N: "night" }[row.daynight];
+    rows.push(
+      ["Day / night", dn ? `${dn} <small>(${esc(row.daynight)})</small>` : num(row.daynight) || "—"],
+      ["Location", `${num(row.latitude)}, ${num(row.longitude)}`],
+      ...(row.path != null ? [["Path / row", `${num(row.path)} / ${num(row.row)}`]] : []),
+      // MODIS and VIIRS give the pixel's size in km; Landsat's scan and track are as FIRMS gives them
+      ["Scan × track", num(row.scan) ? `${num(row.scan)} × ${num(row.track)}` +
+        (ch.length ? " km <small>· across × along track</small>" : "") : "—"],
+      ["Brightness", unit(row.bright_ti4 ?? row.brightness, "K", ch[0] && `channel ${ch[0]}`)],
+      ["Background", unit(row.bright_ti5 ?? row.bright_t31, "K", ch[1] && `channel ${ch[1]}`)],
+      ["FRP", unit(row.frp, "MW")],
+      ["Confidence", hotConf(row.confidence)],
+      ["Version", num(row.version) ? `${num(row.version)} <small>· ${sp ? "standard (archive)" : "near real-time"}</small>` : "—"],
+      ["Type", num(row.type) ? `${FIRMS_TYPE[row.type] || num(row.type)} <small>(${num(row.type)})</small>`
+        : `—${sp ? "" : " <small>· archive data only</small>"}`]);
+  } else {
+    rows.push(
+      ["Location", `${num(r.lat)}, ${num(r.lon)}`],
+      ["Brightness", unit(r.bright, "K", ch[0] && `channel ${ch[0]}`)],
+      ["FRP", unit(r.frp, "MW")],
+      ["Confidence", hotConf(r.conf)]);
+  }
+  if (cap != null) rows.push(["Forecast", cap ? "inside" : "outside"]);
+  const missing = `Not in Cornea's feed: ${HOT_MISSING}${r.src === "MODIS" ? "; Terra vs Aqua" : ""}.`;
+  const kind = (HOT_SOURCES[r.src] || [])[3] || "";
+  const note = row ? `From NASA FIRMS, ${fx.product}` +
+      (fx.product.endsWith("_SP") ? " (reprocessed: it can differ a little from the hover label's live numbers)" : "")
+    : fx === undefined ? "Looking up the full record in NASA FIRMS…"
+    : fx === null ? `No FIRMS product covers this detection. ${missing}`
+    : fx.error ? `The FIRMS lookup failed (${esc(fx.error)}). ${missing}`
+    : `No record in FIRMS ${fx.product} within ${FIRMS_MATCH_MIN} min and ` +
+      `${FIRMS_MATCH_KM[kind.startsWith("VIIRS") ? "VIIRS" : kind]} km of this one. ${missing}`;
+  const head = row ? `${satName} · ${inst}` : r.src && r.src !== inst ? `${r.src} · ${inst}` : inst;   // MODIS names both
+  return `<h4>${esc(head)}</h4><dl>` +
+    rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("") + "</dl>" +
+    `<div class="hp-note">${note}</div>`;
+}
+function showHotDetail(feat) {
+  const r = hotRec(feat);
+  if (!r) { hotPop.remove(); return; }
+  tip.remove();
+  const cap = feat.layer.id === "score-hot" ? feat.properties.cap === 1 : null;
+  const draw = fx => hotPop.setHTML(hotDetailHtml(r, cap, fx));
+  hotPop.setLngLat([r.lon, r.lat]);
+  draw(r.firms);   // its FIRMS record once looked up (kept on r), else Cornea's fields meanwhile
+  hotPop.addTo(map);
+  hotPop.rec = r;
+  if (r.firms !== undefined) return;
+  // one lookup per detection; a failed one is tried again on the next click
+  if (!r.firmsP) r.firmsP = firmsRecord(r).then(fx => (r.firms = fx), e => { r.firmsP = null; return { error: e.message }; });
+  r.firmsP.then(fx => { if (hotPop.rec === r) draw(fx); });
+}
+
 map.on("mousemove", ev => {
   // measuring: no hover labels, and the ruler follows the pointer (see rulerMove)
   if (ruler.on) { map.getCanvas().style.cursor = ""; tip.remove(); rulerMove(ev.lngLat); return; }
+  // over a pinned hotspot's card: no label under it
+  if (ev.originalEvent.target.closest && ev.originalEvent.target.closest(".hot-pop")) { tip.remove(); return; }
   const feat = featureAt(ev.point);
-  map.getCanvas().style.cursor = feat && feat.layer.id === "fires" ? "pointer" : "";
-  const text = feat && tipText(feat);
+  const hot = feat && (feat.layer.id === "hot" || feat.layer.id === "score-hot");
+  map.getCanvas().style.cursor = feat && (feat.layer.id === "fires" || hot) ? "pointer" : "";
+  // the pinned detection's own label would sit on top of its card
+  const text = feat && !(hot && hotPop.rec && hotRec(feat) === hotPop.rec) && tipText(feat);
   if (text) tip.setLngLat(ev.lngLat).setText(text).addTo(map);
   else tip.remove();
 });
@@ -930,7 +1104,11 @@ map.on("click", ev => {
   if (ruler.on) { rulerClick(ev.lngLat); return; }   // a click places a ruler end, never picks a fire
   const feat = featureAt(ev.point);
   if (feat && feat.layer.id === "fires") select(feat.properties.slug);
+  // a detection pins its attributes; a click anywhere else lets them go
+  if (feat && (feat.layer.id === "hot" || feat.layer.id === "score-hot")) showHotDetail(feat);
+  else hotPop.remove();
 });
+document.addEventListener("keydown", ev => { if (ev.key === "Escape") hotPop.remove(); });
 
 const state = {
   fires: [],            // [{slug, title, cornea_id, centroid:[lon,lat], runs:[ts...]}]
@@ -1379,6 +1557,7 @@ function refreshWms() {
   dropCanvas("fclive");
   map.getSource("iso").setData(EMPTY);
   map.getSource("scorehot").setData(EMPTY);
+  if (hotPop.rec && state.fc && state.fc.dets && state.fc.dets.includes(hotPop.rec)) hotPop.remove();   // its ring is gone
   state.fc = state.toaGrid = null;
   note.textContent = "";
   note.className = "note";
@@ -2286,7 +2465,8 @@ function loadWindowDetections(f, w, box) {
         const k = `${pr.acq_date}|${pr.acq_time}|${c[0]}|${c[1]}|${pr.source}`;
         if (seen.has(k)) continue;
         seen.add(k);
-        dets.push({ lon: c[0], lat: c[1], t, src: pr.source, frp: pr.frp, conf: pr.confidence });
+        dets.push({ lon: c[0], lat: c[1], t, src: pr.source, frp: pr.frp, conf: pr.confidence,
+                    bright: pr.brightness });
       }
       if (feats.length < HOT_LIMIT) break;   // complete through today
       if (last === d) { capped = true; d++; }   // one day alone over the cap: the rest of it is out of reach
@@ -2345,11 +2525,12 @@ async function renderScore(f, run, pct, token) {
   const got = await detsP;
   if (token !== state.wmsSeq) return;
   let nIn = 0;
-  const features = (got ? got.dets : []).map(r => {
+  state.fc.dets = got ? got.dets : [];   // a ring's attributes, by its index (see hotRec)
+  const features = state.fc.dets.map((r, i) => {
     const cap = inside(r.lon, r.lat) ? 1 : 0;
     nIn += cap;
     return { type: "Feature", geometry: { type: "Point", coordinates: [r.lon, r.lat] },
-             properties: { cap, t: r.t, src: r.src, frp: r.frp, conf: r.conf } };
+             properties: { cap, t: r.t, src: r.src, frp: r.frp, conf: r.conf, i } };
   });
   map.getSource("scorehot").setData({ type: "FeatureCollection", features });
   if (state.hotSpan) renderHotspots();   // on the analysis frame, the rings stand in for the hotspots
@@ -3333,6 +3514,7 @@ function clearHotspots() {
   const H = state.hot;
   if (H && H.req) H.req.ctl.abort();
   map.getSource("hot").setData(EMPTY);
+  if (hotPop.rec && hotPop.rec === (H && H.recs[hotPop.rec.id])) hotPop.remove();   // its detection is gone
   dropCanvas("scar");
   scar.grid = null;
   state.hot = null;
@@ -3415,7 +3597,8 @@ async function ensureHotCoverage(historyOnly) {
     if (H.keys.has(key)) continue;
     H.keys.add(key);
     const day = dayOf(t), r = { lat: c[1], lon: c[0], t, src: props.source, date: props.acq_date,
-                                time: props.acq_time, frp: props.frp, conf: props.confidence, id: H.recs.length };
+                                time: props.acq_time, frp: props.frp, conf: props.confidence,
+                                bright: props.brightness, id: H.recs.length };
     H.recs.push(r);
     if (!H.days.has(day)) H.days.set(day, []);
     H.days.get(day).push(r);

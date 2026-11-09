@@ -8,3 +8,6 @@ data/skill/
 # wrangler (relay/): local cache with the Cloudflare account id
 .wrangler/
 node_modules/
+
+# wrangler local secrets (relay/.dev.vars holds FIRMS_KEY)
+.dev.vars

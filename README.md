@@ -21,7 +21,7 @@ typically about one newly mapped perimeter per fire-day).
 | `analyze.py` | local: syncs the archive, computes growth-only P/R → `data/metrics.csv` |
 | `report.html` | static Plotly report over `data/metrics.csv` |
 | `map.html` | interactive MapLibre map, flat or over 3D terrain, over Cornea perimeter history + hotspots. Forecasts are decoded in the browser from the archive (all variables/percentiles); runs still on pyrecast are read live through `relay/` (its WMS tiles for the hourly variables, its raw time-of-arrival coverage until the archive has it) |
-| `relay/` | Cloudflare Worker (free plan) that passes pyrecast's geoserver through with CORS headers, which its geoserver refuses to send for any site but pyrecast.org; GetMap and GetCoverage only. Deploy with `cd relay && npx wrangler deploy` |
+| `relay/` | Cloudflare Worker (free plan) that passes pyrecast's geoserver through with CORS headers, which its geoserver refuses to send for any site but pyrecast.org; GetMap and GetCoverage only. It also fetches a clicked hotspot's full NASA FIRMS record (`/firms/area`, `/firms/availability`) with the `FIRMS_KEY` secret, so the key stays out of the public page. Deploy with `cd relay && npx wrangler deploy` |
 | `overrides.json` | manual slug→cornea_id match overrides (string forces, null skips) |
 
 Archive layout (bucket or local `raw/`):
@@ -112,6 +112,10 @@ checked (`analyze.py --skill-only`, needs the `S3_*` env).
    to your Cloudflare account in a browser the first time), then set `RELAY` in `map.html` to the
    printed `*.workers.dev` URL. The free plan allows 100k requests a day; the map makes one per tile
    (only for runs still on pyrecast) and one per live time-of-arrival raster.
+   The hotspot card's FIRMS lookups need the key as a Worker secret: `cd relay && npx wrangler secret put FIRMS_KEY`
+   (a free MAP_KEY from firms.modaps.eosdis.nasa.gov/api/map_key: 5,000 transactions per 10 minutes; a click
+   costs one, plus one per page load for the products' date ranges). For `npx wrangler dev`, put
+   `FIRMS_KEY=...` in `relay/.dev.vars` (gitignored).
 
 ## Local usage
 

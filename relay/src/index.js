@@ -9,6 +9,9 @@
 // It does no processing (the free plan allows ~10ms CPU a request). Responses carry
 // Cache-Control for browsers; on a *.workers.dev address Cloudflare's own cache does
 // nothing, so a repeat from another viewer reaches Pyrecast again.
+//
+// It also asks NASA FIRMS for a clicked hotspot's full record (see "FIRMS" below), so
+// the FIRMS key stays a Worker secret instead of sitting in the public page.
 const UPSTREAM = "https://geoserver-usw1.pyrecast.org/geoserver02/";
 const LAYER = /^fire-spread-forecast_[a-z0-9-]+_\d{8}_\d{6}(:|__)elmfire_landfire_\d{1,2}_[a-z-]+$/;
 // path -> the parameters it accepts (lower-cased names) and the values they must have
@@ -57,13 +60,58 @@ function upstreamUrl(url) {
   return UPSTREAM + service + "?" + new URLSearchParams([...seen]).toString();
 }
 
+// ---------------------------------------------------------------- FIRMS
+// Two requests, each rebuilt from checked parameters with the key (the FIRMS_KEY secret:
+// `npx wrangler secret put FIRMS_KEY`; locally, relay/.dev.vars) added here:
+//   /firms/availability                                  -> each product's date range
+//   /firms/area?source=&bbox=w,s,e,n&days=1-5&date=YYYY-MM-DD -> its detections, as CSV
+// A box is at most 1° a side: the map asks for a few km around one detection.
+const FIRMS = "https://firms.modaps.eosdis.nasa.gov/api";
+const FIRMS_SOURCES = new Set(["VIIRS_SNPP_NRT", "VIIRS_SNPP_SP", "VIIRS_NOAA20_NRT", "VIIRS_NOAA20_SP",
+  "VIIRS_NOAA21_NRT", "VIIRS_NOAA21_SP", "MODIS_NRT", "MODIS_SP", "LANDSAT_NRT"]);
+
+function firmsUrl(url, key) {
+  const path = url.pathname.replace(/\/+$/, "");
+  if (path === "/firms/availability") return url.search ? null : `${FIRMS}/data_availability/csv/${key}/all`;
+  if (path !== "/firms/area") return null;
+  const p = Object.fromEntries(url.searchParams);
+  if ([...url.searchParams.keys()].length !== 4 || Object.keys(p).sort().join() !== "bbox,date,days,source") return null;
+  if (!FIRMS_SOURCES.has(p.source) || !/^[1-5]$/.test(p.days) || !/^\d{4}-\d\d-\d\d$/.test(p.date)) return null;
+  const b = p.bbox.split(",").map(Number);
+  if (b.length !== 4 || b.some(v => !Number.isFinite(v))) return null;
+  const [w, s, e, n] = b;
+  if (w < -180 || e > 180 || s < -90 || n > 90 || !(w < e && s < n) || e - w > 1 || n - s > 1) return null;
+  return `${FIRMS}/area/csv/${key}/${p.source}/${b.join(",")}/${p.days}/${p.date}`;
+}
+
+async function firms(url, env, cors) {
+  const key = env.FIRMS_KEY;
+  if (!key) return new Response("FIRMS key not configured", { status: 503, headers: cors });
+  const target = firmsUrl(url, key);
+  if (!target) return new Response("not relayed", { status: 400, headers: cors });
+  const up = await fetch(target, { headers: { "User-Agent": "cornea-projector-relay (pasha594.github.io)" } });
+  const text = (await up.text()).split(key).join("…");   // never hand the key back, even in an error
+  // FIRMS answers some errors (a bad key, the transaction cap) as plain text: only CSV is
+  // passed on, and cached. An archive (SP) day is final; a near-real-time one can still fill
+  // in, and the date ranges move as FIRMS reprocesses
+  const csv = up.ok && /^(latitude|data_id),/.test(text);
+  const maxAge = /_SP\//.test(target) ? 86400 : 3600;
+  return new Response(csv ? text : `FIRMS: ${text.trim().slice(0, 200) || up.status}`, {
+    status: csv ? 200 : 502,
+    headers: { ...cors, "Content-Type": "text/csv; charset=utf-8",
+               "Cache-Control": csv ? `public, max-age=${maxAge}` : "no-store" },
+  });
+}
+
 export default {
-  async fetch(req) {
+  async fetch(req, env) {
     const cors = corsHeaders(req);
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
     if (req.method !== "GET") return new Response("GET only", { status: 405, headers: cors });
 
-    const url = new URL(req.url), target = upstreamUrl(url);
+    const url = new URL(req.url);
+    if (url.pathname.startsWith("/firms/")) return firms(url, env, cors);
+    const target = upstreamUrl(url);
     if (!target) return new Response("not relayed", { status: 400, headers: cors });
 
     // a server-side fetch carries no Origin header, which the geoserver accepts
