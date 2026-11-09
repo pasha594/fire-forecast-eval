@@ -66,7 +66,7 @@
     border-bottom: 1px solid var(--grid); padding: 3px 10px 3px 0;
     text-align: right; font-variant-numeric: tabular-nums;
   }
-  table.rows td:nth-child(-n+3), table.rows th:nth-child(-n+3) { text-align: left; }
+  table.rows td:nth-child(-n+4), table.rows th:nth-child(-n+4) { text-align: left; }
   #loaderr { background: var(--warn-bg); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
 </style>
 </head>
@@ -76,29 +76,40 @@
     <div class="lockup"><a class="brand" href="https://cornea.is/" target="_blank" rel="noopener"><img src="cornea-logo-on-light.webp" alt="Cornea"></a><span class="product">Projector</span></div>
   </div>
   <h1>ELMFIRE forecast metrics vs actual perimeters</h1>
-  <p class="sub">Growth-only precision &amp; recall of Pyrecast fire-spread forecasts against Cornea
-  perimeter snapshots. One row per (fire, forecast run, weather percentile, horizon) with a perimeter
-  near the horizon: mapped within &plusmn;12h, else last edited within &plusmn;12h, else published then
-  (at its earlier mapped time); the offset is recorded. Perimeters without a reliable mapped time are
-  timed by their last edit. Predicted area = time-of-arrival &le; horizon; both sides subtract what had
-  burned when the run began: the latest perimeter mapped before the run, and where the forecast itself
-  started burning (Pyrecast seeds its start with satellite detections beyond the perimeter).
+  <p class="sub">Growth-only precision &amp; recall of fire-spread forecasts against Cornea perimeter
+  snapshots. Each run is scored against perimeters in the 7 days after it, each at the perimeter's
+  own time (no window or tolerance): every perimeter with a mapped time, the latest one published on
+  a day without one (timed by its last edit), and the perimeters scored before November 2026. One
+  row per (model, fire, run, weather percentile, perimeter), all kept: no minimum growth or
+  off-grid filter. Predicted area = time of arrival before the perimeter's time; both sides subtract
+  what had burned when the run began: the latest perimeter mapped before the run, and where the
+  forecast itself started burning (Pyrecast seeds its start with satellite detections beyond the
+  perimeter).
   <a href="methodology/">How it's calculated, with a worked example</a>.</p>
 
   <div id="loaderr" hidden></div>
 
   <div class="filters" id="filters" hidden>
-    <div><label for="fMinGrowth">min actual growth (acres)</label>
-      <input type="number" id="fMinGrowth" value="10" min="0" step="10"></div>
-    <div><label for="fMaxOff">max |perimeter offset| (h)</label>
-      <input type="number" id="fMaxOff" value="3" min="0" step="1"></div>
-    <div class="chk"><input type="checkbox" id="fOffgrid" checked>
-      <label for="fOffgrid" style="margin:0">exclude &gt;10% off-grid growth</label></div>
+    <div><label for="fModel">model</label><select id="fModel"></select></div>
+    <div><label for="fChosen">perimeters</label><select id="fChosen">
+      <option value="">all scored</option>
+      <option value="mapped">mapped time</option>
+      <option value="daily">daily fallback (published only)</option>
+      <option value="previous">scored before Nov 2026</option></select></div>
     <div class="chk" id="fMappedWrap" hidden><input type="checkbox" id="fMapped">
       <label for="fMapped" style="margin:0" title="Leave out rows whose baseline or actual perimeter has no reliable mapped time and was timed by its last edit instead">only perimeters with a reliable mapped time</label></div>
   </div>
 
   <div class="tiles" id="tiles" hidden></div>
+  <div class="card" id="leadCard" hidden>
+    <h2>Scores by lead time</h2>
+    <p class="note">Every scored row at its exact time after the run (no averaging buckets).
+    Filled dots: perimeter with a mapped time; open dots: timed by its last edit.
+    <label style="margin-left:8px">score <select id="leadMetric">
+      <option value="iou">IoU</option><option value="precision">precision</option>
+      <option value="recall">recall</option></select></label></p>
+    <div id="leadPlot"></div>
+  </div>
 
   <div class="card">
     <h2>Fires in this report</h2>
@@ -116,7 +127,7 @@
       <div><label for="insFire">fire</label><select id="insFire" style="width:170px"></select></div>
       <div><label for="insRun">run</label><select id="insRun" style="width:150px"></select></div>
       <div><label for="insPct">percentile</label><select id="insPct"></select></div>
-      <div><label for="insH">horizon (h)</label><select id="insH"></select></div>
+      <div><label for="insH">perimeter</label><select id="insH"></select></div>
     </div>
     <div class="note" id="insTimes" style="margin-bottom:8px"></div>
     <div id="insMap" style="height:440px;border-radius:8px;border:1px solid var(--grid)"></div>
@@ -150,7 +161,7 @@ document.getElementById("topbar").append(Palette.gearButton());
 function parseCSV(text) {
   const lines = text.trim().split(/\r?\n/);
   const head = lines[0].split(",");
-  const numeric = new Set(["horizon_h", "baseline_offset_h", "actual_offset_h", "pixel_m",
+  const numeric = new Set(["lead_h", "day", "horizon_h", "baseline_offset_h", "actual_offset_h", "pixel_m",
     "baseline_acres", "start_acres", "burned_before_acres",
     "pred_total_acres", "pred_new_acres", "act_new_acres", "inter_acres",
     "precision", "recall", "iou", "act_outside_acres", "act_offgrid_frac",
@@ -161,6 +172,9 @@ function parseCSV(text) {
     head.forEach((h, i) => {
       r[h] = numeric.has(h) ? (cells[i] === "" || cells[i] === undefined ? null : +cells[i]) : cells[i];
     });
+    // older files: fixed horizons (the window end), one model
+    if (r.lead_h == null && r.horizon_h != null) r.lead_h = r.horizon_h;
+    if (!r.model) r.model = "pyrecast";
     return r;
   });
 }
@@ -175,17 +189,47 @@ function median(xs) {
 let DATA = [];
 
 function filtered() {
-  const minG = +document.getElementById("fMinGrowth").value || 0;
-  const maxOff = +document.getElementById("fMaxOff").value || 0;
-  const exOff = document.getElementById("fOffgrid").checked;
+  const model = document.getElementById("fModel").value, chosen = document.getElementById("fChosen").value;
   // only when the data says which time each perimeter used (older metrics.csv files don't)
   const mappedOnly = !document.getElementById("fMappedWrap").hidden && document.getElementById("fMapped").checked;
   return DATA.filter(r =>
-    r.act_new_acres !== null && r.act_new_acres >= minG &&
-    Math.abs(r.actual_offset_h) <= maxOff &&
-    (!exOff || r.act_offgrid_frac <= 0.10) &&
+    (!model || r.model === model) && (!chosen || r.chosen === chosen) &&
     (!mappedOnly || (r.actual_time_basis === "mapped" &&
                      (!r.baseline_perim_ms || r.baseline_time_basis === "mapped"))));
+}
+
+// a lead spelled out: "17h", "2d 17h"
+function leadLong(h) {
+  if (h < 48) return `${Math.round(h)}h`;
+  let d = Math.floor(h / 24), r = Math.round(h - 24 * d);
+  if (r === 24) { d++; r = 0; }
+  return r ? `${d}d ${r}h` : `${d}d`;
+}
+
+function drawLeadPlot(rows) {
+  // every row's score at its exact lead: x hours after the run, y 0-1
+  const card = document.getElementById("leadCard"), key = document.getElementById("leadMetric").value;
+  const pts = rows.filter(r => r[key] != null && r.lead_h != null);
+  card.hidden = !DATA.length;
+  const W = 900, H = 260, L = 34, B = 24, T = 8, R = 8;
+  const xmax = Math.max(168, ...pts.map(r => r.lead_h));
+  const x = h => L + (W - L - R) * h / xmax, y = v => T + (H - T - B) * (1 - v);
+  const ticks = [];
+  for (let d = 0; d <= xmax / 24; d++) ticks.push(d * 24);
+  const sample = pts.length > 6000 ? pts.filter((_, i) => i % Math.ceil(pts.length / 6000) === 0) : pts;
+  document.getElementById("leadPlot").innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto" role="img" aria-label="${key} by lead time">` +
+    [0, 0.25, 0.5, 0.75, 1].map(v => `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)"/>` +
+      `<text x="${L - 4}" y="${y(v) + 3}" text-anchor="end" font-size="10" fill="var(--muted)">${v}</text>`).join("") +
+    ticks.map(h => `<line x1="${x(h)}" x2="${x(h)}" y1="${H - B}" y2="${H - B + 4}" stroke="var(--muted)"/>` +
+      `<text x="${x(h)}" y="${H - 6}" text-anchor="middle" font-size="10" fill="var(--muted)">${h ? `${h / 24}d` : "run"}</text>`).join("") +
+    sample.map(r => {
+      const timed = r.actual_time_basis === "mapped";
+      return `<circle cx="${x(r.lead_h).toFixed(1)}" cy="${y(Math.min(Math.max(r[key], 0), 1)).toFixed(1)}" r="2.2" ` +
+        (timed ? `fill="var(--accent)" fill-opacity="0.35" stroke="none"` : `fill="none" stroke="var(--accent)" stroke-opacity="0.55"`) + `/>`;
+    }).join("") +
+    `</svg><p class="note">${pts.length.toLocaleString("en-US")} rows with a ${key}` +
+    (sample.length < pts.length ? ` (every ${Math.ceil(pts.length / 6000)}th drawn)` : "") + `</p>`;
 }
 
 
@@ -227,7 +271,7 @@ function makeSortable(containerId) {
 }
 
 function drawTable(rows) {
-  const cols = ["slug", "run_ts", "percentile", "horizon_h", "actual_offset_h", "baseline_acres",
+  const cols = ["model", "slug", "run_ts", "percentile", "lead_h", "day", "chosen", "actual_time_basis", "baseline_acres",
     ...(DATA.some(r => r.start_basis !== undefined) ? ["burned_before_acres", "start_basis"] : []),
     "pred_new_acres", "act_new_acres", "inter_acres", "precision", "recall", "iou",
     "hs_n", "hs_capture"];
@@ -400,10 +444,16 @@ function perimTime(row, role) {
 function describeTimes(row) {
   const fmt = x => fmtDT(typeof x === "string" ? Date.parse(x) : x);
   const off = row.actual_offset_h, act = perimTime(row, "actual");
-  let t = `forecast run <b>${fmt(row.run_dt_utc)}</b> · +${row.horizon_h}h window ends ` +
-    `<b>${fmt(row.valid_dt_utc)}</b> · scored against perimeter ${act.mapped ? "mapped" : "last edited"} ` +
-    `<b>${fmt(act.at)}</b> (<b>${Math.abs(off).toFixed(1)}h ` +
-    `${off < 0 ? "before" : "after"}</b> window end${act.mapped ? "" : act.legacy ? "; older metrics file, edit times only" : "; no reliable mapped time"})`;
+  const why = { mapped: "", daily: " · the day's latest perimeter (none on that day has a mapped time)",
+                previous: " · scored before November 2026 (kept)" }[row.chosen] || "";
+  let t = off == null
+    // each perimeter scored at its own time
+    ? `forecast run <b>${fmt(row.run_dt_utc)}</b> · scored against the perimeter ${act.mapped ? "mapped" : "last edited"} ` +
+      `<b>${fmt(act.at)}</b>, <b>${leadLong(row.lead_h)}</b> after the run${act.mapped ? "" : " (no reliable mapped time)"}${why}`
+    : `forecast run <b>${fmt(row.run_dt_utc)}</b> · +${row.horizon_h}h window ends ` +
+      `<b>${fmt(row.valid_dt_utc)}</b> · scored against perimeter ${act.mapped ? "mapped" : "last edited"} ` +
+      `<b>${fmt(act.at)}</b> (<b>${Math.abs(off).toFixed(1)}h ` +
+      `${off < 0 ? "before" : "after"}</b> window end${act.mapped ? "" : act.legacy ? "; older metrics file, edit times only" : "; no reliable mapped time"})`;
   if (row.baseline_perim_ms) {
     const base = perimTime(row, "baseline");
     t += ` · baseline perimeter ${base.mapped ? "mapped" : "last edited"} ${fmt(base.at)} ` +
@@ -424,7 +474,7 @@ async function renderInspection(row) {
   const stats = document.getElementById("insStats");
   try {
     document.getElementById("insTimes").innerHTML = describeTimes(row);
-    stats.innerHTML = `<p class="note">loading raster + perimeters for ${row.slug} ${runLabel(row.run_ts)} pct${row.percentile} H${row.horizon_h}…</p>`;
+    stats.innerHTML = `<p class="note">loading raster + perimeters for ${row.slug} ${runLabel(row.run_ts)} pct${row.percentile} +${leadLong(row.lead_h)}…</p>`;
     const toaKey = BUCKET_KEYS.toa(row);
     let georaster = INS.cacheToa.get(toaKey);
     if (!georaster) {
@@ -452,7 +502,7 @@ async function renderInspection(row) {
     if (startMask) for (let i = 0; i < baseMask.length; i++) baseMask[i] |= startMask[i];
     const actMask = rasterizeMask(projectRings(actGj, fwd), meta);
 
-    const H = row.horizon_h, toa = georaster.values[0];
+    const H = row.lead_h, toa = georaster.values[0];
     const clsFlat = new Uint8Array(meta.width * meta.height);
     const counts = { 1: 0, 2: 0, 3: 0, 4: 0 };
     for (let r = 0; r < meta.height; r++) {
@@ -561,7 +611,7 @@ async function renderInspection(row) {
 function insSelected() {
   const [f, run, pct, h] = ["insFire", "insRun", "insPct", "insH"].map(id => document.getElementById(id).value);
   return DATA.find(r => r.slug === f && r.run_ts === run && r.percentile === pct &&
-                        String(r.horizon_h) === h && r.actual_perim_ms);
+                        String(r.lead_h) === h && r.actual_perim_ms);
 }
 
 function populateInspector(level, render = true) {
@@ -578,7 +628,8 @@ function populateInspector(level, render = true) {
   const run = sel("insRun").value;
   if (level <= 2) fill("insPct", [...new Set(rows.filter(r => r.slug === f && r.run_ts === run).map(r => r.percentile))].sort((a, b) => a - b), true);
   const pct = sel("insPct").value;
-  if (level <= 3) fill("insH", [...new Set(rows.filter(r => r.slug === f && r.run_ts === run && r.percentile === pct).map(r => r.horizon_h))].sort((a, b) => a - b), true);
+  if (level <= 3) fill("insH", [...new Set(rows.filter(r => r.slug === f && r.run_ts === run && r.percentile === pct).map(r => r.lead_h))].sort((a, b) => a - b), true,
+                      h => `${leadLong(h)} after the run`);
   if (render) {
     const row = insSelected();
     if (row) renderInspection(row);
@@ -592,7 +643,7 @@ function inspectRow(r) {
   populateInspector(2, false);
   document.getElementById("insPct").value = r.percentile;
   populateInspector(3, false);
-  document.getElementById("insH").value = String(r.horizon_h);
+  document.getElementById("insH").value = String(r.lead_h);
   const row = insSelected();
   if (row) renderInspection(row);
   document.getElementById("insMap").scrollIntoView({ behavior: "smooth", block: "center" });
@@ -601,6 +652,7 @@ function inspectRow(r) {
 function redraw() {
   const rows = filtered();
   drawTiles(rows);
+  drawLeadPlot(rows);
   drawFires(rows);
   drawTable(rows);
 }
@@ -644,7 +696,11 @@ function start() {
   document.getElementById("filters").hidden = false;
   // older metrics.csv files don't say which time each perimeter was scored at
   document.getElementById("fMappedWrap").hidden = !DATA.some(r => r.actual_time_basis);
-  for (const id of ["fMinGrowth", "fMaxOff", "fOffgrid", "fMapped"])
+  const models = [...new Set(DATA.map(r => r.model))].sort();
+  document.getElementById("fModel").innerHTML = (models.length > 1 ? `<option value="">all models</option>` : "") +
+    models.map(m => `<option value="${m}">${m === "pyrecast" ? "Pyrecast" : m === "farsite" ? "FARSITE" : m}</option>`).join("");
+  document.getElementById("fChosen").closest("div").hidden = !DATA.some(r => r.chosen);
+  for (const id of ["fModel", "fChosen", "fMapped", "leadMetric"])
     document.getElementById(id).addEventListener("change", redraw);
   [["insFire", 1], ["insRun", 2], ["insPct", 3], ["insH", 4]].forEach(([id, lvl]) =>
     document.getElementById(id).addEventListener("change", () => populateInspector(lvl)));

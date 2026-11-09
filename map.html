@@ -428,13 +428,15 @@
   .ruler-label { pointer-events: none; padding: 2px 6px; border-radius: 4px; background: var(--surface); color: var(--ink);
                  font: 600 12px/16px var(--font-sans); font-variant-numeric: tabular-nums; white-space: nowrap;
                  box-shadow: 0 1px 4px rgba(59, 29, 41, 0.3); }
-  /* forecast metrics: 9 horizon columns have to fit the 292px content width */
+  /* forecast metrics: a column per scored perimeter, at its exact lead; more than fit the
+     292px content width scroll sideways */
   /* fixed height (a full table): the section must not change size as runs change */
-  .skill-box { height: 58px; overflow-x: auto; }   /* a narrow phone panel scrolls the table, not clips it */
+  /* (room for the sideways scrollbar under the three rows when a run has many perimeters) */
+  .skill-box { height: 72px; overflow-x: auto; overflow-y: hidden; }
   .skill-empty { margin: 0; color: var(--muted); font-size: var(--fs-meta); line-height: var(--lh-meta); }
   .skill { border-collapse: collapse; font-size: 11px; line-height: 13px;
            font-variant-numeric: tabular-nums; }
-  .skill th, .skill td { width: 25.5px; padding: 0; text-align: center; font-weight: 400; }
+  .skill th, .skill td { min-width: 25.5px; padding: 0 1px; text-align: center; font-weight: 400; white-space: nowrap; }
   .skill tr > :first-child { width: 61px; text-align: left; white-space: nowrap; color: var(--ink-2); }
   .skill thead th { color: var(--muted); font-size: var(--fs-micro); font-variant-numeric: normal; }
   .skill tbody th span { color: var(--muted); }
@@ -449,6 +451,8 @@
   .skill.pick .colhov .sk-h, .skill thead th .sk-h:hover { background: var(--hover); color: var(--ink); }
   .skill.pick td.colhov { box-shadow: inset 0 0 0 1px var(--muted); }
   .skill thead th.sel .sk-h { background: var(--ink); color: #fff; font-weight: 600; }
+  /* a perimeter timed by its last edit (its mapped time unknown) */
+  .skill thead th.untimed { font-style: italic; }
   .skill td.sel { box-shadow: inset 0 0 0 1.5px var(--ink); color: var(--ink); font-weight: 600; }
   .skill-pick { margin: 0; }
   .skill-pick b { color: var(--ink); font-weight: 600; }
@@ -645,15 +649,17 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
       <b>How these numbers are calculated</b>
       <p>This run is scored against <b>NIFC fire perimeters</b> — hotspots are not used.</p>
       <ul>
-        <li><b>Predicted:</b> where the forecast's time of arrival is within the horizon.</li>
-        <li><b>Actual:</b> the NIFC perimeter mapped closest to run time + horizon (timed by its last edit when it has no reliable mapped time).</li>
+        <li><b>Actual:</b> each NIFC perimeter in the 7 days after the run, scored at its own time:
+          every one with a mapped time, the latest one published on a day without one (timed by its
+          last edit, shown in <i>italics</i>), and the perimeters scored before November 2026.</li>
+        <li><b>Predicted:</b> where the forecast's time of arrival is before that perimeter's time.</li>
         <li><b>Growth only:</b> what had burned when the run began is removed from both, so only new spread counts: the latest perimeter mapped before the run, and where the forecast itself started burning (Pyrecast adds satellite detections to the perimeter).</li>
       </ul>
       <p><b>Precision</b> = overlap ÷ predicted growth<br><b>Recall</b> = overlap ÷ actual growth<br>
         <b>IoU</b> = overlap ÷ area either one covers</p>
-      <p class="muted">A horizon is shown only when the fire grew at least 10 acres, a perimeter was
-        mapped (or last edited) within 3h of it, and at most 10% of the growth fell outside the forecast's area —
-        the metrics report's default filters.</p>
+      <p class="muted">Every perimeter is shown: no minimum growth, timing window or off-grid
+        filter. When the fire didn't grow, recall is blank and precision and IoU are 0 if the
+        forecast predicted growth.</p>
       <p><a href="methodology/">A worked example →</a></p>
     </div>
     <div class="skill-box"><table class="skill" id="skillTable"></table>
@@ -2185,7 +2191,8 @@ async function renderIsochrones(f, run, pct, note, token) {
 
 // ---------------------------------------------------------------- forecast metrics
 
-// skill/<slug>.json rows are [horizon_h, precision, recall, iou]
+// skill/<slug>.json rows are [lead_h, precision, recall, iou, ...]: v4 at each perimeter's
+// exact lead (analyze.skill_entry), v3 at the old fixed horizons
 const SKILL_ROWS = [["Precision", 1], ["Recall", 2], ["IoU", 3]];
 
 async function loadSkill(f, seq) {
@@ -2201,8 +2208,16 @@ async function loadSkill(f, seq) {
   else { renderSkill(); renderHotMarks(); }
 }
 
-const hLab = h => (h >= 168 && h % 24 === 0 ? `${h / 24}d` : `${h}h`);
-const NOT_SCORED = "Not scored for this run and percentile: it needs at least 10 acres of growth and a perimeter mapped (or last edited) within 3h of a horizon.";
+// a lead in a column head: hours under two days, else days to one decimal ("17h", "2.7d")
+const hLab = h => (h < 48 ? `${Math.round(h)}h` : `${(h / 24).toFixed(1).replace(/\.0$/, "")}d`);
+// spelled out ("17h", "2d 17h")
+function hLong(h) {
+  if (h < 48) return `${Math.round(h)}h`;
+  let d = Math.floor(h / 24), r = Math.round(h - 24 * d);
+  if (r === 24) { d++; r = 0; }
+  return r ? `${d}d ${r}h` : `${d}d`;
+}
+const NOT_SCORED = "Not scored for this run and percentile: no perimeter was mapped or published in the 7 days after it.";
 
 function scoredRows() {
   // the selected run and percentile's skill rows (its scored horizons), [] when none
@@ -2231,19 +2246,25 @@ function renderSkill() {
   const at = r => (pick && canScore(r) ? ` data-h="${r[0]}"${r[0] === on ? ' class="sel"' : ""}` : "");
   const cell = (v, r) => (typeof v === "number" && isFinite(v)
     ? `<td${at(r)} style="--v:${Math.min(Math.max(v, 0), 1)}">${Math.round(100 * v)}</td>` : `<td${at(r)}>—</td>`);
+  const untimed = r => r[7] === 0, timed = r => (untimed(r) ? " (perimeter timed by its last edit: its mapped time is unknown)" : "");
   const head = r => (pick && canScore(r)
     ? `<button type="button" class="sk-h" data-h="${r[0]}" aria-pressed="${r[0] === on}" ` +
-      `title="${r[0] === on ? "Close the analysis" : `Map the ${hLab(r[0])} analysis: hits and misses against the perimeter`}">${hLab(r[0])}</button>`
-    : hLab(r[0]));
+      `title="${r[0] === on ? "Close the analysis" : `Map the analysis ${hLong(r[0])} after the run: hits and misses against that perimeter${timed(r)}`}">${hLab(r[0])}</button>`
+    : `<span title="${hLong(r[0])} after the run${timed(r)}">${hLab(r[0])}</span>`);
+  const thAt = r => {
+    const a = at(r), c = untimed(r) ? "untimed" : "";
+    if (!c) return a;
+    return a.includes('class="') ? a.replace('class="', `class="${c} `) : `${a} class="${c}"`;
+  };
   table.classList.toggle("pick", pick);
   table.innerHTML =
-    `<thead><tr><th></th>${rows.map(r => `<th scope="col"${at(r)}>${head(r)}</th>`).join("")}</tr></thead><tbody>` +
+    `<thead><tr><th></th>${rows.map(r => `<th scope="col"${thAt(r)}>${head(r)}</th>`).join("")}</tr></thead><tbody>` +
     SKILL_ROWS.map(([name, i]) => `<tr><th scope="row">${name} <span>%</span></th>` +
       `${rows.map(r => cell(r[i], r)).join("")}</tr>`).join("") + "</tbody>";
   // (with an analysis on, its key below says what's shown and closes it)
   if (!pick || on != null) return;
   hint.hidden = false;
-  hint.textContent = "Click a horizon to map its hits and misses";
+  hint.textContent = "Each column is a perimeter, at its time after the run. Click one to map its hits and misses";
 }
 
 // ---------------------------------------------------------------- a run's analysis
@@ -2482,9 +2503,12 @@ function scoreKeyHtml(row, sc, reason = "", hs = null) {
     return `<span title="${name}: ${what}"><i style="background:${Palette.SCORE[key]}"></i>${name}<b>${v}</b></span>`;
   }).join("");
   const off = row[6];
-  const perim = typeof off === "number"
-    ? `Scored against the perimeter ${row[7] === 1 ? "mapped" : "last edited"} <b>${fmtShortDT(end + off * HOUR)}</b>, ` +
-      `${Math.abs(off).toFixed(1)}h ${off < 0 ? "before" : "after"} the window end` : "";
+  // v4: each perimeter is scored at its own time (offset 0); v3 rows carry the old offset
+  const perim = typeof off !== "number" ? ""
+    : !off ? (row[7] === 1 ? `Scored against the perimeter mapped at <b>${fmtShortDT(end)}</b>`
+      : `Scored against the perimeter last edited <b>${fmtShortDT(end)}</b> (its mapped time is unknown, so it's timed by its last edit)`)
+    : `Scored against the perimeter ${row[7] === 1 ? "mapped" : "last edited"} <b>${fmtShortDT(end + off * HOUR)}</b>, ` +
+      `${Math.abs(off).toFixed(1)}h ${off < 0 ? "before" : "after"} the window end`;
   const before = !sc || !sc.startBasis ? ""
     : `Burned before includes <b>${fmtAc(sc.startAc)}</b> beyond the perimeter at run time: ` +
       (sc.startBasis === "pyrecast" ? "where the forecast started burning, seeded from satellite detections"
@@ -2496,7 +2520,7 @@ function scoreKeyHtml(row, sc, reason = "", hs = null) {
       (hs.capped ? " (some missing: a day exceeded the API cap)" : "");
   const rings = sc && hs && !hs.failed ? '<span class="sk-ring" style="border-color:#0a5c36" title="inside the forecast"></span>' +
     '<span class="sk-ring" style="border-color:#7a1010" title="outside the forecast"></span>' : "";
-  return `<div class="score-key"><div class="sk-head"><span><b>Analysis</b> · ${hLab(H)} after the run, to <b>${fmtShortDT(end)}</b></span>${back}</div>` +
+  return `<div class="score-key"><div class="sk-head"><span><b>Analysis</b> · ${hLong(H)} after the run, to <b>${fmtShortDT(end)}</b></span>${back}</div>` +
     `<div class="sk-grid">${cls}</div>` + (dets ? `<div class="sk-dets">${rings}<span>${dets}</span></div>` : "") +
     (perim || before ? `<div class="note sk-foot">${[perim, before].filter(Boolean).join(". ")}</div>` : "") + "</div>";
 }
@@ -3467,7 +3491,7 @@ function labelScoreLane(items, act) {
   }
   const r = act.row, pc = v => (typeof v === "number" ? Math.round(100 * v) : "—");
   setLaneLabel("score", `${hLab(act.h)} <span class="sc">P ${pc(r[1])} · R ${pc(r[2])}</span>`,
-               `Analysis on the map: ${hLab(act.h)} after the run, to ${fmtDT(act.t)} · precision ${pc(r[1])}% · recall ${pc(r[2])}%`);
+               `Analysis on the map: ${hLong(act.h)} after the run, to ${fmtDT(act.t)} · precision ${pc(r[1])}% · recall ${pc(r[2])}%`);
 }
 
 function renderScoreGlyph() {
@@ -3617,7 +3641,7 @@ function laneHover(lane, clientX, picked) {
   const act = laneActive(kind, items);
   if (kind === "score") {
     const pc = v => (typeof v === "number" ? `${Math.round(100 * v)}%` : "—");
-    showTip(`${hLab(c.h)} after the run, to ${fmtDT(c.t)} · precision ${pc(c.row[1])} · recall ${pc(c.row[2])}` +
+    showTip(`${hLong(c.h)} after the run, to ${fmtDT(c.t)} · precision ${pc(c.row[1])} · recall ${pc(c.row[2])}` +
       (act && act.h === c.h ? " · on the map" : ""), tx, lane);
     return;
   }
