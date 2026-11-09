@@ -134,6 +134,41 @@
   #perimlist { padding: 2px 8px; }
   #perimlist label.row { margin: 0; padding: 4px 0; border-bottom: 1px solid var(--grid); }
   #perimlist label.row:last-child { border-bottom: 0; }
+  /* incident maps (Incibrief's tiled IAP / ops sheets): grouped by operational day, newest
+     first, as Incibrief's Maps tab lists them; each row a sheet, its PDF beside it */
+  #iaplist h3 { position: sticky; top: 0; z-index: 1; margin: 0; padding: 5px 8px 3px; background: var(--surface);
+                border-bottom: 1px solid var(--grid); color: var(--label);
+                font: 600 var(--fs-meta)/var(--lh-meta) var(--font-sans); }
+  #iaplist h3 span { font-weight: 400; color: var(--muted); }
+  .iap-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center;
+              border-bottom: 1px solid var(--grid); }
+  .iap-item:last-child { border-bottom: 0; }
+  .iap-item:hover { background: var(--hover); }
+  .iap-item.sel { background: var(--selected); }
+  .iap-row { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 8px; align-items: center;
+             min-width: 0; padding: 4px 0 4px 8px; border: 0; background: none; color: var(--ink);
+             font: var(--fs-label)/var(--lh-label) var(--font-sans); text-align: left; cursor: pointer; }
+  .iap-row:disabled { cursor: default; color: var(--muted); }
+  .iap-row img, .iap-row .ph { width: 40px; height: 30px; object-fit: cover; border: 1px solid var(--grid);
+                               border-radius: 3px; background: var(--page); }
+  .iap-row b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+  .iap-row small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                   color: var(--muted); font-size: var(--fs-meta); line-height: var(--lh-meta); }
+  .iap-item > a { padding: 0 8px; font-size: var(--fs-meta); }
+  #iapCtl { display: flex; flex-direction: column; gap: var(--sp-2); }
+  #iapCtl[hidden] { display: none; }
+  .iap-acts { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-label); }
+  .iap-acts label.row { flex: 1; margin: 0; }
+  .iap-acts button { padding: 0; border: 0; background: none; color: var(--link, var(--ink)); font: inherit;
+                     text-decoration: underline; cursor: pointer; }
+  #iapNote:empty { display: none; }
+  /* the run's analysis names the incident maps that were out when the run started */
+  .iap-run { margin: var(--sp-2) 0 0; font-size: var(--fs-label); line-height: 1.6; }
+  .iap-run .iap-chip { margin: 0 2px 2px 0; padding: 1px 7px; border: 1px solid var(--axis); border-radius: 999px;
+                       background: var(--surface); color: var(--ink); font: inherit; font-size: var(--fs-meta);
+                       cursor: pointer; }
+  .iap-run .iap-chip:hover { border-color: var(--muted); }
+  .iap-run .iap-chip.on { border-color: var(--ink-2); background: var(--selected); font-weight: 600; }
   #firelist div { padding: 5px 8px; cursor: pointer; border-bottom: 1px solid var(--grid); }
   #firelist div:hover { background: var(--hover); }
   #firelist div.sel { background: var(--selected); font-weight: 600; }
@@ -563,6 +598,24 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
     </div>
   </div>
 
+  <div class="sec fire-only" id="iapSec">
+    <div class="sec-head"><h2>Incident maps <span class="src">NIFC · Incibrief</span></h2></div>
+    <div class="picker" id="iapPicker">
+      <button type="button" id="iapBtn" class="dropbtn" disabled>Select a fire</button>
+      <div id="iaplist" class="dropdown" hidden></div>
+    </div>
+    <div id="iapCtl" hidden>
+      <label class="ctl"><span class="ctl-head"><span>Opacity</span><b id="iapOpVal"></b></span>
+        <input type="range" id="iapOp" min="0.1" max="1" step="0.05"></label>
+      <div class="iap-acts">
+        <label class="row" title="Show the newest version of this sheet uploaded by the timeline's playhead"><input type="checkbox" id="iapFollow">Follow the timeline</label>
+        <button type="button" id="iapZoom">Zoom to</button>
+        <a id="iapPdf" target="_blank" rel="noopener">PDF</a>
+      </div>
+      <p class="note" id="iapNote"></p>
+    </div>
+  </div>
+
   <div class="sec fire-only">
     <div class="sec-head"><h2>Hotspots <span class="src">NASA VIIRS</span></h2></div>
     <!-- the timeline; docked (Settings → Timeline) it moves to #tlDock under the map -->
@@ -606,6 +659,7 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
     <div class="skill-box"><table class="skill" id="skillTable"></table>
       <p class="skill-empty" id="skillEmpty" hidden></p></div>
     <p class="note skill-pick" id="skillPick" hidden></p>
+    <p class="note iap-run" id="iapRun" hidden></p>
     <div id="scoreKey" hidden></div>
   </div>
 </div>
@@ -1137,6 +1191,10 @@ const state = {
   ovWin: "All",         // no-selection overview: recency filter (a RECENCY key), page, rows per page
   ovPage: 0,
   ovSize: 10,
+  // incident maps (see "incident maps"): the fire's sheets from Incibrief's manifest, the
+  // one picked, whether its newest version by the playhead stands in, and what is drawn
+  iap: { maps: [], id: null, follow: false, drawn: null,
+         opacity: Math.min(Math.max(+remembered("cornea-iap-opacity", "0.75") || 0.75, 0.1), 1) },
 };
 
 async function getJson(url, signal) {
@@ -1318,6 +1376,7 @@ function wirePickers() {
     if (!perims.hidden && !ev.target.closest("#perimPicker")) perims.hidden = true;
   });
   document.addEventListener("keydown", ev => { if (ev.key === "Escape") perims.hidden = true; });
+  wireIap();
 
   // the metrics "?" opens on hover/focus; a click pins it open (touch has no hover)
   const helpBtn = document.getElementById("skillHelpBtn"), help = document.getElementById("skillHelp");
@@ -1445,6 +1504,7 @@ function deselect() {
   map.jumpTo(OVERVIEW_VIEW);   // before refreshWms, whose 3D ease a jump would cut short
   refreshWms();             // with no run this only removes the forecast layer
   clearPerims();
+  clearIap();
   refreshHotspots();        // bumps hotSeq, aborts hotspot/history requests, drops hotspots + burn scar
   clearTimeout(hotFetchTimer);
   layoutHotTimeline(defaultHotSpan());
@@ -1480,6 +1540,7 @@ async function select(slug) {
   }).join("");
   refreshWms();
   loadSkill(f, seq);
+  loadIap(f, seq);
   // perimeters first: the hotspot query box is sized from the perimeter bounds
   await loadPerims(f, seq);
   if (state.seq !== seq) return;
@@ -2153,6 +2214,7 @@ function scoredRows() {
 
 function renderSkill() {
   // the selected run and percentile's scored horizons, or why there are none
+  renderIapRun();
   const doc = state.sel && state.skill.get(state.sel);
   const rows = scoredRows();
   const table = document.getElementById("skillTable"), empty = document.getElementById("skillEmpty");
@@ -2617,6 +2679,223 @@ function releaseScorePerims() {
   if (!sp || !sp.set) return;
   const now = pickedPerims();
   if (now.size === sp.set.size && [...now].every(e => sp.set.has(e))) pickPerims(sp.prev);
+}
+
+// ---------------------------------------------------------------- incident maps
+
+// Incident maps are Incibrief's: the IAP, operations, air ops, progression... GeoPDFs from
+// the NIFC incident-map FTP, which its worker mirrors, georeferences and tiles into its
+// public bucket. Nothing is processed here. The page reads the fire's manifest there by its
+// Cornea id, as Incibrief's Maps tab does, and draws a sheet's tiles as Incibrief draws them
+// (256 px XYZ tiles, 75% opacity), under the forecast so a sheet never hides it. Follow the
+// timeline swaps in the newest version of the sheet uploaded by the playhead (Incibrief's
+// timeline series). A run's analysis lists the sheets out by the run's start.
+const INCIBRIEF = "https://f005.backblazeb2.com/file/responder-debrief-data";
+const IAP_RANK = [["ops", 0], ["iap", 1], ["brief", 2], ["airops", 3], ["evac", 4], ["trans", 5],
+                  ["pio", 6], ["suprep", 7], ["repair", 7], ["own", 8]];   // Incibrief's order
+const iapUrl = p => INCIBRIEF + p.replace(/[#?&,+[\]]/g, encodeURIComponent);
+const fireKey = id => String(id || "").replace(/[{}]/g, "").toLowerCase();
+const iapSeries = e => `${e.product}|${e.sheet || ""}|${e.orientation || ""}`;
+function iapTime(e) {
+  // when a sheet came out: its FTP upload, else its generated time (fire-local, for order
+  // only), else noon on its operational day
+  for (const s of [e.uploaded_at, e.generated_at_local && `${e.generated_at_local}:00Z`, e.op_date && `${e.op_date}T12:00:00Z`]) {
+    const t = s ? Date.parse(s) : NaN;
+    if (Number.isFinite(t)) return t;
+  }
+  return null;
+}
+function iapRank(e) {
+  if (e.kind === "qr") return 10;
+  const p = String(e.product || "").toLowerCase(), hit = IAP_RANK.find(([k]) => p.startsWith(k));
+  return hit ? hit[1] : 9;
+}
+const byIap = (a, b) => iapRank(a) - iapRank(b) || (a.period === "night") - (b.period === "night") ||
+  String(a.filename).localeCompare(String(b.filename));
+const iapLabel = e => `${e.product_label || e.product}${e.kind === "qr" ? " (QR)" : ""}`;
+const iapDay = d => { const [y, m, dd] = d.split("-").map(Number); return new Date(y, m - 1, dd); };
+
+function clearIap() {
+  const btn = document.getElementById("iapBtn"), el = document.getElementById("iaplist");
+  el.hidden = true;
+  el.innerHTML = "";
+  btn.disabled = true;
+  btn.textContent = "Select a fire";
+  Object.assign(state.iap, { maps: [], id: null });
+  dropIap();
+  renderIapCtl();
+  renderIapRun();
+}
+
+async function loadIap(f, seq) {
+  clearIap();
+  const btn = document.getElementById("iapBtn");
+  if (!f.cornea_id) { btn.textContent = "No Cornea match for this fire"; return; }
+  btn.textContent = "Loading…";
+  let m = null;
+  try { m = await getJson(`${INCIBRIEF}/catalogs/incidents/id/${fireKey(f.cornea_id)}.json`); }
+  catch (e) { m = null; }
+  if (state.seq !== seq) return;
+  // a manifest is only ever the fire's own (Incibrief keys it by the Cornea id)
+  const maps = m && fireKey(m.cornea_id) === fireKey(f.cornea_id) ? (m.maps || []).filter(e => e.kind !== "mobile") : [];
+  state.iap.maps = maps;
+  if (!maps.length) { btn.textContent = "None published for this fire"; renderIapRun(); return; }
+  btn.disabled = false;
+  renderIapList();
+  renderIapCtl();
+  renderIapRun();
+}
+
+function renderIapList() {
+  // grouped by operational day, newest first (undated last); in a day, Incibrief's order
+  const groups = new Map();
+  for (const e of state.iap.maps) {
+    const k = e.op_date || "";
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(e);
+  }
+  const days = [...groups.keys()].sort((a, b) => (!a) - (!b) || (a < b ? 1 : a > b ? -1 : 0));
+  const shown = iapShown();
+  document.getElementById("iaplist").innerHTML = days.map(d => {
+    const head = d ? `${fmtDate(iapDay(d).getTime())} <span>${iapDay(d).toLocaleDateString(undefined, { weekday: "long" })}</span>` : "Undated";
+    return `<h3>${head}</h3>` + groups.get(d).sort(byIap).map(e => {
+      const t = iapTime(e), can = !!(e.georeferenced && e.tiles);
+      const meta = [e.uploaded_at ? `uploaded ${fmtDT(t)}` : e.period ? (e.period === "day" ? "Day" : "Night") : "",
+                    can ? "" : e.georeferenced ? "still rendering" : "not georeferenced"].filter(Boolean).join(" · ");
+      const thumb = e.preview_url ? `<img src="${esc(iapUrl(e.preview_url))}" alt="" loading="lazy">` : `<span class="ph"></span>`;
+      const on = shown && (e.id === state.iap.id || e.id === shown.id);
+      return `<div class="iap-item${on ? " sel" : ""}"><button type="button" class="iap-row" data-id="${esc(e.id)}"${can ? "" : " disabled"}` +
+        ` title="${can ? (on ? "Take it off the map" : "Show it on the map") : "Can't be drawn on the map: open the PDF"}">` +
+        `${thumb}<span><b>${esc(iapLabel(e))}</b><small>${esc(meta)}</small></span></button>` +
+        `<a href="${esc(iapUrl(e.pdf_url) + "?v=" + (e.rev || 1))}" target="_blank" rel="noopener" title="Open the PDF">PDF</a></div>`;
+    }).join("");
+  }).join("");
+}
+
+function iapShown() {
+  // the sheet on the map: the one picked, or, following the timeline, the newest version of
+  // its series uploaded by the playhead (else its earliest)
+  const pick = state.iap.maps.find(e => e.id === state.iap.id);
+  if (!pick || !state.iap.follow || !state.hotSpan) return pick || null;
+  const vs = state.iap.maps.filter(e => e.tiles && iapSeries(e) === iapSeries(pick) && iapTime(e) != null)
+    .sort((a, b) => iapTime(a) - iapTime(b));
+  const p = hotPlayhead();
+  let v = vs[0] || pick;
+  for (const e of vs) if (iapTime(e) <= p) v = e;
+  return v;
+}
+
+function dropIap() {
+  if (map.getLayer("iap")) map.removeLayer("iap");
+  if (map.getSource("iap")) map.removeSource("iap");
+  state.iap.drawn = null;
+}
+
+function drawIap() {
+  const e = iapShown();
+  if (!e || !e.tiles) { dropIap(); renderIapCtl(); return; }
+  const key = `${e.id}@${e.rev || 1}`;
+  if (state.iap.drawn === key && map.getLayer("iap")) {
+    map.setPaintProperty("iap", "raster-opacity", state.iap.opacity);
+    return;
+  }
+  dropIap();
+  map.addSource("iap", { type: "raster", tiles: [iapUrl(e.tiles.url_template)], tileSize: 256,
+                         minzoom: e.tiles.minzoom, maxzoom: e.tiles.maxzoom, bounds: e.tiles.bounds,
+                         attribution: "incident maps: NIFC, via Incibrief" });
+  // over the basemap, under the forecast (canvas or live tiles) and everything above it
+  const before = ["fc", "fclive", "iso"].find(id => map.getLayer(id));
+  map.addLayer({ id: "iap", type: "raster", source: "iap",
+                 paint: { "raster-opacity": state.iap.opacity, "raster-fade-duration": 0 } }, before);
+  state.iap.drawn = key;
+  renderIapCtl();
+  if (!document.getElementById("iaplist").hidden) renderIapList();
+}
+
+function showIap(id) {
+  // one sheet at a time; picking the one shown takes it off
+  state.iap.id = state.iap.id === id ? null : id;
+  drawIap();
+  renderIapList();
+  renderIapCtl();
+  renderIapRun();
+}
+
+function renderIapCtl() {
+  const e = iapShown(), ctl = document.getElementById("iapCtl"), btn = document.getElementById("iapBtn");
+  ctl.hidden = !e;
+  if (state.iap.maps.length) btn.textContent = e ? `${iapLabel(e)} · ${e.op_date ? fmtDate(iapDay(e.op_date).getTime()) : "undated"}${e.period ? ` ${e.period}` : ""}` : "None shown";
+  if (!e) return;
+  document.getElementById("iapOp").value = state.iap.opacity;
+  document.getElementById("iapOpVal").textContent = `${Math.round(100 * state.iap.opacity)}%`;
+  document.getElementById("iapFollow").checked = state.iap.follow;
+  document.getElementById("iapPdf").href = iapUrl(e.pdf_url) + "?v=" + (e.rev || 1);
+  const t = iapTime(e), z = map.getZoom();
+  document.getElementById("iapNote").textContent = [
+    t != null && e.uploaded_at ? `Uploaded ${fmtDT(t)}` : "",
+    state.iap.follow && e.id !== state.iap.id ? "the newest version by the playhead" : "",
+    e.tiles && z < e.tiles.minzoom ? `zoom in to see it (from zoom ${e.tiles.minzoom})` : "",
+  ].filter(Boolean).join(" · ");
+}
+
+function renderIapRun() {
+  // the run's analysis: the newest version of each sheet out (uploaded) by the run's start
+  const el = document.getElementById("iapRun");
+  const run = state.sel && document.getElementById("selRun").value;
+  if (!run || !state.iap.maps.length) { el.hidden = true; return; }
+  const t0 = runDate(run).getTime(), latest = new Map();
+  for (const e of state.iap.maps) {
+    const t = iapTime(e);
+    if (!e.tiles || t == null || t > t0) continue;
+    const k = iapSeries(e), cur = latest.get(k);
+    if (!cur || iapTime(cur) < t) latest.set(k, e);
+  }
+  const all = [...latest.values()].sort(byIap), top = all.slice(0, 4), shown = iapShown();
+  el.hidden = false;
+  if (!top.length) { el.textContent = "No incident maps were out by this run's start."; return; }
+  el.innerHTML = `<b>Incident maps out by this run's start:</b> ` + top.map(e =>
+    `<button type="button" class="iap-chip${shown && shown.id === e.id ? " on" : ""}" data-id="${esc(e.id)}" ` +
+    `title="${esc(`${iapLabel(e)}, uploaded ${fmtDT(iapTime(e))}: show it on the map`)}">` +
+    `${esc(e.product_label || e.product)} · ${e.op_date ? fmtDate(iapDay(e.op_date).getTime()) : "undated"}</button>`).join("") +
+    (all.length > top.length ? `<button type="button" class="iap-chip" data-open="1">+${all.length - top.length} more</button>` : "");
+}
+
+function wireIap() {
+  const btn = document.getElementById("iapBtn"), el = document.getElementById("iaplist");
+  const open = () => { renderIapList(); openDropdown(el); };
+  btn.addEventListener("click", () => { if (el.hidden) open(); else el.hidden = true; });
+  document.addEventListener("mousedown", ev => { if (!el.hidden && !ev.target.closest("#iapPicker")) el.hidden = true; });
+  document.addEventListener("keydown", ev => { if (ev.key === "Escape") el.hidden = true; });
+  el.addEventListener("click", ev => {
+    const row = ev.target.closest(".iap-row");
+    if (row && !row.disabled) showIap(row.dataset.id);
+  });
+  document.getElementById("iapRun").addEventListener("click", ev => {
+    const chip = ev.target.closest(".iap-chip");
+    if (!chip) return;
+    if (chip.dataset.open) { open(); return; }
+    // the analysis names that version: show it as picked, not followed
+    state.iap.follow = false;
+    if (state.iap.id !== chip.dataset.id) showIap(chip.dataset.id); else showIap(chip.dataset.id);
+  });
+  document.getElementById("iapOp").addEventListener("input", ev => {
+    state.iap.opacity = +ev.target.value;
+    remember("cornea-iap-opacity", String(state.iap.opacity));
+    document.getElementById("iapOpVal").textContent = `${Math.round(100 * state.iap.opacity)}%`;
+    if (map.getLayer("iap")) map.setPaintProperty("iap", "raster-opacity", state.iap.opacity);
+  });
+  document.getElementById("iapFollow").addEventListener("change", ev => {
+    state.iap.follow = ev.target.checked;
+    drawIap();
+    renderIapCtl();
+    renderIapRun();
+  });
+  document.getElementById("iapZoom").addEventListener("click", () => {
+    const e = iapShown();
+    if (e && e.tiles) map.fitBounds([[e.tiles.bounds[0], e.tiles.bounds[1]], [e.tiles.bounds[2], e.tiles.bounds[3]]],
+                                   { padding: 48, duration: 800 });
+  });
+  map.on("zoomend", () => { if (state.iap.drawn) renderIapCtl(); });
 }
 
 // ---------------------------------------------------------------- perimeters
@@ -3630,6 +3909,7 @@ function hotPlayhead() {
 function renderHotspots() {
   const p = hotPlayhead();
   labelPlayhead();
+  if (state.iap.follow) drawIap();   // the sheet's version follows the playhead
   // on the analysis frame its rings stand in for the hotspots (see scoreAtFrame)
   const frame = scoreAtFrame();
   map.setLayoutProperty("score-hot", "visibility", frame ? "visible" : "none");
