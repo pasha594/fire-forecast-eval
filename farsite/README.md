@@ -90,14 +90,12 @@ python farsite/hindcast.py ca-plaskett --variant calbar --members 25   # needs T
 python farsite/score2.py ca-plaskett && python farsite/plot2.py
 ```
 
-`score2.py` scores both models at the time resolution the observations allow:
+`score2.py` scores every FARSITE version and PyreCast with the dashboard's own scorer
+(`analyze.scored_perimeters` + `analyze.score_grid`), so every model is scored the same way:
 
-- every perimeter at its exact lead time,
-- every satellite pass, measured as capture,
-- 1-hour lead bins,
-- plus the dashboard's fixed horizons.
-
-Growth is measured beyond a common start for both models: the baseline perimeter, plus
-PyreCast's start footprint (`analyze.RunStart`), plus FARSITE's ignition. Every FARSITE
-version present is scored side by side. Summaries use only rows where every version has a
-forecast.
+- each run against every perimeter in its first 7 days, at the perimeter's own time (every
+  perimeter with a mapped time, the latest published one on a day without one, and the ones the
+  previous fixed-horizon method showed), the same perimeters for every model;
+- growth beyond one common start: the baseline perimeter, plus PyreCast's start footprint
+  (`analyze.RunStart`), plus FARSITE's ignition;
+- no filters; hotspot capture over the same window.
