@@ -40,13 +40,22 @@ MAX_LEAD_H = 96
 DASH_H = (12, 24, 48, 72, 96)
 F = analyze.SKILL_FILTERS
 PASS_GAP_S = 20 * 60
-MODELS = ("pyrecast", "farsite")
+# FARSITE versions by output dir (see hindcast.py variants); only those present are scored
+FARSITE_DIRS = {"farsite": "runs", "farsite-cal": "runs-cal", "farsite-calr": "runs-calr"}
+
+
+def models_for(slugs):
+    return ["pyrecast"] + [m for m, d in FARSITE_DIRS.items() if any((FIRES / s / d).is_dir() for s in slugs)]
 
 
 def tif_for(model, slug, run, pct):
     if model == "pyrecast":
         return DATA / "raw" / "forecast_archive" / slug / run / f"{pct}.tif"
-    return FIRES / slug / "runs" / run / f"toa_p{pct}.tif"
+    return FIRES / slug / FARSITE_DIRS[model] / run / f"toa_p{pct}.tif"
+
+
+def farsite_run_dirs(slug, run):
+    return [FIRES / slug / d / run for d in FARSITE_DIRS.values() if (FIRES / slug / d / run / "meta.json").exists()]
 
 
 def passes(hs, t0, t1):
@@ -64,9 +73,9 @@ def passes(hs, t0, t1):
 
 
 def ignition_mask(slug, run, crs, tfm, shape_):
-    """FARSITE's ignition polygons (EPSG:5070) on a forecast grid"""
-    p = FIRES / slug / "runs" / run / "ign.geojson"
-    if not p.exists():
+    """FARSITE's ignition polygons (EPSG:5070) on a forecast grid (the same for every version)"""
+    p = next((d / "ign.geojson" for d in farsite_run_dirs(slug, run) if (d / "ign.geojson").exists()), None)
+    if p is None:
         return np.zeros(shape_, bool)
     import json
     gs = [transform_geom("EPSG:5070", crs, f["geometry"]) for f in json.load(open(p))["features"]]
@@ -90,12 +99,12 @@ def growth_row(arr, valid, B, bg, A, ag, gb, lead, px):
                 offgrid=round(off, 4))
 
 
-def score_fire(slug):
+def score_fire(slug, models):
     ps = perimset(slug)
     hs = analyze.HotspotSet(slug)
     rows = []
     for run in runs_for(slug):
-        if not (FIRES / slug / "runs" / run / "meta.json").exists():
+        if not farsite_run_dirs(slug, run):
             continue
         dt = run_dt(run)
         b = baseline(ps, dt)
@@ -104,7 +113,7 @@ def score_fire(slug):
         dash = [(H, ps.nearest(dt + timedelta(hours=H), analyze.ACTUAL_TOL_H)) for H in DASH_H]
         hpasses = passes(hs, dt, dt + timedelta(hours=MAX_LEAD_H))
         start = analyze.RunStart(f"{slug}/{run}", dt, hs)
-        for model in MODELS:
+        for model in models:
             fp_cache = {}
             for pct in analyze.PERCENTILES:
                 p = tif_for(model, slug, run, pct)
@@ -172,64 +181,67 @@ def score_fire(slug):
     return rows
 
 
-def paired(rows, truth, baseline="common"):
+def paired(rows, truth, baseline="common", models=("pyrecast", "farsite")):
+    """rows for the same (run, pct, truth, lead) from every model in `models`, all passing filters"""
     by = defaultdict(dict)
     for r in rows:
-        if r["truth"] == truth and r["baseline"] == baseline:
+        if r["truth"] == truth and r["baseline"] == baseline and r["model"] in models:
             by[(r["slug"], r["run_ts"], r["pct"], r["truth_id"], r["lead_h"])][r["model"]] = r
-    return [(v["pyrecast"], v["farsite"]) for v in by.values()
-            if len(v) == 2 and v["pyrecast"]["passes"] and v["farsite"]["passes"]]
+    return [tuple(v[m] for m in models) for v in by.values()
+            if len(v) == len(models) and all(x["passes"] for x in v.values())]
 
 
 def binned(pairs, width):
     out = defaultdict(list)
-    for p, f in pairs:
-        out[int(float(p["lead_h"]) // width) * width].append((p, f))
+    for p in pairs:
+        out[int(float(p[0]["lead_h"]) // width) * width].append(p)
     return dict(sorted(out.items()))
 
 
-def summarize(rows, title):
+SHORT = {"pyrecast": "P", "farsite": "F", "farsite-cal": "Fcal", "farsite-calr": "Fcalr"}
+
+
+def summarize(rows, title, models):
     iou = lambda r: float(r["iou"] or 0)
-    print(f"\n=== {title}")
-    pp = paired(rows, "perim")
-    print(f"perimeters at exact lead time: {len(pp)} paired rows (all percentiles; mapped-time "
-          f"{sum(p['truth_basis'] == 'mapped' for p, _ in pp)})")
-    print(f"{'lead':>9} {'n':>4} {'IoU P':>6} {'IoU F':>6} {'F wins':>6} {'over P':>7} {'over F':>7}")
+    sh = [SHORT.get(m, m) for m in models]
+    k = range(len(models))
+    print(f"\n=== {title}  ({', '.join(f'{a} = {m}' for a, m in zip(sh, models))})")
+    pp = paired(rows, "perim", models=models)
+    print(f"perimeters at exact lead time: {len(pp)} matched rows (all percentiles; mapped-time "
+          f"{sum(p[0]['truth_basis'] == 'mapped' for p in pp)})")
+    print(f"{'lead':>9} {'n':>4} " + " ".join(f"{'IoU ' + a:>9}" for a in sh) + " " + " ".join(f"{'over ' + a:>10}" for a in sh))
     for lo, g in binned(pp, 12).items():
-        ov = lambda s: sum(float(x[s]["pred_new_ac"]) for x in g) / max(sum(float(x[s]["act_new_ac"]) for x in g), 1e-9)
-        print(f"{lo:3d}-{lo + 12:3d}h {len(g):4d} {np.mean([iou(p) for p, _ in g]):6.3f} "
-              f"{np.mean([iou(f) for _, f in g]):6.3f} {np.mean([iou(f) > iou(p) for p, f in g]):6.0%} "
-              f"{ov(0):7.1f} {ov(1):7.1f}")
-    hp = paired(rows, "hotspot")
-    print(f"satellite passes: {len(hp)} paired rows")
-    print(f"{'lead':>9} {'n':>4} {'capt P':>6} {'capt F':>6} {'predac P':>9} {'predac F':>9}")
+        ov = lambda i: sum(float(x[i]["pred_new_ac"]) for x in g) / max(sum(float(x[i]["act_new_ac"]) for x in g), 1e-9)
+        print(f"{lo:3d}-{lo + 12:3d}h {len(g):4d} " + " ".join(f"{np.mean([iou(x[i]) for x in g]):9.3f}" for i in k)
+              + " " + " ".join(f"{ov(i):10.1f}" for i in k))
+    hp = paired(rows, "hotspot", models=models)
+    print(f"satellite passes: {len(hp)} matched rows")
+    print(f"{'lead':>9} {'n':>4} " + " ".join(f"{'capt ' + a:>10}" for a in sh) + " " + " ".join(f"{'predac ' + a:>12}" for a in sh))
     for lo, g in binned(hp, 12).items():
-        print(f"{lo:3d}-{lo + 12:3d}h {len(g):4d} {np.mean([float(p['capture']) for p, _ in g]):6.2f} "
-              f"{np.mean([float(f['capture']) for _, f in g]):6.2f} "
-              f"{np.median([float(p['pred_new_ac']) for p, _ in g]):9.0f} {np.median([float(f['pred_new_ac']) for _, f in g]):9.0f}")
-    bp = paired(rows, "perim", "perimeter")
+        print(f"{lo:3d}-{lo + 12:3d}h {len(g):4d} " + " ".join(f"{np.mean([float(x[i]['capture']) for x in g]):10.2f}" for i in k)
+              + " " + " ".join(f"{np.median([float(x[i]['pred_new_ac']) for x in g]):12.0f}" for i in k))
+    bp = paired(rows, "perim", "perimeter", models=models)
     if bp:
         print(f"same perimeters scored against the official perimeter only ({len(bp)} rows): mean IoU "
-              f"P {np.mean([iou(p) for p, _ in bp]):.3f}  F {np.mean([iou(f) for _, f in bp]):.3f}")
-    dp = paired(rows, "dash")
-    print(f"dashboard horizons (default filters): {len(dp)} paired rows")
+              + "  ".join(f"{a} {np.mean([iou(x[i]) for x in bp]):.3f}" for a, i in zip(sh, k)))
+    dp = paired(rows, "dash", models=models)
+    print(f"dashboard horizons (default filters): {len(dp)} matched rows")
     for H in DASH_H:
-        g = [(p, f) for p, f in dp if int(float(p["lead_h"])) == H]
+        g = [x for x in dp if int(float(x[0]["lead_h"])) == H]
         if g:
-            print(f"  {H:3d}h n={len(g):3d} IoU P {np.mean([iou(p) for p, _ in g]):.3f}  "
-                  f"IoU F {np.mean([iou(f) for _, f in g]):.3f}  F wins {np.mean([iou(f) > iou(p) for p, f in g]):.0%}")
+            print(f"  {H:3d}h n={len(g):3d} " + "  ".join(f"IoU {a} {np.mean([iou(x[i]) for x in g]):.3f}" for a, i in zip(sh, k)))
 
 
-def bins_table(rows):
+def bins_table(rows, models):
     out = []
     for slug in sorted({r["slug"] for r in rows}) + ["all"]:
         sub = [r for r in rows if slug == "all" or r["slug"] == slug]
         for truth in ("perim", "hotspot"):
             for pct in ("all",) + analyze.PERCENTILES:
-                pr = [(p, f) for p, f in paired(sub, truth) if pct == "all" or p["pct"] == pct]
+                pr = [x for x in paired(sub, truth, models=models) if pct == "all" or x[0]["pct"] == pct]
                 for lo, g in binned(pr, 1).items():
                     rec = dict(fire=slug, truth=truth, pct=pct, lead_bin_h=lo, n=len(g))
-                    for side, m in ((0, "pyrecast"), (1, "farsite")):
+                    for side, m in enumerate(models):
                         k = "iou" if truth == "perim" else "capture"
                         rec[f"{k}_{m}"] = round(float(np.mean([float(x[side][k] or 0) for x in g])), 4)
                         rec[f"pred_new_ac_{m}"] = round(float(np.mean([float(x[side]["pred_new_ac"]) for x in g])), 1)
@@ -239,9 +251,10 @@ def bins_table(rows):
 
 def main():
     slugs = sys.argv[1:] or ["ca-dome", "ca-plaskett"]
+    models = models_for(slugs)
     rows = []
     for s in slugs:
-        rows += score_fire(s)
+        rows += score_fire(s, models)
     RUNS.mkdir(exist_ok=True)
     cols = []
     for r in rows:
@@ -250,7 +263,7 @@ def main():
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
         w.writerows(rows)
-    tb = bins_table(rows)
+    tb = bins_table(rows, models)
     cols = []
     for r in tb:
         cols += [k for k in r if k not in cols]
@@ -258,9 +271,10 @@ def main():
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
         w.writerows(tb)
-    for s in slugs:
-        summarize([r for r in rows if r["slug"] == s], s)
-    summarize(rows, "both fires")
+    for ms in ([models] if len(models) == 2 else [models[:2], models]):
+        for s in slugs:
+            summarize([r for r in rows if r["slug"] == s], s, ms)
+        summarize(rows, "both fires", ms)
 
 
 if __name__ == "__main__":

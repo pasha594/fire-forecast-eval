@@ -14,29 +14,33 @@ import numpy as np
 
 from common import RUNS
 
-COL = {"pyrecast": "#2563eb", "farsite": "#dc2626"}
-LAB = {"pyrecast": "PyreCast (ELMFIRE)", "farsite": "FARSITE (ours, automated)"}
+COL = {"pyrecast": "#2563eb", "farsite": "#dc2626", "farsite-cal": "#16a34a", "farsite-calr": "#9333ea"}
+LAB = {"pyrecast": "PyreCast (ELMFIRE)", "farsite": "FARSITE v1 (gusts, uncalibrated)",
+       "farsite-cal": "FARSITE calibrated (constant factor)",
+       "farsite-calr": "FARSITE calibrated (factor eases off)"}
 BIN = 6
 
 
-def paired(rows, truth, pct="50"):
+def paired(rows, truth, models, pct="50"):
+    """rows matched across every model (same run, truth, lead), all passing filters"""
     by = defaultdict(dict)
     for r in rows:
         if r["truth"] == truth and r["pct"] == pct and r.get("baseline", "common") == "common":
             by[(r["slug"], r["run_ts"], r["truth_id"], r["lead_h"])][r["model"]] = r
-    return [v for v in by.values() if len(v) == 2 and all(x["passes"] == "1" for x in v.values())]
+    return [v for v in by.values() if all(m in v for m in models) and all(v[m]["passes"] == "1" for m in models)]
 
 
 def main():
     rows = list(csv.DictReader(open(RUNS / "hindcast_scores.csv")))
     fires = sorted({r["slug"] for r in rows})
+    models = [m for m in COL if any(r["model"] == m for r in rows)]
     fig, axes = plt.subplots(3, len(fires), figsize=(6 * len(fires), 10), constrained_layout=True, squeeze=False)
     for j, slug in enumerate(fires):
         sub = [r for r in rows if r["slug"] == slug]
-        pp, hp = paired(sub, "perim"), paired(sub, "hotspot")
+        pp, hp = paired(sub, "perim", models), paired(sub, "hotspot", models)
         edges = np.arange(0, 96 + BIN, BIN)
         mid = edges[:-1] + BIN / 2
-        for m in ("pyrecast", "farsite"):
+        for m in models:
             lead = np.array([float(v[m]["lead_h"]) for v in pp])
             iou = np.array([float(v[m]["iou"] or 0) for v in pp])
             pred = np.array([float(v[m]["pred_new_ac"]) for v in pp])
@@ -59,7 +63,7 @@ def main():
         axes[2, j].set_title(f"{slug}: new satellite detections inside forecast (p50; {len(hp)} passes)", fontsize=10)
         axes[1, j].axhline(1, color="#9ca3af", lw=0.8)
         axes[1, j].set_yscale("log")
-        axes[0, j].set_ylim(0, 1)
+        axes[0, j].set_ylim(0, max(0.05, min(1, 1.2 * max((float(v[m]["iou"] or 0) for v in pp for m in models), default=1))))
         axes[2, j].set_ylim(0, 1)
         for ax in axes[:, j]:
             ax.set_xlim(0, 96)
@@ -67,7 +71,8 @@ def main():
             ax.grid(alpha=0.25)
         axes[2, j].set_xlabel("lead time (hours after the run's start perimeter)")
     axes[0, 0].legend(fontsize=8, loc="upper right")
-    fig.suptitle("FARSITE pilot vs PyreCast, same runs, scored at every observation time", fontsize=12)
+    fig.suptitle("FARSITE pilot vs PyreCast, same runs, scored at every observation time "
+                 "(matched rows only)", fontsize=12)
     fig.savefig(RUNS / "pilot_skill.png", dpi=130)
     print(RUNS / "pilot_skill.png")
 

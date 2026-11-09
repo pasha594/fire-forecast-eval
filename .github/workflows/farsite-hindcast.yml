@@ -1,18 +1,26 @@
 name: farsite-hindcast
 
 # FARSITE hindcast of archived PyreCast runs (pilot; see farsite/README.md).
-# What to run is farsite/targets.json; every push to this branch that touches farsite/
-# runs it. prep builds FARSITE + each fire's landscape once, the matrix splits each
-# fire's runs into contiguous slices (one 4-core runner each), gather merges the
-# slices into one "farsite-results" artifact (data/fires/<slug>/runs/<run_ts>/...).
+# What to run is farsite/targets.json (fires, variant, members, shards); every push to this
+# branch that touches the hindcast code or targets runs it (scoring/docs edits do not).
+# prep builds FARSITE + each fire's landscape once, the matrix splits each fire's runs into
+# contiguous slices (one 4-core runner each), gather merges the slices into one
+# "farsite-results" artifact (data/fires/<slug>/runs[-flavour]/<run_ts>/...).
 on:
   push:
     branches: [farsite-hindcast]
-    paths: ["farsite/**", ".github/workflows/farsite-hindcast.yml"]
+    paths:
+      - farsite/hindcast.py
+      - farsite/wx.py
+      - farsite/landscape.py
+      - farsite/common.py
+      - farsite/fetch_archive.py
+      - farsite/targets.json
+      - .github/workflows/farsite-hindcast.yml
   workflow_dispatch: {}
 
 concurrency:
-  group: farsite-hindcast
+  group: farsite-hindcast-run
   cancel-in-progress: true
 
 env:
@@ -77,6 +85,8 @@ jobs:
     timeout-minutes: 350
     strategy:
       fail-fast: false
+      # the account gets ~20 concurrent jobs; leave room for other projects' workflows
+      max-parallel: 16
       matrix:
         shard: ${{ fromJson(needs.prep.outputs.shards) }}
     steps:
@@ -98,14 +108,16 @@ jobs:
           M=$(jq -r '.members' farsite/targets.json)
           N=$(jq -r '.shards' farsite/targets.json)
           C=$(jq -r '.concurrent_runs // 2' farsite/targets.json)
+          V=$(jq -r '.variant // "base"' farsite/targets.json)
           LIMIT=$(jq -r 'if .limit then "--limit \(.limit)" else "" end' farsite/targets.json)
+          ONLY=$(jq -r 'if .only then "--only " + (.only | join(",")) else "" end' farsite/targets.json)
           set -o pipefail
           for s in $(jq -r '.slugs[]' farsite/targets.json); do
             # up to 3 attempts: a crash (e.g. a download that outlasts its retries) loses
             # only the runs in flight, since finished runs (meta.json) are skipped
             for attempt in 1 2 3; do
-              if python -u farsite/hindcast.py "$s" --members "$M" --workers 4 --concurrent-runs "$C" \
-                   --shard "${{ matrix.shard }}/$N" $LIMIT 2>&1 | grep --line-buffered -v -i warn \
+              if python -u farsite/hindcast.py "$s" --variant "$V" --members "$M" --workers 4 --concurrent-runs "$C" \
+                   --shard "${{ matrix.shard }}/$N" $LIMIT $ONLY 2>&1 | grep --line-buffered -v -i warn \
                    | tee -a "$FARSITE_WORK/logs/shard-${{ matrix.shard }}.log"; then
                 break
               fi
@@ -121,10 +133,11 @@ jobs:
           retention-days: 7
           path: |
             farsite/work/logs
-            farsite/work/data/fires/*/runs
+            farsite/work/data/fires/*/runs*
             farsite/work/data/fires/*/wx
-            !farsite/work/data/fires/*/runs/*/m[0-9][0-9]
-            !farsite/work/data/fires/*/runs/*/scar.*
+            !farsite/work/data/fires/*/runs*/*/m[0-9][0-9]
+            !farsite/work/data/fires/*/runs*/*/cal
+            !farsite/work/data/fires/*/runs*/*/scar.*
 
   gather:
     needs: run
@@ -148,16 +161,19 @@ jobs:
           done
           python3 - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
           import collections, glob, json
-          print("| fire | runs | ok | no active edge | other | members failed | coarse retries |")
-          print("|---|---|---|---|---|---|---|")
+          import statistics
+          print("| fire | output | runs | ok | no active edge | other | members failed | coarse retries | calibrated | median factor |")
+          print("|---|---|---|---|---|---|---|---|---|---|")
           by = collections.defaultdict(list)
-          for p in glob.glob("farsite/work/data/fires/*/runs/*/meta.json"):
-              by[p.split("/")[4]].append(json.load(open(p)))
-          for s, ms in sorted(by.items()):
+          for p in glob.glob("farsite/work/data/fires/*/runs*/*/meta.json"):
+              by[tuple(p.split("/")[4:6])].append(json.load(open(p)))
+          for (s, d), ms in sorted(by.items()):
               st = collections.Counter(m.get("status") for m in ms)
-              print(f"| {s} | {len(ms)} | {st['ok']} | {st['no_active_edge']} | "
+              cal = [m["cal_factor"] for m in ms if str(m.get("cal_status", "")).startswith("ok")]
+              print(f"| {s} | {d} | {len(ms)} | {st['ok']} | {st['no_active_edge']} | "
                     f"{len(ms) - st['ok'] - st['no_active_edge']} | "
-                    f"{sum(m.get('failed') or 0 for m in ms)} | {sum(m.get('coarse_retries') or 0 for m in ms)} |")
+                    f"{sum(m.get('failed') or 0 for m in ms)} | {sum(m.get('coarse_retries') or 0 for m in ms)} | "
+                    f"{len(cal)} | {statistics.median(cal) if cal else '-'} |")
           EOF
           cat "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
