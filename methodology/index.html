@@ -76,6 +76,21 @@
   .callout p:last-child { margin-bottom: 0; }
   ul.rules { padding-left: 20px; max-width: 70ch; }
   ul.rules li { margin: 0 0 10px; }
+  /* how the FARSITE forecasts are made: label / description rows, and the ensemble table */
+  .spec { padding: 0; }
+  .spec .row { display: grid; grid-template-columns: 9.5em minmax(0, 1fr); gap: 4px 16px; padding: 12px 16px; }
+  .spec .row + .row { border-top: 1px solid var(--grid); }
+  .spec .row > b { font-weight: 700; }
+  .spec .row p { margin: 0 0 6px; font-size: 15px; }
+  .spec .row p:last-child { margin-bottom: 0; }
+  @media (max-width: 560px) { .spec .row { grid-template-columns: minmax(0, 1fr); } }
+  h3.sub { font: 700 18px/1.3 var(--font-serif); margin: 26px 0 8px; }
+  .tbl { overflow-x: auto; }
+  table.ens { border-collapse: collapse; width: 100%; font-size: 15px; font-variant-numeric: tabular-nums; }
+  table.ens th, table.ens td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  table.ens th { font-size: 13px; color: var(--muted); font-weight: 600; }
+  table.ens tr:last-child td { border-bottom: 0; }
+  .eg { font-variant-numeric: tabular-nums; }
   footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--grid); font-size: 14px; color: var(--muted); }
 </style>
 </head>
@@ -87,9 +102,10 @@
   </header>
 
   <h1>How a forecast is scored</h1>
-  <p class="lede">A Pyrecast forecast says when fire will reach each patch of ground. We check that
-  against where the fire really went, counting only ground that burned <em>after</em> the forecast
-  was made. Here is one made-up fire, step by step.</p>
+  <p class="lede">A forecast says when fire will reach each patch of ground. We check that against
+  where the fire really went, counting only ground that burned <em>after</em> the forecast was made.
+  Here is one made-up fire, step by step, with a Pyrecast forecast. FARSITE forecasts are scored
+  the same way; <a href="#farsite">section 5</a> explains how we make them.</p>
 
   <h2><span class="n">1</span>The timeline</h2>
   <div class="card timeline"><div class="scroll"><svg id="timeline" viewBox="0 0 900 214" role="img"
@@ -187,12 +203,14 @@
 
   <h2><span class="n">4</span>The rest of the rules</h2>
   <ul class="rules">
-    <li><b>Five versions per run.</b> Each forecast comes in five weather scenarios (the 10th to 90th
-      percentile). Each is scored on its own.</li>
+    <li><b>Five versions per run.</b> Each forecast comes in five versions, the 10th to 90th
+      percentile: Pyrecast's five weather scenarios, and five of FARSITE's 25 simulations
+      (<a href="#farsite">section 5</a>). Each is scored on its own.</li>
     <li><b>Which perimeters.</b> Each run is scored against every perimeter with a mapped time in its
       first 7 days (a day is 24 hours from the run's start). On a day with none, the latest perimeter
       published that day is used instead, timed by its last edit; a copy of an earlier shape is
-      skipped. The perimeters scored before November 2026 are kept too, rescored at their own time.</li>
+      skipped. The perimeters scored before November 2026 are kept too, rescored at their own time.
+      FARSITE forecasts 4 days, so it's scored against the perimeters in its first 4 days.</li>
     <li><b>Perimeter times.</b> A perimeter is timed by when it was mapped. When that time is missing or
       doesn't look right, we use when it was last edited instead, and record which (the map shows
       those in italics).</li>
@@ -201,7 +219,7 @@
       precision and IoU are 0 if the forecast predicted growth.</li>
     <li><b>Every model the same way.</b> Pyrecast and FARSITE are scored by the same code, against the
       same perimeters, with one common "burned before": the perimeter at run time plus each model's
-      own start.</li>
+      own start (Pyrecast's satellite-seeded start, and the edge FARSITE was lit from).</li>
     <li><b>When the forecast's start wasn't saved.</b> For about 8% of runs, our archive missed the
       forecast's first hour. Then every satellite detection up to the run stands in for its start.</li>
     <li><b>Why hotspots are only a side check.</b> Satellites pass a few times a day and can't see through
@@ -214,6 +232,110 @@
     <li><b>Same grid throughout.</b> The perimeters and detections are laid onto the forecast's own grid,
       and every area above is a count of its squares.</li>
   </ul>
+
+  <h2 id="farsite"><span class="n">5</span>How the FARSITE forecasts are made</h2>
+  <p>FARSITE is a second fire-spread model, which we run ourselves as a <b>hindcast</b>. For each
+    archived Pyrecast run of the pilot fires (Dome and Plaskett), FARSITE starts at the same moment
+    from the same perimeter, using only data that was public at that moment. Every setting below is
+    fixed in code, and the random parts are seeded by the fire and run, so any run can be reproduced
+    exactly.</p>
+
+  <h3 class="sub">What goes in</h3>
+  <div class="card spec">
+    <div class="row"><b>Start</b><div>
+      <p>The <b>baseline perimeter</b>: the latest official perimeter mapped by the run's start, the
+        same one the scoring calls "before".</p>
+      <p>Only its <b>active edge</b> is lit: the ground it gained since the last perimeter mapped at
+        least 18 hours before the run, plus a 150 m strip inside its edge wherever
+        satellites detected heat in the 24 hours before the run (each detection padded by 300 m).
+        Pieces under an acre are dropped.</p>
+      <p>The rest of the burn scar is set to non-burnable, as an analyst would, except for a 30 m strip
+        around the lit edge that FARSITE needs to get going.</p></div></div>
+    <div class="row"><b>Landscape</b><div>
+      <p>LANDFIRE 2024 fuels (the 40 fire behavior fuel models) and canopy (cover, height, base height,
+        bulk density), and LANDFIRE 2020 elevation, slope and aspect, in 30 m cells, out to 15 km beyond
+        the fire's perimeters.</p></div></div>
+    <div class="row"><b>Weather</b><div>
+      <p>NOAA's National Blend of Models (NBM): its latest 00 or 12 UTC run that had been out for at
+        least 2 hours at the forecast's start. Values every 3 hours, interpolated to hourly:
+        temperature, humidity, precipitation, and sustained 10 m wind speed and direction.</p>
+      <p>The weather is taken at one point, the middle of the baseline perimeter, for the whole fire.</p></div></div>
+    <div class="row"><b>Fuel moisture</b><div>
+      <p>Initial dead fuel moistures of 5% (1-hour fuels), 6% (10-hour) and 8% (100-hour); live
+        herbaceous 30%, live woody 90%, foliage 100%.</p></div></div>
+    <div class="row"><b>Fire behavior</b><div>
+      <p>Crown fire by Finney's method, a 30-minute time step, and no spotting.</p></div></div>
+    <div class="row"><b>Burn periods</b><div>
+      <p>The fire spreads only during a daily <b>burn period</b> centered on 16:00 local time, and holds
+        overnight. Its length is the simulation's own (see below) times the calibration factor.</p></div></div>
+    <div class="row"><b>Length</b><div>
+      <p>96 hours (4 days) from the run's start.</p></div></div>
+    <div class="row"><b>Resolution</b><div>
+      <p>30 m distance and 60 m perimeter resolution. Runs whose lit edge covers more than 3,000
+        acres start at 60 m and 120 m, since FARSITE slows down as the edge gets longer.</p>
+      <p>A simulation that runs past its time limit (25 minutes; 10 minutes for 21 early Plaskett
+        forecasts that we re-ran) is retried once at double those. One that fails twice is left out of
+        the ensemble.</p></div></div>
+  </div>
+
+  <h3 class="sub">An ensemble of 25 simulations</h3>
+  <p>Each run is 25 FARSITE simulations. The first uses the weather as forecast; the other 24 each
+    vary it.</p>
+  <div class="card tbl"><table class="ens">
+    <thead><tr><th></th><th>Simulation 1</th><th>Each of the other 24</th></tr></thead>
+    <tbody>
+      <tr><td><b>Wind speed</b></td><td>as forecast</td><td>× 0.6 to 1.6 (typically within ±25%)</td></tr>
+      <tr><td><b>Wind direction</b></td><td>as forecast</td><td>turned by a random angle (typically within ±15°)</td></tr>
+      <tr><td><b>Dead fuel moisture</b></td><td>as above</td><td>up to 2 points wetter or drier</td></tr>
+      <tr><td><b>Burn period</b></td><td>8 hours</td><td>6, 7, 8, 9 or 10 hours</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="callout">
+    <h3>Calibrating to the day before</h3>
+    <p>Before forecasting, FARSITE <b>replays the day before the run</b>. Nine of the simulations start
+      from the previous official perimeter (the latest one mapped 20 to 54 hours before the baseline
+      perimeter), lit and set up the same way, with the weather forecast published back then, and run
+      until the baseline perimeter's time. Their median growth is compared with the growth that really
+      happened between the two perimeters. Satellite detections aren't used for this: along a slow
+      edge they read as several times the perimeter growth.</p>
+    <p>The ratio scales the burn period, the hours of active spread per day, for all 25 simulations
+      of the forecast. A second replay with the scaled burn period refines it when the first was more
+      than 25% off. The factor is kept between 0.05 and 2.5, and burn periods between 15 minutes and
+      16 hours. If the perimeter didn't grow, the factor is 0.05; if there's no earlier perimeter in
+      that window, or the replay can't run, the run isn't calibrated (factor 1).</p>
+    <p class="eg"><b>Example:</b> for Dome's run at 19:56 UTC on 20 September, the two perimeters were
+      23.4 hours apart and the fire grew <b>337 acres</b> between them. The replay grew <b>1,772 acres</b>.
+      The refined factor is <b>0.20</b>, so the first simulation's 8-hour burn period becomes about
+      1.6 hours a day.</p>
+  </div>
+
+  <h3 class="sub">From 25 simulations to five maps</h3>
+  <p>The 25 simulations (those that finished) are ranked by how many new acres each burns in
+    its 4 days. The 10th, 30th,
+    50th, 70th and 90th percentile maps are the 3rd, 8th, 13th, 18th and 23rd smallest of the 25:
+    each map is one whole simulation, not a blend of cells, so it's always one consistent fire.</p>
+  <p>Each map is moved onto the same run's Pyrecast grid, taking the nearest cell so arrival times
+    don't change, and both models are scored on the same squares. What FARSITE started from is left
+    blank, as Pyrecast's start is: the lit edge, which joins the common "burned before" just like
+    Pyrecast's start in the callout above, and anything inside the baseline perimeter except
+    its unburned islands.</p>
+
+  <h3 class="sub">What it leaves out</h3>
+  <ul class="rules">
+    <li><b>Firefighting.</b> The version on the map has no control lines or other suppression.</li>
+    <li><b>Spotting.</b> Embers that start fires ahead of the front aren't simulated.</li>
+    <li><b>Weather across the fire.</b> The weather changes hour by hour but is the same everywhere on
+      the fire.</li>
+    <li><b>Changes to fuels since LANDFIRE 2024</b>, other than the fire's own burn scar.</li>
+  </ul>
+  <p>The map shows the calibrated version with a constant factor. We keep three more for the pilot's
+    write-up: uncalibrated, a factor that eases off over the forecast, and calibrated with control
+    lines read from the incident action plans' operations maps (Plaskett only; Dome's maps have no
+    vector layers). Each run's settings and calibration are recorded beside its maps, for example
+    <a href="https://f005.backblazeb2.com/file/fire-forecast-archive/farsite_archive/ca-dome/20260920_195600/meta.json">Dome's
+    20 September run</a>, and the code is
+    <a href="https://github.com/pasha594/fire-forecast-eval/blob/farsite-hindcast/farsite/hindcast.py">farsite/hindcast.py</a>.</p>
 
   <footer>Technical details, including how perimeter times are checked, are in the project's
     <a href="https://github.com/pasha594/fire-forecast-eval#metric-definitions">README</a>.
