@@ -83,6 +83,7 @@ SKILL_DIR = REPO / "data" / "skill"
 START_DIR = SKILL_DIR / "start"    # <slug>/<run_ts>.tif, published as skill/start/...
 
 SKILL_UPLOAD_WORKERS = 16
+SYNC_WORKERS = 16          # parallel downloads in sync_bucket
 SKILL_INDEX_EVERY_S = 300   # --publish: the merged skill index goes up at most this often mid-run
 
 # lead_h: hours from the run's start to the perimeter's time (mapped, else last edited);
@@ -335,16 +336,24 @@ def sync_bucket(url, only_slug=None):
             if d in recent and p.exists():
                 p.unlink()
             wanted.append(f"hotspot_archive/{slug}/{d}.geojson")
-    for key in wanted:
+    # in parallel: one at a time, a cold start (no Actions cache: ~22k objects in Nov) took
+    # over 2 h and, with the scoring, ran past the job's time limit
+    import threading
+    missing = [k for k in wanted if not (RAW / k).exists()]
+    local = threading.local()      # one HTTP session per worker thread
+
+    def fetch(key):
+        if not hasattr(local, "sess"):
+            local.sess = requests.Session()
         p = RAW / key
-        if p.exists():
-            continue
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_suffix(p.suffix + ".part")
-        tmp.write_bytes(get(key).content)
+        tmp.write_bytes(http_get(local.sess, f"{url}/{key}").content)
         tmp.replace(p)
-        n += 1
-        time.sleep(0.02)
+
+    with concurrent.futures.ThreadPoolExecutor(SYNC_WORKERS) as ex:
+        for _ in ex.map(fetch, missing):
+            n += 1
     sync_start_frames(url, manifest, only_slug)
     if only_slug:
         log(f"sync ({only_slug} only): {n} new objects ({len(wanted)} tracked)")

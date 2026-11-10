@@ -29,7 +29,9 @@ jobs:
     # full recompute grows with the archive (~25min at 1.7k runs, 66-76min at 2.9k
     # in Nov; a 90-min limit cancelled Oct 31). Catch-up runs after a gap, or a
     # cold cache, also re-sync days of tifs. Minutes are free on a public repo.
-    timeout-minutes: 180
+    # a cold start (no cache: GitHub evicts past 10 GB per repo) re-downloads the archive;
+    # Nov 9 that took 2h20m one file at a time (now in parallel), plus ~1h of scoring
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
