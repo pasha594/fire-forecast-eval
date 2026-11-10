@@ -284,7 +284,11 @@
   .tl-names .vl { grid-column: 4; margin-left: var(--sp-4); }
   .tl-names .tl-key { grid-column: 3 / -1; justify-self: start; margin: 0; }
   .tl-body { display: flex; flex-direction: column; }
-  .tl { position: relative; flex: 1; min-width: 0; }
+  /* the lanes scroll sideways when a long fire would squeeze under TL_MIN_PX_PER_DAY (the
+     names column stays put); #tl is as wide as sizeTimeline() makes it */
+  .tl-scroll { flex: 1; min-width: 0; overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain;
+               scrollbar-width: thin; }
+  .tl { position: relative; width: var(--tl-w, 100%); min-width: 100%; }
   .lane { position: relative; height: var(--lane-h); margin: 0 3px var(--lane-gap); border-radius: 4px;
           background: rgba(59, 29, 41, 0.04); cursor: pointer; touch-action: none; }
   .lane[data-kind="run"] { margin-bottom: var(--sub-gap); }
@@ -626,7 +630,7 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
     <div id="tlSlot"><div id="tlBlock"><div class="tl-in">
       <div class="tl-body">
         <div class="tl-names"><div class="tl-lab" data-kind="run"><i class="sw"></i><span class="nm">Pyrecast</span><b class="vl none"></b></div><div class="tl-lab" data-kind="score"><i class="tree"></i><span class="nm"><svg class="glyph" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><rect x="0" y="0" width="4.4" height="4.4"/><rect x="5.6" y="0" width="4.4" height="4.4"/><rect x="0" y="5.6" width="4.4" height="4.4"/><rect x="5.6" y="5.6" width="4.4" height="4.4"/></svg>Analysis</span><b class="vl none"></b></div><div class="tl-lab" data-kind="perimeter"><i class="sw"></i><span class="nm">Perimeter</span><b class="vl none"></b></div><div class="tl-lab" data-kind="hot"><svg class="glyph" width="10" height="11" viewBox="0 0 10 11" aria-hidden="true"><rect x="0" y="4" width="2.4" height="7"/><rect x="3.6" y="0" width="2.4" height="11"/><rect x="7.2" y="6" width="2.4" height="5"/></svg><span class="nm">Hotspots</span><b class="vl none"></b></div><div class="tl-key"></div></div>
-        <div class="tl" id="tl">
+        <div class="tl-scroll" id="tlScroll"><div class="tl" id="tl">
           <div class="lane" data-kind="run"></div>
           <div class="lane" data-kind="score"></div>
           <div class="lane" data-kind="perimeter"></div>
@@ -636,7 +640,7 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
           <input type="range" id="hotTime" min="0" max="336" value="336" aria-label="Hotspot playhead">
           <div class="tl-ph" id="tlPh" aria-hidden="true"><i></i></div>
           <div class="tl-tip" id="tlTip" hidden></div>
-        </div>
+        </div></div>
       </div>
     </div></div></div>
   </div>
@@ -1633,6 +1637,7 @@ function refreshWms() {
   note.className = "note";
   configureTimeSlider(variable);
   renderHotMarks();   // the forecast-run marker follows the selected run and layer
+  if (f && run) revealOnTimeline(runDate(run).getTime(), 0.25);
   renderSkill();
   if (state.scoreOn && f && run) {
     // the analysis takes the forecast's place on the map, for the run and percentile picked here
@@ -3118,10 +3123,37 @@ async function fireSpan(f) {
       if (t > end && t <= now) end = t;
     }
   }
+  // never start after the fire's own record: its first forecast run or perimeter (a Cornea
+  // record can be created weeks into a fire: Plaskett's runs and perimeters start in late
+  // August, its record on 9/15)
+  const own = [...(f.runs || []).map(r => runDate(r).getTime()),
+               ...(state.sel === f.slug ? state.perimIndex.map(p => Date.parse(p.date)) : [])]
+    .filter(t => Number.isFinite(t) && t < end);
+  if (own.length) start = Math.min(start, Math.min(...own) - DAY / 2);
   return { start: dayOf(start) * DAY, end, contained: !!containedAt, containedAt };
 }
 
 const defaultHotSpan = () => ({ start: dayOf(Date.now() - 14 * DAY) * DAY, end: Date.now(), contained: false, containedAt: null });
+
+// a long fire's timeline scrolls sideways rather than squeezing its days under this width
+const TL_MIN_PX_PER_DAY = 16;
+
+function sizeTimeline() {
+  // #tl as wide as the view, or wider (scrolling) when the span's days would be too narrow
+  const sc = document.getElementById("tlScroll"), tl = document.getElementById("tl"), span = state.hotSpan;
+  if (!span) return;
+  const want = Math.max(sc.clientWidth, Math.ceil((span.end - span.start) / DAY * TL_MIN_PX_PER_DAY));
+  if (tl.style.getPropertyValue("--tl-w") !== `${want}px`) tl.style.setProperty("--tl-w", `${want}px`);
+}
+
+function revealOnTimeline(t, where = 0.75) {
+  // scroll the timeline so time t is in view, placing it at `where` of the view when it has to move
+  const sc = document.getElementById("tlScroll"), span = state.hotSpan;
+  if (!span || !Number.isFinite(t) || sc.scrollWidth <= sc.clientWidth + 1) return;
+  const x = (t - span.start) / (span.end - span.start) * sc.scrollWidth;
+  if (x < sc.scrollLeft + 24 || x > sc.scrollLeft + sc.clientWidth - 24)
+    sc.scrollLeft = Math.max(0, x - sc.clientWidth * where);
+}
 
 function layoutHotTimeline(span) {
   // the playhead starts at the axis's end, or stays put when the axis is unchanged (the
@@ -3131,9 +3163,11 @@ function layoutHotTimeline(span) {
   state.hotSpan = span;
   el.max = Math.max(1, Math.ceil((span.end - span.start) / HOUR));
   el.value = keep ?? el.max;
+  sizeTimeline();
   labelPlayhead();
   layoutTimelineAxis();
   renderHotMarks();
+  if (keep === null) revealOnTimeline(hotPlayhead());
   // a new axis under the hits & misses view: its playhead goes to the window's end again
   if (keep === null && scoreWindow()) { scoreHot = null; syncScorePlayhead(); }
 }
@@ -3615,8 +3649,10 @@ function showTip(text, x, row) {
   if (!text) { tip.hidden = true; return; }
   tip.textContent = text;
   tip.hidden = false;
-  const w = tip.offsetWidth, W = document.getElementById("tl").clientWidth;
-  tip.style.left = `${Math.min(Math.max(x, w / 2), Math.max(w / 2, W - w / 2))}px`;
+  // (inside the part of the lanes in view when they scroll)
+  const w = tip.offsetWidth, sc = document.getElementById("tlScroll");
+  const lo = sc.scrollLeft + w / 2, hi = sc.scrollLeft + sc.clientWidth - w / 2;
+  tip.style.left = `${Math.min(Math.max(x, lo), Math.max(lo, hi))}px`;
   tip.style.top = `${row.offsetTop}px`;
 }
 
@@ -3693,6 +3729,7 @@ function wireLanes() {
   });
   // ticks, dates and bars are laid out for the axis's width (the panel, the dock, a phone)
   new ResizeObserver(() => layoutTimelineAxis()).observe(document.getElementById("tl"));
+  new ResizeObserver(() => sizeTimeline()).observe(document.getElementById("tlScroll"));
 }
 
 function startLaneDrag(lane, ev) {
