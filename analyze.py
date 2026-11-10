@@ -1227,6 +1227,9 @@ def overlay(slug, run_ts, pct, H):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--sync-only", action="store_true",
+                    help="mirror the bucket into raw/ (as --sync) and stop: the CI workflow syncs, "
+                         "saves its cache, then analyzes")
     ap.add_argument("--sync", action="store_true",
                     help=f"mirror the R2 bucket ({PUBLIC_BUCKET_URL}) into raw/ first")
     ap.add_argument("--sync-url", help="override the public bucket URL for --sync")
@@ -1249,8 +1252,10 @@ def main():
     if args.skill_only:
         skill_only()
         return
-    if args.sync or args.sync_url:
+    if args.sync or args.sync_url or args.sync_only:
         sync_bucket(args.sync_url or PUBLIC_BUCKET_URL, only_slug=args.only)
+        if args.sync_only:
+            return
     if args.refresh_perims:
         import collect
         archive = collect.Archive(RAW)

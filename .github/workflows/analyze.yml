@@ -38,22 +38,39 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install --quiet requests boto3 rasterio shapely
-      # raw/ holds the synced ToA tifs + perimeters (~1GB/day of archive age);
-      # the cache means most runs only download the delta from B2
-      - uses: actions/cache@v4
+      # raw/ holds the synced ToA tifs + perimeters (~1GB/day of archive age, ~10 GB in Nov);
+      # the cache means most runs only download the delta from B2. Restore, sync, then save
+      # right away, so even a run that later times out leaves main a warm cache. Only main's
+      # publishing runs save: raw/ fills the repo's 10 GB cache budget alone, so a branch's or
+      # a dry run's copy would evict main's (Nov 9-10: two cold runs timed out that way)
+      - name: Restore raw/ (the synced archive)
         # inputs is empty on schedule events, so scheduled runs take this path
         if: ${{ !inputs.skill_only }}
+        uses: actions/cache/restore@v4
         with:
           path: raw
           key: raw-analyze-${{ github.run_id }}
           restore-keys: raw-analyze-
-      - name: "Dry run - sync + analyze, publish nothing"
+      - name: Sync the archive into raw/
+        if: ${{ !inputs.skill_only }}
+        env:
+          ONLY: ${{ inputs.only }}
+        run: |
+          [[ -z "$ONLY" || "$ONLY" =~ ^[a-z0-9-]+$ ]] || { echo "bad slug: $ONLY"; exit 1; }
+          python analyze.py --sync-only ${ONLY:+--only "$ONLY"}
+      - name: Save raw/ (main's publishing runs only)
+        if: ${{ !inputs.skill_only && !inputs.dry_run && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: raw
+          key: raw-analyze-${{ github.run_id }}
+      - name: "Dry run - analyze, publish nothing"
         if: ${{ inputs.dry_run && !inputs.skill_only }}
         env:
           ONLY: ${{ inputs.only }}
         run: |
           [[ -z "$ONLY" || "$ONLY" =~ ^[a-z0-9-]+$ ]] || { echo "bad slug: $ONLY"; exit 1; }
-          python analyze.py --sync ${ONLY:+--only "$ONLY"}
+          python analyze.py ${ONLY:+--only "$ONLY"}
       - name: Dry run summary (vs the published metrics.csv)
         if: ${{ inputs.dry_run && !inputs.skill_only }}
         run: |
@@ -89,7 +106,7 @@ jobs:
           path: |
             data/metrics.csv
             data/skill
-      - name: Sync, analyze, publish metrics.csv + skill files to the bucket
+      - name: Analyze, publish metrics.csv + skill files to the bucket
         if: ${{ !inputs.skill_only && !inputs.dry_run }}
         env:
           S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
@@ -99,7 +116,7 @@ jobs:
           ONLY: ${{ inputs.only }}
         run: |
           [[ -z "$ONLY" || "$ONLY" =~ ^[a-z0-9-]+$ ]] || { echo "bad slug: $ONLY"; exit 1; }
-          python analyze.py --sync --publish ${ONLY:+--only "$ONLY"}
+          python analyze.py --publish ${ONLY:+--only "$ONLY"}
       - name: Rebuild skill files from the published metrics.csv
         if: ${{ inputs.skill_only }}
         env:
