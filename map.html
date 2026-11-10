@@ -250,6 +250,9 @@
            --hot-top: calc(2 * var(--lane-h) + var(--sub-h) + var(--sub-gap) + var(--group-gap) + var(--lane-gap));
            --axis-y: calc(var(--hot-top) + var(--hot-h) + var(--axis-gap));
            color: var(--ink-2); font-size: var(--fs-label); line-height: var(--lh-label); }
+  /* a fire forecast by both models: a second forecast lane + Analysis lane (placeModelLanes) */
+  .tl-in.m2 { --hot-top: calc(3 * var(--lane-h) + 2 * (var(--sub-h) + var(--sub-gap) + var(--group-gap)) + var(--lane-gap)); }
+  .tl-lab[hidden], .lane[hidden] { display: none !important; }
   /* the hotspot-age key: the burn scar, then the 7-day ramp, oldest on the left like the axis */
   .tl-key { display: flex; align-items: center; gap: 5px; margin-left: auto; color: var(--muted);
             font-size: var(--fs-micro); line-height: var(--lh-micro); white-space: nowrap; }
@@ -291,8 +294,11 @@
   .tl { position: relative; width: var(--tl-w, 100%); min-width: 100%; }
   .lane { position: relative; height: var(--lane-h); margin: 0 3px var(--lane-gap); border-radius: 4px;
           background: rgba(59, 29, 41, 0.04); cursor: pointer; touch-action: none; }
-  .lane[data-kind="run"] { margin-bottom: var(--sub-gap); }
-  .lane[data-kind="score"] { height: var(--sub-h); margin-bottom: var(--group-gap); border-radius: 3px; }
+  .lane:is([data-kind="run"], [data-kind="orun"]) { margin-bottom: var(--sub-gap); }
+  .lane:is([data-kind="score"], [data-kind="oscore"]) { height: var(--sub-h); margin-bottom: var(--group-gap); border-radius: 3px; }
+  /* in the model not on the map, its run (or perimeter) that matches the one on the map */
+  .lane i.tw { top: 2px; width: 3px; height: calc(100% - 4px); margin: 0 0 0 -1.5px; border-radius: 1.5px;
+               background: var(--surface); box-shadow: inset 0 0 0 1.25px var(--c); }
   .hot-lane { height: var(--hot-h); margin-bottom: 0; cursor: auto; }
   .hot-lane svg { position: absolute; left: 0; top: 0; overflow: visible; }
   .hot-lane .hl { fill: none; stroke: var(--ink); stroke-width: 1.25; }
@@ -363,11 +369,15 @@
                 flex: none; align-self: flex-start; width: 232px; margin: 0 10px 0 0; padding-right: 12px;
                 border-right: 1px solid var(--grid); font-size: var(--fs-label); line-height: var(--lh-label); }
     .tl-lab .sw { height: 12px; }
-    .tl-names .tl-lab[data-kind="run"] > * { grid-row: 1; }
-    .tl-names .tl-lab[data-kind="score"] > * { grid-row: 3; }
-    .tl-names .tl-lab[data-kind="perimeter"] > * { grid-row: 5; }
-    .tl-names .tl-lab[data-kind="hot"] > * { grid-row: 7; }
-    .tl-names .tl-key { grid-row: 8; }
+    .tl-in.m2 .tl-names { grid-template-rows: var(--lane-h) var(--sub-gap) var(--sub-h) var(--group-gap)
+                            var(--lane-h) var(--sub-gap) var(--sub-h) var(--group-gap) var(--lane-h) var(--lane-gap) var(--hot-h) auto; }
+    /* each name on its lane's row (--row: placeModelLanes sets it, as the lanes' order changes) */
+    .tl-names .tl-lab > *, .tl-names .tl-key { grid-row: var(--row); }
+    .tl-names .tl-lab[data-kind="run"] { --row: 1; }
+    .tl-names .tl-lab[data-kind="score"] { --row: 3; }
+    .tl-names .tl-lab[data-kind="perimeter"] { --row: 5; }
+    .tl-names .tl-lab[data-kind="hot"] { --row: 7; }
+    .tl-names .tl-key { --row: 8; }
     #hotTicks { height: 9px; }
     #hotTicks span { height: 4px; }
     #hotTicks span.major { height: 7px; }
@@ -488,9 +498,11 @@
                           border: solid color-mix(in srgb, var(--c) 45%, var(--surface)); border-width: 0 0 1.5px 1.5px;
                           border-bottom-left-radius: 3px; }
   .tl-names .tree { grid-column: 2; justify-self: stretch; }
-  .tl-lab[data-kind="score"] .nm { display: flex; align-items: center; gap: 5px; }
-  .tl-lab[data-kind="score"] .nm .glyph { width: 9px; height: 9px; }
-  .tl-lab[data-kind="score"] .vl .sc { color: var(--muted); font-weight: 400; }
+  .tl-lab:is([data-kind="score"], [data-kind="oscore"]) .nm { display: flex; align-items: center; gap: 5px; }
+  .tl-lab:is([data-kind="score"], [data-kind="oscore"]) .nm .glyph { width: 9px; height: 9px; }
+  .tl-lab:is([data-kind="score"], [data-kind="oscore"]) .vl .sc { color: var(--muted); font-weight: 400; }
+  /* the model not on the map: its name and marks dimmed like a hidden layer's */
+  .tl-lab:is([data-kind="orun"], [data-kind="oscore"]) :is(.sw, .glyph, .nm) { opacity: 0.6; }
   .lane .win { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; pointer-events: none;
                background: color-mix(in srgb, var(--c) 22%, var(--surface)); }
   .tl-lab .eye:disabled { opacity: .35; cursor: default; background: none; }
@@ -631,10 +643,13 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
     <!-- the timeline; docked (Settings → Timeline) it moves to #tlDock under the map -->
     <div id="tlSlot"><div id="tlBlock"><div class="tl-in">
       <div class="tl-body">
-        <div class="tl-names"><div class="tl-lab" data-kind="run"><i class="sw"></i><span class="nm">Pyrecast</span><b class="vl none"></b></div><div class="tl-lab" data-kind="score"><i class="tree"></i><span class="nm"><svg class="glyph" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><rect x="0" y="0" width="4.4" height="4.4"/><rect x="5.6" y="0" width="4.4" height="4.4"/><rect x="0" y="5.6" width="4.4" height="4.4"/><rect x="5.6" y="5.6" width="4.4" height="4.4"/></svg>Analysis</span><b class="vl none"></b></div><div class="tl-lab" data-kind="perimeter"><i class="sw"></i><span class="nm">Perimeter</span><b class="vl none"></b></div><div class="tl-lab" data-kind="hot"><svg class="glyph" width="10" height="11" viewBox="0 0 10 11" aria-hidden="true"><rect x="0" y="4" width="2.4" height="7"/><rect x="3.6" y="0" width="2.4" height="11"/><rect x="7.2" y="6" width="2.4" height="5"/></svg><span class="nm">Hotspots</span><b class="vl none"></b></div><div class="tl-key"></div></div>
+        <div class="tl-names"><div class="tl-lab" data-kind="run"><i class="sw"></i><span class="nm">Pyrecast</span><b class="vl none"></b></div><div class="tl-lab" data-kind="score"><i class="tree"></i><span class="nm"><svg class="glyph" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><rect x="0" y="0" width="4.4" height="4.4"/><rect x="5.6" y="0" width="4.4" height="4.4"/><rect x="0" y="5.6" width="4.4" height="4.4"/><rect x="5.6" y="5.6" width="4.4" height="4.4"/></svg>Analysis</span><b class="vl none"></b></div><div class="tl-lab" data-kind="orun" hidden><i class="sw"></i><span class="nm">FARSITE</span><b class="vl none"></b></div><div class="tl-lab" data-kind="oscore" hidden><i class="tree"></i><span class="nm"><svg class="glyph" width="9" height="9" viewBox="0 0 10 10" aria-hidden="true"><rect x="0" y="0" width="4.4" height="4.4"/><rect x="5.6" y="0" width="4.4" height="4.4"/><rect x="0" y="5.6" width="4.4" height="4.4"/><rect x="5.6" y="5.6" width="4.4" height="4.4"/></svg>Analysis</span><b class="vl none"></b></div><div class="tl-lab" data-kind="perimeter"><i class="sw"></i><span class="nm">Perimeter</span><b class="vl none"></b></div><div class="tl-lab" data-kind="hot"><svg class="glyph" width="10" height="11" viewBox="0 0 10 11" aria-hidden="true"><rect x="0" y="4" width="2.4" height="7"/><rect x="3.6" y="0" width="2.4" height="11"/><rect x="7.2" y="6" width="2.4" height="5"/></svg><span class="nm">Hotspots</span><b class="vl none"></b></div><div class="tl-key"></div></div>
         <div class="tl-scroll" id="tlScroll"><div class="tl" id="tl">
           <div class="lane" data-kind="run"></div>
           <div class="lane" data-kind="score"></div>
+          <!-- the forecast model not on the map, and its Analysis (a fire both models forecast) -->
+          <div class="lane" data-kind="orun" hidden></div>
+          <div class="lane" data-kind="oscore" hidden></div>
           <div class="lane" data-kind="perimeter"></div>
           <div class="lane hot-lane" id="hotLane"><svg id="tlHot" aria-hidden="true"></svg></div>
           <div id="hotTicks" aria-hidden="true"></div>
@@ -1280,17 +1295,8 @@ async function init() {
   else deselect();
   wirePickers();
   wireLanes();
-  document.getElementById("selModel").addEventListener("change", ev => {
-    const f = state.fires.find(x => x.slug === state.sel);
-    if (!f) return;
-    state.modelPref = ev.target.value;
-    useModel(f, ev.target.value);
-    setFireParam(state.sel);
-    state.scoreOn = false;
-    fillRuns(f, document.getElementById("selRun").value);
-    showLayer("run");
-    refreshWms();
-  });
+  document.getElementById("selModel").addEventListener("change", ev =>
+    switchModel(ev.target.value, document.getElementById("selRun").value));
   for (const id of ["selRun", "selVar", "selPct"]) {
     document.getElementById(id).addEventListener("change", () => {
       // a variable picked shows the forecast (and so takes the analysis off); a run or a
@@ -1534,6 +1540,7 @@ function deselect() {
   state.model = "pyrecast";
   for (const el of document.querySelectorAll('.tl-lab[data-kind="run"] .nm')) el.textContent = MODELS.pyrecast.name;
   state.sel = null;
+  placeModelLanes();
   state.seq++;              // drops in-flight forecast, perimeter and skill responses
   resetScore();
   setFireParam(null);
@@ -1603,23 +1610,88 @@ function fmtRun(ts) {
 // of some fires (farsite_archive/manifest.json, from farsite_publish.py), on the same runs'
 // grids. One model's forecast is on the map at a time: the Forecast layer's model menu swaps
 // the selected fire's runs (their files and their analysis) to that model's, and the
-// timeline's forecast lane and its Analysis lane follow it. Both models are scored the same
-// way, against the same perimeters, from one common start (analyze.py score_grid).
+// timeline's forecast lane and its Analysis lane follow it. A fire both models forecast gets
+// a second pair of lanes for the model not on the map (FARSITE's pair above Pyrecast's either
+// way): its runs and its scored perimeters, pressed to switch the map to it, and its scores at
+// the perimeter of the analysis on the map. Both models are scored the same way, against the
+// same perimeters, from one common start (analyze.py score_grid). Both are drawn in one color
+// (the perimeters' red stays theirs alone): the lane names say which is which.
 const MODELS = {
   pyrecast: { name: "Pyrecast", label: "Pyrecast (ELMFIRE)", dir: "forecast_archive", color: "#2166ac" },
-  farsite: { name: "FARSITE", label: "FARSITE", dir: "farsite_archive", color: "#b2182b" },
+  farsite: { name: "FARSITE", label: "FARSITE", dir: "farsite_archive", color: "#2166ac" },
 };
 const modelOf = () => MODELS[state.model] || MODELS.pyrecast;
 const archDir = () => modelOf().dir;
+const otherModel = () => (state.model === "farsite" ? "pyrecast" : "farsite");
 
 function modelsFor(f) {
   return ["pyrecast"].concat(state.farsite && state.farsite.fires[f.slug] ? ["farsite"] : []);
 }
 
-function skillRunsOf(doc) {
-  // the selected model's scored runs in a skill file ({run_ts: {pct: rows}})
+function skillRunsFor(doc, model) {
+  // a model's scored runs in a skill file ({run_ts: {pct: rows}})
   if (!doc) return null;
-  return state.model === "pyrecast" ? doc.runs : doc.models && doc.models[state.model] && doc.models[state.model].runs;
+  return model === "pyrecast" ? doc.runs : doc.models && doc.models[model] && doc.models[model].runs;
+}
+const skillRunsOf = doc => skillRunsFor(doc, state.model);   // the model on the map's
+
+function switchModel(model, run, scoreH) {
+  // the selected fire's forecast on the map becomes `model`'s, at run `run` if it forecast it
+  // (else its newest). An analysis on stays on, for the new model (at the horizon nearest
+  // scoreH when given, else the one picked last); scoreH also puts one on
+  const f = state.fires.find(x => x.slug === state.sel);
+  if (!f || !modelsFor(f).includes(model)) return;
+  state.modelPref = model;
+  useModel(f, model);
+  setFireParam(state.sel);
+  fillRuns(f, run);
+  if (scoreH != null) state.scoreH = scoreH;
+  if (state.scoreOn) refreshWms();
+  else if (scoreH != null) showScore();
+  else { showLayer("run"); refreshWms(); }
+}
+
+function placeModelLanes() {
+  // the timeline's forecast lanes for the selected fire: the model on the map's pair (data-kind
+  // run, score), and for a fire both models forecast the other's (orun, oscore), FARSITE's pair
+  // first; in the wide layout each name goes on its lane's grid row
+  const f = state.sel && state.fires.find(x => x.slug === state.sel);
+  const two = !!f && modelsFor(f).length > 1, other = otherModel();
+  document.querySelector(".tl-in").classList.toggle("m2", two);
+  for (const el of document.querySelectorAll('.tl-lab:is([data-kind="orun"], [data-kind="oscore"]), .lane:is([data-kind="orun"], [data-kind="oscore"])')) el.hidden = !two;
+  for (const el of document.querySelectorAll('.tl-lab[data-kind="orun"] .nm')) el.textContent = MODELS[other].name;
+  const pair = { [state.model]: ["run", "score"], [other]: ["orun", "oscore"] };
+  const order = two ? [...pair.farsite, ...pair.pyrecast] : ["run", "score", "orun", "oscore"];
+  for (const [box, cls] of [[document.querySelector(".tl-names"), ".tl-lab"], [document.getElementById("tl"), ".lane"]]) {
+    const at = k => box.querySelector(`${cls}[data-kind="${k}"]`), before = at("perimeter");
+    for (const k of order) box.insertBefore(at(k), before);
+  }
+  const shown = two ? order : ["run", "score"], rows = {};
+  shown.forEach((k, i) => { rows[k] = 1 + 2 * i; });
+  rows.perimeter = 1 + 2 * shown.length;
+  rows.hot = 3 + 2 * shown.length;
+  for (const [k, r] of Object.entries(rows)) {
+    for (const lab of document.querySelectorAll(`.tl-lab[data-kind="${k}"]`)) lab.style.setProperty("--row", r);
+  }
+  document.querySelector(".tl-names .tl-key").style.setProperty("--row", 4 + 2 * shown.length);
+}
+
+function otherRunsOf(f) {
+  // the model not on the map's runs with something to draw, newest first
+  if (otherModel() === "pyrecast") {
+    const p = f.pyrecast || f;
+    return p.runs.filter(r => p.pcts[r].size || p.live[r] !== false);
+  }
+  const e = state.farsite.fires[f.slug].runs;
+  return Object.keys(e).sort().reverse().filter(r => (e[r].pcts || []).length);
+}
+
+function otherScoredRows(run) {
+  // the model not on the map's scored perimeters for `run` at the picked percentile
+  const doc = state.sel && state.skill.get(state.sel);
+  const runs = skillRunsFor(doc, otherModel()), byPct = runs && runs[run];
+  const got = byPct && byPct[document.getElementById("selPct").value];
+  return Array.isArray(got) ? got.filter(r => Array.isArray(r) && canScore(r)) : [];
 }
 
 function useModel(f, model) {
@@ -1645,6 +1717,7 @@ function useModel(f, model) {
   for (const o of sel.options) o.disabled = model !== "pyrecast" && o.value !== "time-of-arrival";
   if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled) sel.value = "time-of-arrival";
   for (const el of document.querySelectorAll('.tl-lab[data-kind="run"] .nm')) el.textContent = MODELS[model].name;
+  placeModelLanes();
 }
 
 // ---------------------------------------------------------------- forecast layer
@@ -3367,7 +3440,9 @@ function layoutTimelineAxis() {
 
 function laneActive(kind, items) {
   // the item a lane highlights: the one being dragged to, else what the map shows
-  // (items are rebuilt on every render, so match the dragged one by what it points at)
+  // (items are rebuilt on every render, so match the dragged one by what it points at).
+  // The model not on the map's lanes show nothing on it (renderOtherLane marks theirs)
+  if (kind === "orun" || kind === "oscore") return null;
   const pv = state.lanePreview;
   if (pv && pv.kind === kind) {
     return items.find(c => (kind === "run" ? c.run === pv.item.run : kind === "score" ? c.h === pv.item.h
@@ -3430,11 +3505,13 @@ function renderHotMarks() {
   const unscored = c => !(mruns && mruns[c.run] && (mruns[c.run][pct] || []).some(r => Array.isArray(r) && canScore(r)));
   for (const lane of document.querySelectorAll(".lane[data-kind]")) {
     // (an Analysis lane takes its model's color)
-    const kind = lane.dataset.kind, color = kind === "perimeter" ? pal.perimeter : modelOf().color;
+    const kind = lane.dataset.kind, other = kind === "orun" || kind === "oscore";
+    const color = kind === "perimeter" ? pal.perimeter : MODELS[other ? otherModel() : state.model].color;
     lane.style.setProperty("--c", color);
     for (const el of document.querySelectorAll(`.tl-lab[data-kind="${kind}"]`)) el.style.setProperty("--c", color);
     lane.innerHTML = "";
     if (!span || !state.sel) { setLaneLabel(kind, "", ""); continue; }
+    if (other) { if (!lane.hidden) renderOtherLane(lane, kind); continue; }
     const items = pinTargets(kind), act = laneActive(kind, items), ao = act ? offAxis(act.t) : 0;
     const at = c => `data-t="${c.t}" style="left:${(100 * pinFrac(c.t)).toFixed(3)}%"`;
     const ends = new Set();
@@ -3465,6 +3542,66 @@ function renderHotMarks() {
                  (kind === "run" && !forecastVar() ? `${what} ${fmtDT(act.t)}: its analysis is on the map, in its place`
                    : `${what} on the map: ${fmtDT(act.t)}`) + (ao ? ` (${offAxisText(act.t)})` : ""));
   }
+}
+
+function renderOtherLane(lane, kind) {
+  // the model not on the map (a fire both forecast): its runs (orun), or its scored perimeters
+  // for the selected run (oscore), light ticks; hollow, the one matching what the map shows
+  // (the same run; the same perimeter as the analysis on the map), whose scores its Analysis
+  // label gives beside the other model's; full color, the one a drag is on
+  const items = pinTargets(kind), run = document.getElementById("selRun").value;
+  const name = MODELS[otherModel()].name, here = modelOf().name;
+  const pv = state.lanePreview && state.lanePreview.kind === kind ? state.lanePreview.item : null;
+  const pick = pv && items.find(c => (kind === "orun" ? c.run === pv.run : c.h === pv.h));
+  const shown = scoreShownH() != null ? state.scoreRow : null;
+  const twin = kind === "orun" ? items.find(c => c.run === run) || null
+    : shown ? items.find(c => c.row[5] === shown[5]) || null : null;
+  // an analysis on: the runs it scored nothing for at this percentile fade back, as above
+  const doc = state.scoreOn && state.skill.get(state.sel), pct = document.getElementById("selPct").value;
+  const oruns = kind === "orun" && skillRunsFor(doc, otherModel());
+  const unscored = c => !(oruns && oruns[c.run] && (oruns[c.run][pct] || []).some(r => Array.isArray(r) && canScore(r)));
+  const at = c => `data-t="${c.t}" style="left:${(100 * pinFrac(c.t)).toFixed(3)}%"`;
+  const ends = new Set();
+  let html = "";
+  for (const c of items) {
+    const o = offAxis(c.t);
+    if (o) ends.add(o);
+    else if (c !== twin && c !== pick) html += `<i ${at(c)}${doc && kind === "orun" && unscored(c) ? ' class="un"' : ""}></i>`;
+  }
+  for (const o of ends) html += `<i class="off ${o > 0 ? "hi" : "lo"}"></i>`;
+  if (twin && twin !== pick && !offAxis(twin.t)) html += `<i class="tw" ${at(twin)}></i>`;
+  if (pick && !offAxis(pick.t)) html += `<i class="on" ${at(pick)}></i>`;
+  lane.innerHTML = html;
+  for (const eye of document.querySelectorAll(`.tl-lab[data-kind="${kind}"] .eye`)) {
+    eye.disabled = !items.length;
+    eye.title = kind === "orun" ? `Show ${name}'s forecast in place of ${here}'s` : `Map ${name}'s analysis of this run in place of ${here}'s`;
+  }
+  if (kind === "orun") {
+    setLaneLabel(kind, twin ? "off" : "not this run", twin
+      ? `${name} forecast this run too: press its tick or the eye to show it in place of ${here}'s`
+      : `${name} didn't forecast this run (it forecast ${plural(items.length, "run")} of this fire): press a tick to show one`, "none");
+    return;
+  }
+  const forecastIt = pinTargets("orun").some(c => c.run === run);
+  if (!forecastIt) { setLaneLabel(kind, "", `${name} didn't forecast this run`, "none"); return; }
+  if (!items.length) {
+    setLaneLabel(kind, "not scored", `${name}'s forecast of this run isn't scored at this percentile: no perimeter in its forecast's days after the run`, "none");
+    return;
+  }
+  const pc = v => (typeof v === "number" ? Math.round(100 * v) : "—");
+  if (twin) {
+    const r = twin.row;
+    setLaneLabel(kind, `${hLab(twin.h)} <span class="sc">P ${pc(r[1])} · R ${pc(r[2])}</span>`,
+      `${name} at the same perimeter, ${hLong(twin.h)} after the run: precision ${pc(r[1])}% · recall ${pc(r[2])}% · IoU ${pc(r[3])}% (press to map its analysis)`);
+    return;
+  }
+  if (shown) {
+    setLaneLabel(kind, `${hLab(shown[0])} <span class="sc">not scored</span>`,
+      `${name} isn't scored at this perimeter (${hLong(shown[0])} after the run)` +
+      (otherModel() === "farsite" ? `: it forecasts ${Math.round((state.farsite && state.farsite.horizon_h) || 96) / 24} days` : ""), "none");
+    return;
+  }
+  setLaneLabel(kind, "off", `${name} scored at ${items.map(c => hLab(c.h)).join(", ")} · press a tick or the eye to map one`, "none");
 }
 
 // the strip under the forecast lane's ticks, for its tooltip: {t, until} time-of-arrival
@@ -3628,7 +3765,7 @@ function labelScoreLane(items, act) {
 function renderScoreGlyph() {
   // the Analysis lane's glyph: the four classes
   const fills = ["hit", "falseAlarm", "miss", "base"].map(k => Palette.SCORE[k]);
-  for (const svg of document.querySelectorAll('.tl-lab[data-kind="score"] .glyph')) {
+  for (const svg of document.querySelectorAll('.tl-lab:is([data-kind="score"], [data-kind="oscore"]) .glyph')) {
     svg.querySelectorAll("rect").forEach((r, i) => r.setAttribute("fill", fills[i]));
   }
 }
@@ -3639,6 +3776,15 @@ function pinTargets(kind) {
   const f = state.fires.find(x => x.slug === state.sel);
   if (!f) return [];
   if (kind === "perimeter") return state.perimIndex.map(p => ({ t: Date.parse(p.date), p }));
+  if (kind === "orun" || kind === "oscore") {
+    // the model not on the map's runs, or its scored perimeters for the selected run
+    if (!modelsFor(f).includes(otherModel())) return [];
+    if (kind === "orun") return otherRunsOf(f).map(r => ({ t: runDate(r).getTime(), run: r }));
+    const run = document.getElementById("selRun").value;
+    if (!run) return [];
+    const t0 = runDate(run).getTime();
+    return otherScoredRows(run).map(r => ({ t: t0 + r[0] * HOUR, h: r[0], row: r }));
+  }
   if (kind === "score") {
     const run = document.getElementById("selRun").value;
     if (!run) return [];
@@ -3699,6 +3845,22 @@ function wireEyes() {
     eye.addEventListener("click", () => { if (scoreShownH() != null) leaveScore(); else showScore(); });
     lab.prepend(eye);
   }
+  // the model not on the map: its eyes switch the map to it (its forecast, or its analysis
+  // of the selected run at the perimeter on the map, else the one picked last)
+  for (const lab of document.querySelectorAll('.tl-lab:is([data-kind="orun"], [data-kind="oscore"])')) {
+    const kind = lab.dataset.kind, eye = document.createElement("button");
+    eye.type = "button";
+    eye.className = "eye";
+    eye.innerHTML = EYE_SVG;
+    eye.setAttribute("aria-pressed", "false");
+    eye.setAttribute("aria-label", kind === "orun" ? "Show this model's forecast" : "Map this model's analysis");
+    eye.addEventListener("click", () => {
+      const run = document.getElementById("selRun").value;
+      if (kind === "orun") { state.scoreOn = false; switchModel(otherModel(), run); }
+      else switchModel(otherModel(), run, scoreShownH() ?? state.scoreH ?? 0);
+    });
+    lab.prepend(eye);
+  }
 }
 
 function showLayer(kind) {
@@ -3711,6 +3873,9 @@ function showLayer(kind) {
 }
 
 function applyPin(kind, target) {
+  // the model not on the map: switch to it, at that run (or this run's analysis at that perimeter)
+  if (kind === "orun") { switchModel(otherModel(), target.run); return; }
+  if (kind === "oscore") { switchModel(otherModel(), document.getElementById("selRun").value, target.h); return; }
   if (kind === "score") { if (scoreShownH() !== target.h) showScore(target.h); return; }
   if (kind === "run") {
     // (under an analysis the run switches and the analysis follows it)
@@ -3761,6 +3926,15 @@ function laneHover(lane, clientX, picked) {
     if (bd > 8) c = null;
   }
   for (const el of lane.querySelectorAll("i.hov")) el.classList.remove("hov");
+  if (kind === "orun" || kind === "oscore") {
+    const name = MODELS[otherModel()].name, pc = v => (typeof v === "number" ? `${Math.round(100 * v)}%` : "—");
+    if (c) lane.querySelector(`i[data-t="${c.t}"]:not(.on)`)?.classList.add("hov");
+    showTip(!c ? (kind === "orun" ? `Press or drag to show a ${name} run` : `Press to map ${name}'s analysis at a scored perimeter`)
+      : kind === "orun" ? `${name} run ${fmtDT(c.t)}` + (offAxis(c.t) ? ` · ${offAxisText(c.t)}`
+          : c.run === document.getElementById("selRun").value ? " · the run on the map" : "")
+      : `${name}: ${hLong(c.h)} after the run, to ${fmtDT(c.t)} · precision ${pc(c.row[1])} · recall ${pc(c.row[2])}`, tx, lane);
+    return;
+  }
   if (!c) {
     const a = kind === "run" ? arrival : null;
     const over = a && x >= pinFrac(a.t) * r.width && x <= pinFrac(a.t + a.until * HOUR) * r.width + 2;
@@ -3845,7 +4019,8 @@ function startLaneDrag(lane, ev) {
       state.lanePreview = { kind, item: cur };
       renderHotMarks();
       clearTimeout(timer);
-      timer = setTimeout(() => applyPin(kind, cur), 120);
+      // (picking in the model not on the map switches models, and the lanes with them: on release only)
+      if (kind !== "orun" && kind !== "oscore") timer = setTimeout(() => applyPin(kind, cur), 120);
     }
     laneHover(lane, e.clientX, cur);
   };
