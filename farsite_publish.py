@@ -17,9 +17,11 @@ exactly what was scored. Without a Pyrecast tif, the run is cropped to where it 
   farsite_archive/manifest.json               {"model", "variant", "label", "horizon_h",
                                                "fires": {slug: {"runs": {run_ts: {...}}}}}
 
-The manifest is merged with the published one, so publishing one fire keeps the others.
+The manifest is merged with the published one: publishing one fire keeps the others, and a
+fire's runs are added to (or replace) the ones already published, so a re-run of a few runs
+publishes on its own; --replace drops the fire's published runs first.
 
-  farsite_publish.py RESULTS_DIR --slug ca-dome [--variant cal] (--out DIR | --upload)
+  farsite_publish.py RESULTS_DIR --slug ca-dome [--variant cal] [--replace] (--out DIR | --upload)
 
 RESULTS_DIR is searched for */fires/<slug>/runs-<variant>/<run_ts>/meta.json, so a
 merged set of the workflow's shard-* artifacts (or its farsite-results) works as is.
@@ -137,6 +139,8 @@ def main():
     ap.add_argument("results", type=Path)
     ap.add_argument("--slug", required=True, action="append", help="fire(s) to publish")
     ap.add_argument("--variant", default="cal", choices=sorted(LABELS))
+    ap.add_argument("--replace", action="store_true",
+                    help="publish only these results' runs for each fire (default: add to the published ones)")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--out", type=Path, help="write the bucket layout under this directory instead")
     g.add_argument("--upload", action="store_true", help="upload to the bucket (needs S3_* env)")
@@ -170,8 +174,11 @@ def main():
                 runs[run_ts] = entry
                 written += [f"{PREFIX}/{slug}/{run_ts}/{n}" for n in [f"{p}.tif" for p in PCTS] + ["meta.json"] +
                             (["ign.geojson"] if entry["ign"] else [])]
-        fires[slug] = {"runs": dict(sorted(runs.items()))}
-        print(f"{slug}: {len(runs)} runs converted ({a.variant})", flush=True)
+        kept = {} if a.replace else {k: v for k, v in ((fires.get(slug) or {}).get("runs") or {}).items()
+                                     if k not in runs}
+        fires[slug] = {"runs": dict(sorted({**kept, **runs}.items()))}
+        print(f"{slug}: {len(runs)} runs converted ({a.variant}), {len(kept)} already published kept, "
+              f"{len(fires[slug]['runs'])} in all", flush=True)
     (stage / PREFIX).mkdir(parents=True, exist_ok=True)
     (stage / PREFIX / "manifest.json").write_text(json.dumps(manifest, separators=(",", ":")))
     if a.upload:

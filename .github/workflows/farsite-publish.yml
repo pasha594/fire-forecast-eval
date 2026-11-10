@@ -3,7 +3,8 @@ name: farsite-publish
 # Publish a FARSITE hindcast version (from a farsite-hindcast workflow run's results) to the
 # archive bucket in the dashboard's format (farsite_publish.py): farsite_archive/<slug>/...
 # and farsite_archive/manifest.json. Then score it: run the analyze workflow for each fire
-# (only=<slug>), or wait for the next full run.
+# (only=<slug>), or wait for the next full run. Runs are added to each fire's published ones, so
+# a re-run of a few runs (another run_id) publishes on its own.
 on:
   workflow_dispatch:
     inputs:
@@ -19,6 +20,10 @@ on:
         description: "FARSITE version (runs-<variant>/): cal, calr, calbar or base"
         default: cal
         type: string
+      replace:
+        description: "drop each fire's already-published runs (default: add these runs to them)"
+        default: false
+        type: boolean
 
 concurrency:
   group: farsite-publish
@@ -52,6 +57,7 @@ jobs:
           S3_BUCKET: ${{ vars.S3_BUCKET || 'fire-forecast-archive' }}
           SLUGS: ${{ inputs.slugs }}
           VARIANT: ${{ inputs.variant }}
+          REPLACE: ${{ inputs.replace && '--replace' || '' }}
         run: |
           [[ "$VARIANT" =~ ^(cal|calr|calbar|base)$ ]] || { echo "bad variant: $VARIANT"; exit 1; }
           args=()
@@ -59,4 +65,4 @@ jobs:
             [[ "$s" =~ ^[a-z0-9-]+$ ]] || { echo "bad slug: $s"; exit 1; }
             args+=(--slug "$s")
           done
-          python farsite_publish.py results "${args[@]}" --variant "$VARIANT" --upload
+          python farsite_publish.py results "${args[@]}" --variant "$VARIANT" $REPLACE --upload
