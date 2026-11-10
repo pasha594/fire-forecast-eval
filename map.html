@@ -2329,7 +2329,11 @@ function renderSkill() {
   empty.hidden = !!rows.length;
   hint.hidden = true;
   if (!rows.length) {
-    empty.textContent = doc ? NOT_SCORED : "No scored forecasts for this fire yet.";
+    empty.textContent = !doc ? "No scored forecasts for this fire yet."
+      : state.model === "pyrecast" ? NOT_SCORED
+      : !skillRunsOf(doc) ? `${modelOf().name} isn't scored for this fire yet.`
+      : `Not scored for this run and percentile: no perimeter was mapped or published in the ` +
+        `${Math.round((state.farsite && state.farsite.horizon_h) || 96) / 24} days ${modelOf().name} forecasts after it.`;
     return;
   }
   // a horizon's column puts its analysis on the map (and the one shown is ringed)
