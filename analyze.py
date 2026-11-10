@@ -49,6 +49,12 @@ SCORE_DAYS = 7
 OLD_HORIZONS_H = (12, 24, 48, 72, 96, 120, 168, 240, 336)
 OLD_MAX_OFFSET_H = 3
 MODEL = "pyrecast"
+# FARSITE (the hindcast pilot, published by farsite_publish.py) is scored alongside Pyrecast
+# on the runs it forecast, by the same score_grid, against the same perimeters (within its
+# own forecast length, horizon_h in its manifest), with one common start for both models:
+# the baseline perimeter, Pyrecast's start footprint and FARSITE's lit edge (ign.geojson)
+FARSITE_DIR = "farsite_archive"
+FARSITE_MODEL = "farsite"
 PUBLIC_BUCKET_URL = "https://f005.backblazeb2.com/file/fire-forecast-archive"
 # baseline = latest perimeter mapped <= run + this. run_ts is cut to the minute, and is
 # the time of whatever the run started from: sometimes a perimeter, usually a satellite pass
@@ -300,13 +306,28 @@ def sync_start_frames(url, manifest, only_slug=None, skip=()):
         f" of {len(runs)} runs have one")
 
 
-def fire_state(slug, frozen, matches):
-    """what a finished fire's published rows depend on besides the scoring code"""
+def farsite_entry(fm, slug):
+    """a fire's runs in the FARSITE manifest ({} when FARSITE didn't forecast it)"""
+    return ((fm or {}).get("fires") or {}).get(slug) or {}
+
+
+def farsite_digest(fm, slug):
+    """what FARSITE published for a fire (its version and runs), short; None for nothing"""
+    e = farsite_entry(fm, slug)
+    if not e:
+        return None
+    import hashlib
+    return hashlib.sha1(json.dumps([fm.get("variant"), e], sort_keys=True).encode()).hexdigest()[:12]
+
+
+def fire_state(slug, frozen, matches, fm=None):
+    """what a finished fire's published rows depend on besides the scoring code: its frozen
+    fingerprint, its Cornea match, and what FARSITE published for it"""
     m = (matches.get("matches") or {}).get(slug) or {}
-    return {"fp": frozen.get(slug), "cornea_id": m.get("cornea_id")}
+    return {"fp": frozen.get(slug), "cornea_id": m.get("cornea_id"), "farsite": farsite_digest(fm, slug)}
 
 
-def carried_fires(get, frozen, matches):
+def carried_fires(get, frozen, matches, fm=None):
     """The fires whose published rows can be kept as they are: scored with this
     SCORING_VERSION while frozen, and still frozen with the same fingerprint (and Cornea
     match). Fetches the published metrics.csv and its state into raw/. -> set of slugs"""
@@ -321,7 +342,7 @@ def carried_fires(get, frozen, matches):
         return set()
     (RAW / PREV_METRICS).write_bytes(get("metrics.csv").content)
     return {slug for slug, st in (state.get("fires") or {}).items()
-            if slug in frozen and st == fire_state(slug, frozen, matches)}
+            if slug in frozen and st == fire_state(slug, frozen, matches, fm)}
 
 
 def sync_bucket(url, only_slug=None):
@@ -343,13 +364,26 @@ def sync_bucket(url, only_slug=None):
     frozen = frozen_fingerprints(manifest, datetime.now(timezone.utc))
     state_path = RAW / FROZEN_STATE
     settled = load_json(state_path) or {}
+    # FARSITE's published runs (none yet: no manifest); a fire whose FARSITE entry changed
+    # (republished) drops its local copies, since the file names stay the same
+    fdir = RAW / FARSITE_DIR
+    try:
+        fm = get(f"{FARSITE_DIR}/manifest.json").json()
+    except Exception:
+        fm = {}
+    fdir.mkdir(parents=True, exist_ok=True)
+    (fdir / "manifest.json").write_text(json.dumps(fm))
+    fsynced = load_json(fdir / "synced.json") or {}
+    for slug in list(fsynced) + list((fm.get("fires") or {})):
+        if fsynced.get(slug) != farsite_digest(fm, slug) and (fdir / slug).is_dir():
+            shutil.rmtree(fdir / slug)
     # finished fires whose published rows stay: their files aren't needed (a one-fire run
     # always rescores its fire)
-    carry = set() if only_slug else carried_fires(get, frozen, load_json(RAW / "fire_matches.json") or {})
+    carry = set() if only_slug else carried_fires(get, frozen, load_json(RAW / "fire_matches.json") or {}, fm)
     (RAW / CARRY_FILE).write_text(json.dumps(sorted(carry)))
     pruned = 0
     for slug in carry:
-        for d in ("forecast_archive", "perimeter_archive", "hotspot_archive"):
+        for d in ("forecast_archive", "perimeter_archive", "hotspot_archive", FARSITE_DIR):
             if (RAW / d / slug).is_dir():
                 shutil.rmtree(RAW / d / slug)
                 pruned += 1
@@ -381,6 +415,13 @@ def sync_bucket(url, only_slug=None):
                 idx.unlink()
         wanted.append(f"perimeter_archive/{slug}/index.json")
         wanted += [f"perimeter_archive/{slug}/{e}.geojson" for e in epochs]
+    for slug, e in (fm.get("fires") or {}).items():
+        if not mine(slug):
+            continue
+        for run_ts, r in (e.get("runs") or {}).items():
+            wanted += [f"{FARSITE_DIR}/{slug}/{run_ts}/{pct}.tif" for pct in r.get("pcts", [])]
+            if r.get("ign"):
+                wanted.append(f"{FARSITE_DIR}/{slug}/{run_ts}/ign.geojson")
     for slug, days in (manifest.get("hotspots") or {}).items():
         if not mine(slug):
             continue
@@ -411,6 +452,10 @@ def sync_bucket(url, only_slug=None):
     with concurrent.futures.ThreadPoolExecutor(SYNC_WORKERS) as ex:
         for _ in ex.map(fetch, missing):
             n += 1
+    # the FARSITE files now local, by what was published for each fire (see above)
+    fsynced.update({slug: farsite_digest(fm, slug) for slug in (fm.get("fires") or {})
+                    if mine(slug)})
+    (fdir / "synced.json").write_text(json.dumps(fsynced))
     sync_start_frames(url, manifest, only_slug, skip=carry)
     if only_slug:
         log(f"sync ({only_slug} only): {n} new objects ({len(wanted)} tracked)")
@@ -843,6 +888,18 @@ class RunStart:
         return self._grids[key]
 
 
+def geojson_mask(gj, crs, tfm, shape_):
+    """a GeoJSON FeatureCollection (EPSG:4326) as a bool mask on a grid"""
+    from rasterio import features
+    from rasterio.warp import transform_geom
+    geoms = [transform_geom("EPSG:4326", crs, f["geometry"]) for f in (gj or {}).get("features", [])
+             if f.get("geometry")]
+    if not geoms:
+        return np.zeros(shape_, dtype=bool)
+    return features.rasterize([(g, 1) for g in geoms], out_shape=shape_, transform=tfm,
+                              fill=0, dtype="uint8").astype(bool)
+
+
 def write_start_mask(path, m, crs, tfm):
     """the start footprint a run was scored with, for map.html and report.html to redraw
     the calculation: uint8 0/1 on the forecast's grid"""
@@ -963,6 +1020,7 @@ def compute(only_slug=None, on_fire=None):
                 if r["slug"] in carry:
                     prev.setdefault(r["slug"], []).append(r)
     frozen = frozen_fingerprints(manifest, datetime.now(timezone.utc))
+    fm = load_json(RAW / FARSITE_DIR / "manifest.json") or {}
     fires_seen = set()
     skipped = {"no_match": 0, "no_perims": 0, "no_perimeter_to_score": 0, "missing_tif": 0,
                "unreadable_perims": 0}
@@ -1025,14 +1083,21 @@ def compute(only_slug=None, on_fire=None):
         start = RunStart(run_key, run_dt, hs)
         starts[start.basis] += 1
         start_written = False
+        # FARSITE's forecast of the same run, if any: its lit edge joins the common start
+        fe = (farsite_entry(fm, slug).get("runs") or {}).get(entry["run_ts"])
+        frun = RAW / FARSITE_DIR / slug / entry["run_ts"]
+        ign = load_json(frun / "ign.geojson") if fe and fe.get("ign") and (frun / "ign.geojson").exists() else None
+        ign_grids = {}
 
-        for pct in PERCENTILES:
-            if not entry["files"].get(pct, {}).get("ok"):
-                continue
-            tif = RAW / "forecast_archive" / run_key / f"{pct}.tif"
-            if not tif.exists():
-                skipped["missing_tif"] += 1
-                continue
+        def ign_mask(crs, tfm, shape_):
+            key = (str(crs), tuple(tfm)[:6], shape_)
+            if key not in ign_grids:
+                ign_grids[key] = geojson_mask(ign, crs, tfm, shape_) if ign else np.zeros(shape_, dtype=bool)
+            return ign_grids[key]
+
+        def score_tif(model, tif, pct, perims_m):
+            """one model's forecast grid against perims_m, from the run's common start"""
+            nonlocal start_written
             with rasterio.open(tif) as ds:
                 arr = ds.read(1)
                 crs, tfm = ds.crs, ds.transform
@@ -1041,21 +1106,20 @@ def compute(only_slug=None, on_fire=None):
             px_area = abs(tfm.a * tfm.e)
             valid = (arr != nod) if nod is not None else np.isfinite(arr)
             toa_h = arr * TOA_TO_HOURS
-
             B = (ps.mask(baseline[1], crs, tfm, arr.shape)
                  if baseline else np.zeros(arr.shape, dtype=bool))
             b_geom = ps.geom_utm(baseline[1], crs) if baseline else None
-            S = start.mask(crs, tfm, arr.shape)
+            # the start beyond the baseline: Pyrecast's own (or its stand-in) and FARSITE's lit edge
+            S = start.mask(crs, tfm, arr.shape) | ign_mask(crs, tfm, arr.shape)
             BS = B | S   # burned before: what nothing after the run can count as growth
-            if S.any() and not start_written:
+            if model == MODEL and S.any() and not start_written:
                 write_start_mask(START_DIR / slug / f"{entry['run_ts']}.tif", S, crs, tfm)
                 start_written = True
-
             notes = [] if baseline else ["baseline=none"]
-            for sc in score_grid(toa_h, valid, crs, tfm, grid_box, ps, hs, run_dt, perims,
+            for sc in score_grid(toa_h, valid, crs, tfm, grid_box, ps, hs, run_dt, perims_m,
                                  BS, b_geom, S & ~B):
                 row = {
-                    "model": MODEL, "slug": slug, "cornea_id": m["cornea_id"],
+                    "model": model, "slug": slug, "cornea_id": m["cornea_id"],
                     "run_ts": entry["run_ts"],
                     "run_dt_utc": run_dt.strftime(ISO_Z),
                     "percentile": pct,
@@ -1070,11 +1134,27 @@ def compute(only_slug=None, on_fire=None):
                     "start_acres": acres(int(S.sum()), px_area),
                     "burned_before_acres": acres(int(BS.sum()), px_area),
                     "expired_run": entry.get("expired", False),
-                    "notes": ";".join(notes),
+                    "notes": ";".join(notes + (["farsite_start"] if ign else [])),
                     **sc,
                 }
                 rows.append(row)
                 fire_rows.append(row)
+
+        for pct in PERCENTILES:
+            if not entry["files"].get(pct, {}).get("ok"):
+                continue
+            tif = RAW / "forecast_archive" / run_key / f"{pct}.tif"
+            if not tif.exists():
+                skipped["missing_tif"] += 1
+                continue
+            score_tif(MODEL, tif, pct, perims)
+        if fe:
+            # FARSITE forecasts horizon_h hours: perimeters past that aren't its to score
+            horizon = float(fm.get("horizon_h") or 96)
+            perims_f = [pp for pp in perims if (pp[0] - run_dt).total_seconds() / 3600 <= horizon]
+            for pct in fe.get("pcts", []):
+                if perims_f and (frun / f"{pct}.tif").exists():
+                    score_tif(FARSITE_MODEL, frun / f"{pct}.tif", pct, perims_f)
         log(f"{run_key}: {len(perims)} perimeters x pcts done")
     fire_done()
 
@@ -1093,7 +1173,7 @@ def compute(only_slug=None, on_fire=None):
         (REPO / "data" / METRICS_STATE).write_text(json.dumps({
             "scoring_version": SCORING_VERSION,
             "generated": datetime.now(timezone.utc).strftime(ISO_Z),
-            "fires": {s: fire_state(s, frozen, matches_now) for s in sorted(fires_seen) if s in frozen},
+            "fires": {s: fire_state(s, frozen, matches_now, fm) for s in sorted(fires_seen) if s in frozen},
         }, separators=(",", ":")))
     if carry:
         log(f"carried over {sum(len(prev.get(s, [])) for s in carry & fires_seen)} rows of "
@@ -1134,22 +1214,28 @@ def skill_entry(r):
 
 def skill_doc(slug, rows, generated):
     """map.html's skill file for one fire from its metrics rows (every row: no filters).
-    v4: rows at each perimeter's exact lead (skill_entry); "starts": {run_ts: "pyrecast" |
-    "hotspots"} for the runs scored with a start footprint beyond the baseline (see
-    START_VAR), published as skill/start/<slug>/<run_ts>.tif, which the pages add to the
-    baseline perimeter."""
-    runs, starts = {}, {}
+    v5: "runs" holds Pyrecast's rows, {run_ts: {pct: [skill_entry...]}} at each perimeter's
+    exact lead; "models" every other model's the same way ({"farsite": {"runs": ...}}).
+    "starts": {run_ts: "pyrecast" | "hotspots"} for the runs scored with a start footprint
+    beyond the baseline (see START_VAR; with FARSITE's lit edge where it forecast the run:
+    one common start), published as skill/start/<slug>/<run_ts>.tif, which the pages add to
+    the baseline perimeter."""
+    by_model, starts = {}, {}
     for r in rows:
-        if r.get("model", MODEL) != MODEL:
-            continue
-        if r.get("start_basis") and (_num(str(r.get("start_acres") or "")) or 0) > 0:
+        model = r.get("model") or MODEL
+        if model == MODEL and r.get("start_basis") and (_num(str(r.get("start_acres") or "")) or 0) > 0:
             starts[r["run_ts"]] = r["start_basis"]
-        runs.setdefault(r["run_ts"], {}).setdefault(str(r["percentile"]), []).append(skill_entry(r))
-    runs = {run_ts: {pct: sorted(by_pct[pct], key=lambda e: e[0]) for pct in sorted(by_pct, key=int)}
-            for run_ts, by_pct in sorted(runs.items())}
-    n = sum(len(v) for by_pct in runs.values() for v in by_pct.values())
-    return {"v": 4, "slug": slug, "generated": generated, "method": "exact-lead",
-            "score_days": SCORE_DAYS, "starts": dict(sorted(starts.items())), "runs": runs}, n
+        (by_model.setdefault(model, {}).setdefault(r["run_ts"], {})
+         .setdefault(str(r["percentile"]), []).append(skill_entry(r)))
+    tidy = lambda runs: {run_ts: {pct: sorted(by_pct[pct], key=lambda e: e[0]) for pct in sorted(by_pct, key=int)}
+                         for run_ts, by_pct in sorted(runs.items())}
+    out = {m: tidy(runs) for m, runs in by_model.items()}
+    n = sum(len(v) for runs in out.values() for by_pct in runs.values() for v in by_pct.values())
+    doc = {"v": 5, "slug": slug, "generated": generated, "method": "exact-lead",
+           "score_days": SCORE_DAYS, "starts": dict(sorted(starts.items())), "runs": out.pop(MODEL, {})}
+    if out:
+        doc["models"] = {m: {"runs": runs} for m, runs in sorted(out.items())}
+    return doc, n
 
 
 def build_skill(csv_path, out_dir):

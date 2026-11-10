@@ -1,0 +1,62 @@
+name: farsite-publish
+
+# Publish a FARSITE hindcast version (from a farsite-hindcast workflow run's results) to the
+# archive bucket in the dashboard's format (farsite_publish.py): farsite_archive/<slug>/...
+# and farsite_archive/manifest.json. Then score it: run the analyze workflow for each fire
+# (only=<slug>), or wait for the next full run.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "farsite-hindcast workflow run id whose shard-* (or farsite-results) artifacts to publish"
+        required: true
+        type: string
+      slugs:
+        description: "fires to publish, space-separated (e.g. ca-dome)"
+        required: true
+        type: string
+      variant:
+        description: "FARSITE version (runs-<variant>/): cal, calr, calbar or base"
+        default: cal
+        type: string
+
+concurrency:
+  group: farsite-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet requests boto3 rasterio shapely
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: shard-*
+          merge-multiple: true
+          path: results
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Convert and upload
+        env:
+          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          S3_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          S3_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          S3_BUCKET: ${{ vars.S3_BUCKET || 'fire-forecast-archive' }}
+          SLUGS: ${{ inputs.slugs }}
+          VARIANT: ${{ inputs.variant }}
+        run: |
+          [[ "$VARIANT" =~ ^(cal|calr|calbar|base)$ ]] || { echo "bad variant: $VARIANT"; exit 1; }
+          args=()
+          for s in $SLUGS; do
+            [[ "$s" =~ ^[a-z0-9-]+$ ]] || { echo "bad slug: $s"; exit 1; }
+            args+=(--slug "$s")
+          done
+          python farsite_publish.py results "${args[@]}" --variant "$VARIANT" --upload

@@ -571,8 +571,10 @@ if (matchMedia("(max-width: 760px)").matches) document.body.classList.add("panel
   </div>
 
   <div class="sec fire-only">
-    <div class="sec-head"><h2>Forecast layer <a class="src-logo" href="https://www.pyregence.org/" target="_blank"
-      rel="noopener" title="Forecasts by Pyregence"><img src="pyregence-logo.svg" alt="by Pyregence"></a></h2></div>
+    <div class="sec-head"><h2>Forecast layer <a class="src-logo" id="fcLogo" href="https://www.pyregence.org/" target="_blank"
+      rel="noopener" title="Forecasts by Pyregence"><img src="pyregence-logo.svg" alt="by Pyregence"></a><span class="src"
+      id="fcSrc" hidden>Cornea hindcast</span></h2></div>
+    <select id="selModel" hidden aria-label="Forecast model"></select>
     <select id="selRun"></select>
     <div class="pair">
       <select id="selVar">
@@ -1206,6 +1208,9 @@ const state = {
   ovSize: 10,
   // incident maps (see "incident maps"): the fire's sheets from Incibrief's manifest, the
   // one picked, whether its newest version by the playhead stands in, and what is drawn
+  model: "pyrecast",    // the forecast model on the map (see "forecast models")
+  modelPref: new URLSearchParams(location.search).get("model"),   // the one picked last
+  farsite: null,        // farsite_archive/manifest.json: the runs FARSITE forecast
   iap: { maps: [], id: null, follow: false, drawn: null,
          opacity: Math.min(Math.max(+remembered("cornea-iap-opacity", "0.75") || 0.75, 0.1), 1) },
 };
@@ -1235,8 +1240,10 @@ async function init() {
     }
     return {};
   })();
-  const [matches, manifest] = await Promise.all([
-    loadLocalOrBucket("fire_matches.json"), loadLocalOrBucket("manifest.json"), mapReady]);
+  const [matches, manifest, farsite] = await Promise.all([
+    loadLocalOrBucket("fire_matches.json"), loadLocalOrBucket("manifest.json"),
+    loadLocalOrBucket("farsite_archive/manifest.json").catch(() => null), mapReady]);
+  state.farsite = farsite && farsite.fires ? farsite : null;
   const bySlug = {};
   const gen = Date.parse(manifest.generated || 0);
   // manifests from collectors that stamp last_seen let us tell expired runs apart;
@@ -1273,6 +1280,17 @@ async function init() {
   else deselect();
   wirePickers();
   wireLanes();
+  document.getElementById("selModel").addEventListener("change", ev => {
+    const f = state.fires.find(x => x.slug === state.sel);
+    if (!f) return;
+    state.modelPref = ev.target.value;
+    useModel(f, ev.target.value);
+    setFireParam(state.sel);
+    state.scoreOn = false;
+    fillRuns(f, document.getElementById("selRun").value);
+    showLayer("run");
+    refreshWms();
+  });
   for (const id of ["selRun", "selVar", "selPct"]) {
     document.getElementById(id).addEventListener("change", () => {
       // a variable picked shows the forecast (and so takes the analysis off); a run or a
@@ -1502,13 +1520,19 @@ function fitOverview() {
 // ---------------------------------------------------------------- selection
 
 function setFireParam(slug) {
+  // the fire (and a model other than Pyrecast) in the URL, so a link opens the same view
   const url = new URL(location.href);
   if (slug) url.searchParams.set("fire", slug);
   else url.searchParams.delete("fire");
+  if (slug && state.model !== "pyrecast") url.searchParams.set("model", state.model);
+  else url.searchParams.delete("model");
   history.replaceState(history.state, "", url);
 }
 
 function deselect() {
+  for (const g of state.fires) if (g.pyrecast) useModel(g, "pyrecast");
+  state.model = "pyrecast";
+  for (const el of document.querySelectorAll('.tl-lab[data-kind="run"] .nm')) el.textContent = MODELS.pyrecast.name;
   state.sel = null;
   state.seq++;              // drops in-flight forecast, perimeter and skill responses
   resetScore();
@@ -1542,15 +1566,11 @@ async function select(slug) {
     if (PHONE.matches) setPanel(false);   // the fire is on the map: let the phone show it
   } else if (PHONE.matches) setPanel(true);   // nothing to show on the map: keep its details in view
 
-  const selRun = document.getElementById("selRun");
-  // runs that expired upstream before any file was archived can't draw anything;
-  // open on the newest run that can (archived files, or still live on Pyrecast)
-  const noData = r => !f.pcts[r].size && f.live[r] === false;
-  const shown = f.runs.find(r => !noData(r)) || f.runs[0];
-  selRun.innerHTML = f.runs.map((r, i) => {
-    const tag = noData(r) ? " (no data)" : i === 0 ? " (latest)" : "";
-    return `<option value="${r}"${r === shown ? " selected" : ""}>Run ${fmtRun(r)}${tag}</option>`;
-  }).join("");
+  // the model picked last, if this fire has it (else Pyrecast); other fires get theirs back
+  for (const g of state.fires) if (g !== f && g.pyrecast) useModel(g, "pyrecast");
+  useModel(f, modelsFor(f).includes(state.modelPref) ? state.modelPref : "pyrecast");
+  setFireParam(slug);
+  fillRuns(f);
   refreshWms();
   loadSkill(f, seq);
   loadIap(f, seq);
@@ -1560,8 +1580,71 @@ async function select(slug) {
   await refreshHotspots();
 }
 
+function fillRuns(f, keep) {
+  // the selected model's runs; runs that expired upstream before any file was archived can't
+  // draw anything: open on `keep` if this model has it, else the newest run that can draw
+  // (archived files, or still live on Pyrecast)
+  const selRun = document.getElementById("selRun");
+  const noData = r => !f.pcts[r].size && f.live[r] === false;
+  const shown = keep && f.runs.includes(keep) ? keep : f.runs.find(r => !noData(r)) || f.runs[0];
+  selRun.innerHTML = f.runs.map((r, i) => {
+    const tag = noData(r) ? " (no data)" : i === 0 ? " (latest)" : "";
+    return `<option value="${r}"${r === shown ? " selected" : ""}>Run ${fmtRun(r)}${tag}</option>`;
+  }).join("");
+}
+
 function fmtRun(ts) {
   return fmtDT(runDate(ts).getTime());
+}
+
+// ---------------------------------------------------------------- forecast models
+
+// Pyrecast (ELMFIRE) is every fire's forecast. FARSITE, our hindcast pilot, forecast some runs
+// of some fires (farsite_archive/manifest.json, from farsite_publish.py), on the same runs'
+// grids. One model's forecast is on the map at a time: the Forecast layer's model menu swaps
+// the selected fire's runs (their files and their analysis) to that model's, and the
+// timeline's forecast lane and its Analysis lane follow it. Both models are scored the same
+// way, against the same perimeters, from one common start (analyze.py score_grid).
+const MODELS = {
+  pyrecast: { name: "Pyrecast", label: "Pyrecast (ELMFIRE)", dir: "forecast_archive", color: "#2166ac" },
+  farsite: { name: "FARSITE", label: "FARSITE", dir: "farsite_archive", color: "#b2182b" },
+};
+const modelOf = () => MODELS[state.model] || MODELS.pyrecast;
+const archDir = () => modelOf().dir;
+
+function modelsFor(f) {
+  return ["pyrecast"].concat(state.farsite && state.farsite.fires[f.slug] ? ["farsite"] : []);
+}
+
+function skillRunsOf(doc) {
+  // the selected model's scored runs in a skill file ({run_ts: {pct: rows}})
+  if (!doc) return null;
+  return state.model === "pyrecast" ? doc.runs : doc.models && doc.models[state.model] && doc.models[state.model].runs;
+}
+
+function useModel(f, model) {
+  // the fire's runs become `model`'s (Pyrecast's set aside, and put back for "pyrecast"); for
+  // the selected fire, the model on the map, its menu, heading and lane name too
+  if (!f.pyrecast) f.pyrecast = { runs: f.runs, pcts: f.pcts, live: f.live };
+  if (model === "farsite") {
+    const e = state.farsite.fires[f.slug].runs, runs = Object.keys(e).sort().reverse();
+    f.runs = runs;
+    f.pcts = Object.fromEntries(runs.map(r => [r, new Set(e[r].pcts || [])]));
+    f.live = Object.fromEntries(runs.map(r => [r, false]));
+  } else Object.assign(f, f.pyrecast);
+  if (f.slug !== state.sel) return;
+  state.model = model;
+  const models = modelsFor(f), menu = document.getElementById("selModel");
+  menu.innerHTML = models.map(k => `<option value="${k}"${k === model ? " selected" : ""}>` +
+    `${esc(k === "farsite" ? state.farsite.label || "FARSITE" : MODELS[k].label)}</option>`).join("");
+  menu.hidden = models.length < 2;
+  document.getElementById("fcLogo").hidden = model !== "pyrecast";
+  document.getElementById("fcSrc").hidden = model === "pyrecast";
+  // FARSITE has time of arrival only
+  const sel = document.getElementById("selVar");
+  for (const o of sel.options) o.disabled = model !== "pyrecast" && o.value !== "time-of-arrival";
+  if (sel.selectedOptions[0] && sel.selectedOptions[0].disabled) sel.value = "time-of-arrival";
+  for (const el of document.querySelectorAll('.tl-lab[data-kind="run"] .nm')) el.textContent = MODELS[model].name;
 }
 
 // ---------------------------------------------------------------- forecast layer
@@ -1935,7 +2018,7 @@ async function renderToa(f, run, pct, note, token) {
   note.textContent = "loading time-of-arrival raster…";
   // a newest run not archived yet comes straight from Pyrecast, through the relay
   const live = f.live[run] === true ? relayToa(f.slug, run, pct) : null;
-  const geo = await loadGeoraster(`forecast_archive/${f.slug}/${run}/${pct}.tif`, live, !!live && !f.pcts[run].has(pct));
+  const geo = await loadGeoraster(`${archDir()}/${f.slug}/${run}/${pct}.tif`, live, !!live && !f.pcts[run].has(pct));
   // selection may have moved on while the tif downloaded
   if (token !== state.wmsSeq) return;
   if (!geo) {
@@ -2230,7 +2313,7 @@ const NOT_SCORED = "Not scored for this run and percentile: no perimeter was map
 function scoredRows() {
   // the selected run and percentile's skill rows (its scored horizons), [] when none
   const doc = state.sel && state.skill.get(state.sel);
-  const byPct = doc && doc.runs && doc.runs[document.getElementById("selRun").value];
+  const runs = skillRunsOf(doc), byPct = runs && runs[document.getElementById("selRun").value];
   const got = byPct && byPct[document.getElementById("selPct").value];
   return Array.isArray(got) ? got.filter(Array.isArray) : [];
 }
@@ -2600,7 +2683,7 @@ async function renderScore(f, run, pct, token) {
   // the same time-of-arrival raster as the forecast layer draws (a newest run not archived
   // yet comes from Pyrecast), the two snapshots the pipeline scored it with, and the start
   // footprint it added to the earlier one
-  const live = f.live[run] === true ? relayToa(f.slug, run, pct) : null, tif = `forecast_archive/${f.slug}/${run}/${pct}.tif`;
+  const live = f.live[run] === true ? relayToa(f.slug, run, pct) : null, tif = `${archDir()}/${f.slug}/${run}/${pct}.tif`;
   const startBasis = scoreStartBasis(f, run);
   const [geo, base, act, startGeo] = await Promise.all([
     loadGeoraster(tif, live, !!live && !f.pcts[run].has(pct)),
@@ -3277,7 +3360,6 @@ function layoutTimelineAxis() {
   }
 }
 
-const RUN_PIN = "#2166ac";
 
 function laneActive(kind, items) {
   // the item a lane highlights: the one being dragged to, else what the map shows
@@ -3340,10 +3422,11 @@ function renderHotMarks() {
   arrival = null;
   // an analysis on: the runs with nothing scored at this percentile fade back
   const doc = state.scoreOn && state.sel && state.skill.get(state.sel), pct = document.getElementById("selPct").value;
-  const unscored = c => !(doc && doc.runs && doc.runs[c.run] && (doc.runs[c.run][pct] || []).some(r => Array.isArray(r) && canScore(r)));
+  const mruns = skillRunsOf(doc);
+  const unscored = c => !(mruns && mruns[c.run] && (mruns[c.run][pct] || []).some(r => Array.isArray(r) && canScore(r)));
   for (const lane of document.querySelectorAll(".lane[data-kind]")) {
     // (an Analysis lane takes its model's color)
-    const kind = lane.dataset.kind, color = kind === "perimeter" ? pal.perimeter : RUN_PIN;
+    const kind = lane.dataset.kind, color = kind === "perimeter" ? pal.perimeter : modelOf().color;
     lane.style.setProperty("--c", color);
     for (const el of document.querySelectorAll(`.tl-lab[data-kind="${kind}"]`)) el.style.setProperty("--c", color);
     lane.innerHTML = "";
@@ -3368,7 +3451,7 @@ function renderHotMarks() {
     lane.innerHTML = html;
     if (kind === "run" && act && !ao) renderArrivalBar(lane.querySelector(".arr"), act);
     if (kind === "score") { labelScoreLane(items, act); continue; }
-    const what = kind === "run" ? "Pyrecast run" : "Perimeter";
+    const what = kind === "run" ? `${modelOf().name} run` : "Perimeter";
     if (!act) {
       if (!layerShown[kind]) setLaneLabel(kind, "hidden", `${kind === "run" ? "The forecast layer is" : "Perimeters are"} hidden`, "none");
       else setLaneLabel(kind, "none shown", `No ${what.toLowerCase()} on the map`, "none");
@@ -3677,7 +3760,7 @@ function laneHover(lane, clientX, picked) {
   if (!c) {
     const a = kind === "run" ? arrival : null;
     const over = a && x >= pinFrac(a.t) * r.width && x <= pinFrac(a.t + a.until * HOUR) * r.width + 2;
-    showTip(!over ? `Press or drag to show a ${kind === "run" ? "Pyrecast run" : kind === "score" ? "scored horizon" : "perimeter"}`
+    showTip(!over ? `Press or drag to show a ${kind === "run" ? `${modelOf().name} run` : kind === "score" ? "scored perimeter" : "perimeter"}`
       : a.hour != null ? `Forecast hour +${a.hour}h, ${fmtDT(a.t + a.until * HOUR)}`
       : `This forecast's time of arrival, up to +${Math.round(a.until)}h`, tx, lane);
     return;
@@ -3691,7 +3774,7 @@ function laneHover(lane, clientX, picked) {
       (act && act.h === c.h ? " · on the map" : ""), tx, lane);
     return;
   }
-  showTip(`${kind === "run" ? "Pyrecast run" : "Perimeter"} ${fmtDT(c.t)}` +
+  showTip(`${kind === "run" ? `${modelOf().name} run` : "Perimeter"} ${fmtDT(c.t)}` +
     (offAxis(c.t) ? ` · ${offAxisText(c.t)}` : act && act.t === c.t ? " · on the map" : ""), tx, lane);
 }
 

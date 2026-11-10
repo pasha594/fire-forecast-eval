@@ -54,6 +54,32 @@ pyrecast **purges the hourly granule dirs within ~2–4h** — hence the 2h cron
 whose interval bounds worst-case granule loss; a variable tar holds whatever
 survived at capture time (`got`/`n` in the manifest records the gap).
 
+### FARSITE on the dashboard
+
+FARSITE, the hindcast pilot (branch `farsite-hindcast`, `farsite/`), forecast some runs of
+some fires. To show a version of it, run the **farsite-publish** workflow:
+
+- `run_id` is a farsite-hindcast run.
+- `slugs` lists the fires.
+- `variant` is `cal` by default.
+
+`farsite_publish.py` reprojects each run's five arrival-time grids onto the same run's
+Pyrecast grid, so both models are scored pixel for pixel on the same ground. It uploads
+`farsite_archive/<slug>/<run_ts>/{10..90}.tif`, `ign.geojson` (the lit edge) and
+`farsite_archive/manifest.json`.
+
+`analyze.py` then scores FARSITE beside Pyrecast on those runs:
+
+- It uses the same `score_grid` and the same perimeters, up to FARSITE's own forecast
+  length (`horizon_h`, 96 h).
+- Both models are measured from one common start: the baseline perimeter, Pyrecast's start
+  footprint and FARSITE's lit edge.
+- Its rows have `model=farsite`.
+- Skill files v5 carry them under `models.farsite.runs`.
+
+The map's Forecast layer has a model menu when a fire has FARSITE runs. The timeline's
+forecast lane and its Analysis lane follow the model picked.
+
 ### Finished fires are carried over
 
 A fire that has been finished for 18 days (`frozen_fingerprints`: no new runs, and its
