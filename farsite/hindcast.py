@@ -537,7 +537,7 @@ def _finish(rdir, rows, toas, meta, lcp_profile):
     bp = np.mean([np.isfinite(t) & (t <= HORIZON_H) for t in toas.values()], axis=0).astype("float32")
     _write(rdir / "burnprob.tif", bp, lcp_profile)
     meta.update(status="ok", pick=pick, failed=fails, stalled=sum(r["stalled"] for r in ok),
-                coarse_retries=sum(r["coarse"] for r in rows),
+                coarse_retries=sum(r["coarse"] for r in rows), member_timeout_s=MEMBER_TIMEOUT_S,
                 member_secs=round(sum(r["secs"] for r in rows), 1),
                 new_ac_min=order[0]["new_ac"], new_ac_max=order[-1]["new_ac"],
                 central_new_ac=next((r["new_ac"] for r in ok if r["m"] == 0), ""))

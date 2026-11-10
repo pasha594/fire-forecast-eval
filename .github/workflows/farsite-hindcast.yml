@@ -2,8 +2,10 @@ name: farsite-hindcast
 
 # FARSITE hindcast of archived PyreCast runs (pilot; see farsite/README.md).
 # What to run is farsite/targets.json: "runs" lists {slug, variant, only?} entries, plus members
-# and shards. Every push to this branch that touches the hindcast code or targets runs it
-# (scoring/docs edits do not). One run at a time: a new push waits for the run in progress
+# and shards. Or "jobs": [{slug, variant, run}, ...], one forecast per job (for runs too slow to
+# share a 6 h job), in that order; "member_timeout_s" overrides FARSITE_MEMBER_TIMEOUT_S.
+# Every push to this branch that touches the hindcast code or targets runs it (scoring/docs
+# edits do not). One run at a time: a new push waits for the run in progress
 # (16 jobs at most, leaving the account's other ~4 runners for other projects).
 # prep builds FARSITE + each fire's landscape once, the matrix splits each fire's runs into
 # contiguous slices (one 4-core runner each), gather merges the slices into one
@@ -52,7 +54,8 @@ jobs:
           python - <<'EOF' >> "$GITHUB_OUTPUT"
           import json
           t = json.load(open("farsite/targets.json"))
-          print("shards=" + json.dumps(list(range(t["shards"]))))
+          n = len(t["jobs"]) if t.get("jobs") else t["shards"]
+          print("shards=" + json.dumps(list(range(n))))
           EOF
           cat farsite/targets.json
       - name: Build FARSITE
@@ -66,10 +69,10 @@ jobs:
             || { tail -50 build.log; exit 1; }
           ls -la src/TestFARSITE
       - name: Mirror perimeters + hotspots from the archive
-        run: python farsite/fetch_archive.py --no-toa $(jq -r '[.runs[].slug] | unique | .[]' farsite/targets.json)
+        run: python farsite/fetch_archive.py --no-toa $(jq -r '[(.jobs // .runs)[].slug] | unique | .[]' farsite/targets.json)
       - name: Landscape per fire (LANDFIRE)
         run: |
-          for s in $(jq -r '[.runs[].slug] | unique | .[]' farsite/targets.json); do
+          for s in $(jq -r '[(.jobs // .runs)[].slug] | unique | .[]' farsite/targets.json); do
             python -u farsite/hindcast.py "$s" --prep-only
           done
       - uses: actions/upload-artifact@v4
@@ -112,8 +115,17 @@ jobs:
           N=$(jq -r '.shards' farsite/targets.json)
           C=$(jq -r '.concurrent_runs // 2' farsite/targets.json)
           LIMIT=$(jq -r 'if .limit then "--limit \(.limit)" else "" end' farsite/targets.json)
+          T=$(jq -r '.member_timeout_s // empty' farsite/targets.json)
+          [ -n "$T" ] && export FARSITE_MEMBER_TIMEOUT_S="$T"
           set -o pipefail
-          mapfile -t ENTRIES < <(jq -c '.runs[]' farsite/targets.json)
+          SHARD="--shard ${{ matrix.shard }}/$N"
+          if jq -e '.jobs' farsite/targets.json > /dev/null; then
+            # one forecast per job: this job's entry only, no slicing
+            mapfile -t ENTRIES < <(jq -c --argjson i "${{ matrix.shard }}" '.jobs[$i] | {slug, variant, only: [.run]}' farsite/targets.json)
+            SHARD=""
+          else
+            mapfile -t ENTRIES < <(jq -c '.runs[]' farsite/targets.json)
+          fi
           for e in "${ENTRIES[@]}"; do
             s=$(jq -r '.slug' <<< "$e")
             V=$(jq -r '.variant // "base"' <<< "$e")
@@ -122,7 +134,7 @@ jobs:
             # only the runs in flight, since finished runs (meta.json) are skipped
             for attempt in 1 2 3; do
               if python -u farsite/hindcast.py "$s" --variant "$V" --members "$M" --workers 4 --concurrent-runs "$C" \
-                   --shard "${{ matrix.shard }}/$N" $LIMIT $ONLY 2>&1 | grep --line-buffered -v -i warn \
+                   $SHARD $LIMIT $ONLY 2>&1 | grep --line-buffered -v -i warn \
                    | tee -a "$FARSITE_WORK/logs/shard-${{ matrix.shard }}.log"; then
                 break
               fi
