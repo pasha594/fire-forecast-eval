@@ -54,6 +54,18 @@ pyrecast **purges the hourly granule dirs within ~2–4h** — hence the 2h cron
 whose interval bounds worst-case granule loss; a variable tar holds whatever
 survived at capture time (`got`/`n` in the manifest records the gap).
 
+### Finished fires are carried over
+
+A fire that has been finished for 18 days (`frozen_fingerprints`: no new runs, and its
+perimeter and hotspot record unchanged) is not rescored every run. `metrics_state.json`,
+published beside `metrics.csv`, records the scoring version (`SCORING_VERSION` in
+`analyze.py`) and each finished fire's fingerprint and Cornea match when it was scored. The
+next sync carries over every finished fire whose fingerprint and match are unchanged: its
+published rows are copied into the new `metrics.csv`, and its archive files leave `raw/`, so
+the Actions cache holds only active fires. Bump `SCORING_VERSION` whenever scoring changes:
+finished fires are then rescored once, and their files are downloaded again for that run.
+A one-fire run (`--only`) always rescores its fire.
+
 ### Per-fire skill files
 
 `analyze.py --publish` also turns `metrics.csv` into small per-fire JSON files

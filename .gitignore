@@ -11,3 +11,4 @@ node_modules/
 
 # wrangler local secrets (relay/.dev.vars holds FIRMS_KEY)
 .dev.vars
+data/metrics_state.json

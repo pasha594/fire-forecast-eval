@@ -20,6 +20,7 @@ import argparse
 import concurrent.futures
 import csv
 import json
+import shutil
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -191,6 +192,16 @@ FROZEN_AFTER = timedelta(days=15 + 3)
 HOTSPOT_REWRITE_DAYS = 4
 # in raw/, so it travels in the actions cache together with the files it vouches for
 FROZEN_STATE = "sync_frozen.json"
+# Finished fires are not rescored: a fire frozen (see frozen_fingerprints) and unchanged since
+# it was last scored with this SCORING_VERSION keeps its published rows (carried over), and
+# its archive files leave raw/ (and so the Actions cache, which raw/ outgrew in Nov 2026).
+# Bump SCORING_VERSION whenever scoring changes: finished fires are then rescored once, their
+# files downloaded again for that run.
+SCORING_VERSION = "2026-11-10"
+METRICS_STATE = "metrics_state.json"     # published beside metrics.csv: the version and the
+                                         # frozen fingerprint each fire was scored at
+CARRY_FILE = "carry.json"                # raw/: the fires this sync carries over (for compute)
+PREV_METRICS = "metrics_previous.csv"    # raw/: the published metrics.csv their rows come from
 
 
 def frozen_fingerprints(manifest, now):
@@ -258,7 +269,7 @@ def fetch_start_frame(get_range, run_key, entry):
     return "none"
 
 
-def sync_start_frames(url, manifest, only_slug=None):
+def sync_start_frames(url, manifest, only_slug=None, skip=()):
     """fetch_start_frame for every run with a time-of-arrival tif. A failure only logs:
     the run is scored with the stand-in start (start_basis says so) and retried next sync."""
     import threading
@@ -280,13 +291,37 @@ def sync_start_frames(url, manifest, only_slug=None):
             return "failed"
 
     runs = [(k, e) for k, e in manifest["runs"].items()
-            if (not only_slug or e["slug"] == only_slug)
+            if (not only_slug or e["slug"] == only_slug) and e["slug"] not in skip
             and any(i.get("ok") for i in e["files"].values())]
     with concurrent.futures.ThreadPoolExecutor(8) as ex:
         got = list(ex.map(one, runs))
     log(f"start frames: {got.count('new')} new, {got.count('none')} not archived, "
         f"{got.count('failed')} failed; {sum((RAW / 'forecast_archive' / k / START_FILE).exists() for k, _ in runs)}"
         f" of {len(runs)} runs have one")
+
+
+def fire_state(slug, frozen, matches):
+    """what a finished fire's published rows depend on besides the scoring code"""
+    m = (matches.get("matches") or {}).get(slug) or {}
+    return {"fp": frozen.get(slug), "cornea_id": m.get("cornea_id")}
+
+
+def carried_fires(get, frozen, matches):
+    """The fires whose published rows can be kept as they are: scored with this
+    SCORING_VERSION while frozen, and still frozen with the same fingerprint (and Cornea
+    match). Fetches the published metrics.csv and its state into raw/. -> set of slugs"""
+    try:
+        state = get(METRICS_STATE).json()
+    except Exception as e:   # none published yet (or unreadable): rescore everything
+        log(f"no published {METRICS_STATE} ({e}): nothing carried over")
+        return set()
+    if state.get("scoring_version") != SCORING_VERSION:
+        log(f"published scores are version {state.get('scoring_version')}, this is {SCORING_VERSION}: "
+            "nothing carried over")
+        return set()
+    (RAW / PREV_METRICS).write_bytes(get("metrics.csv").content)
+    return {slug for slug, st in (state.get("fires") or {}).items()
+            if slug in frozen and st == fire_state(slug, frozen, matches)}
 
 
 def sync_bucket(url, only_slug=None):
@@ -308,7 +343,20 @@ def sync_bucket(url, only_slug=None):
     frozen = frozen_fingerprints(manifest, datetime.now(timezone.utc))
     state_path = RAW / FROZEN_STATE
     settled = load_json(state_path) or {}
-    mine = (lambda slug: slug == only_slug) if only_slug else (lambda slug: True)
+    # finished fires whose published rows stay: their files aren't needed (a one-fire run
+    # always rescores its fire)
+    carry = set() if only_slug else carried_fires(get, frozen, load_json(RAW / "fire_matches.json") or {})
+    (RAW / CARRY_FILE).write_text(json.dumps(sorted(carry)))
+    pruned = 0
+    for slug in carry:
+        for d in ("forecast_archive", "perimeter_archive", "hotspot_archive"):
+            if (RAW / d / slug).is_dir():
+                shutil.rmtree(RAW / d / slug)
+                pruned += 1
+    if carry:
+        log(f"carrying over {len(carry)} finished fires' rows; removed {pruned} of their folders from raw/")
+    mine = ((lambda slug: slug == only_slug) if only_slug
+            else (lambda slug: slug not in carry))
 
     def is_settled(slug):
         """local copies were fetched after collect stopped writing this fire"""
@@ -363,7 +411,7 @@ def sync_bucket(url, only_slug=None):
     with concurrent.futures.ThreadPoolExecutor(SYNC_WORKERS) as ex:
         for _ in ex.map(fetch, missing):
             n += 1
-    sync_start_frames(url, manifest, only_slug)
+    sync_start_frames(url, manifest, only_slug, skip=carry)
     if only_slug:
         log(f"sync ({only_slug} only): {n} new objects ({len(wanted)} tracked)")
         return
@@ -906,6 +954,16 @@ def compute(only_slug=None, on_fire=None):
     perimsets = {}
     hssets = {}
     rows = []
+    # finished fires carried over by the sync (none for a one-fire run): their published rows
+    carry = set() if only_slug else set(load_json(RAW / CARRY_FILE) or [])
+    prev = {}
+    if carry and (RAW / PREV_METRICS).exists():
+        with open(RAW / PREV_METRICS, newline="") as fh:
+            for r in csv.DictReader(fh):
+                if r["slug"] in carry:
+                    prev.setdefault(r["slug"], []).append(r)
+    frozen = frozen_fingerprints(manifest, datetime.now(timezone.utc))
+    fires_seen = set()
     skipped = {"no_match": 0, "no_perims": 0, "no_perimeter_to_score": 0, "missing_tif": 0,
                "unreadable_perims": 0}
     starts = {"pyrecast": 0, "hotspots": 0, "": 0}
@@ -930,6 +988,9 @@ def compute(only_slug=None, on_fire=None):
         entry = manifest["runs"][run_key]
         slug = entry["slug"]
         if only_slug and slug != only_slug:
+            continue
+        fires_seen.add(slug)
+        if slug in carry:
             continue
         if slug != cur_slug:
             fire_done()
@@ -1017,12 +1078,26 @@ def compute(only_slug=None, on_fire=None):
         log(f"{run_key}: {len(perims)} perimeters x pcts done")
     fire_done()
 
+    for slug in sorted(carry & fires_seen):
+        rows += prev.get(slug, [])
     out = REPO / "data" / "metrics.csv"
     out.parent.mkdir(exist_ok=True)
     with out.open("w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+        w = csv.DictWriter(f, fieldnames=CSV_COLUMNS, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
+    # what each finished fire's rows depend on, for the next sync to carry them over (a
+    # one-fire run publishes no state: it doesn't publish metrics.csv either)
+    if not only_slug:
+        matches_now = load_json(RAW / "fire_matches.json") or {}
+        (REPO / "data" / METRICS_STATE).write_text(json.dumps({
+            "scoring_version": SCORING_VERSION,
+            "generated": datetime.now(timezone.utc).strftime(ISO_Z),
+            "fires": {s: fire_state(s, frozen, matches_now) for s in sorted(fires_seen) if s in frozen},
+        }, separators=(",", ":")))
+    if carry:
+        log(f"carried over {sum(len(prev.get(s, [])) for s in carry & fires_seen)} rows of "
+            f"{len(carry & fires_seen)} finished fires (scoring version {SCORING_VERSION})")
     log(f"wrote {len(rows)} rows -> {out} | skipped runs: {skipped} | start footprint per "
         f"scored run: {starts['pyrecast']} Pyrecast's own, {starts['hotspots']} from detections, "
         f"{starts['']} none")
@@ -1302,7 +1377,10 @@ def main():
         publish_starts(client, bucket)   # before metrics.csv, which names them
         client.upload_file(str(REPO / "data" / "metrics.csv"), bucket, "metrics.csv",
                            ExtraArgs={"ContentType": "text/csv"})
-        log("published metrics.csv to bucket")
+        # after metrics.csv: the state describes the rows it holds
+        client.upload_file(str(REPO / "data" / METRICS_STATE), bucket, METRICS_STATE,
+                           ExtraArgs={"ContentType": "application/json"})
+        log("published metrics.csv (and its state) to bucket")
         publish_skill(client, bucket, REPO / "data" / "metrics.csv")
 
 
