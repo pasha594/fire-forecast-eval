@@ -3002,10 +3002,12 @@ function drawIap() {
   map.addSource("iap", { type: "raster", tiles: [iapUrl(e.tiles.url_template)], tileSize: 256,
                          minzoom: e.tiles.minzoom, maxzoom: e.tiles.maxzoom, bounds: e.tiles.bounds,
                          attribution: "incident maps: NIFC, via Incibrief" });
-  // over the basemap, under the forecast (canvas or live tiles) and everything above it
-  const before = ["fc", "fclive", "iso"].find(id => map.getLayer(id));
+  // over everything but the hotspots: over the forecast or analysis, the burn scar and the
+  // perimeters, under the detections (and the analysis's detection rings), the fire markers
+  // and the ruler. Layers added later (a forecast, the scar) go under "iso" or "perim-old",
+  // so they stay under it
   map.addLayer({ id: "iap", type: "raster", source: "iap",
-                 paint: { "raster-opacity": state.iap.opacity, "raster-fade-duration": 0 } }, before);
+                 paint: { "raster-opacity": state.iap.opacity, "raster-fade-duration": 0 } }, "hot");
   state.iap.drawn = key;
   renderIapCtl();
   if (!document.getElementById("iaplist").hidden) renderIapList();
