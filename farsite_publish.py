@@ -144,10 +144,14 @@ def main():
 
     import requests
     stage = a.out or Path("farsite_stage")
-    try:
-        manifest = requests.get(f"{PUBLIC_BUCKET_URL}/{PREFIX}/manifest.json", timeout=60).json()
-    except Exception:
-        manifest = {}
+    r = requests.get(f"{PUBLIC_BUCKET_URL}/{PREFIX}/manifest.json", timeout=60)
+    if r.status_code == 404:
+        manifest = {}     # the first publish
+    else:
+        r.raise_for_status()  # never merge into (and overwrite) a manifest we couldn't read
+        manifest = r.json()
+    # only what this script writes (a first publish once merged the bucket's 404 body in)
+    manifest = {k: manifest[k] for k in ("variant", "fires") if k in manifest}
     if manifest.get("variant") not in (None, a.variant):
         sys.exit(f"the published FARSITE version is {manifest.get('variant')}, not {a.variant}: refusing to mix them")
     manifest.update({"v": 1, "model": "farsite", "variant": a.variant, "label": LABELS[a.variant],

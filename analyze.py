@@ -1186,7 +1186,9 @@ def compute(only_slug=None, on_fire=None):
 # ---------------------------------------------------------------- skill files
 
 def _num(s):
-    return float(s) if s else None
+    """a CSV cell or a computed value as a float; None when blank (0 stays 0: rows that
+    FirePublisher publishes straight from compute() hold numbers, not strings)"""
+    return None if s is None or s == "" else float(s)
 
 
 def _r3(s):
