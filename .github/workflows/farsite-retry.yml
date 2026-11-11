@@ -1,0 +1,48 @@
+name: farsite-retry
+
+# Re-runs the failed jobs of a farsite-hindcast run (its finished jobs and their results are
+# kept). The hindcast's own "retry" job dispatches this while its run is still finishing, at
+# most 3 times per run (see farsite-hindcast.yml on the farsite-hindcast branch); it lives on
+# main because GitHub only dispatches workflows it knows from the default branch. A run
+# someone cancels is never retried: only failed jobs (a crash, or a forecast past its step's
+# time limit) dispatch this.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "farsite-hindcast workflow run id whose failed jobs to re-run"
+        required: true
+        type: string
+
+concurrency:
+  group: farsite-retry-${{ inputs.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  rerun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: write
+    steps:
+      - name: Wait for the run to finish, then re-run its failed jobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "bad run id: $RUN_ID"; exit 1; }
+          name=$(gh run view "$RUN_ID" --json workflowName --jq .workflowName)
+          [ "$name" = farsite-hindcast ] || { echo "run $RUN_ID is $name, not farsite-hindcast"; exit 1; }
+          # the run's retry job dispatched this, so the run is still finishing
+          for i in $(seq 1 120); do
+            s=$(gh run view "$RUN_ID" --json status --jq .status || echo unknown)
+            [ "$s" = completed ] && break
+            sleep 20
+          done
+          [ "$s" = completed ] || { echo "run $RUN_ID still $s after 40 min"; exit 1; }
+          c=$(gh run view "$RUN_ID" --json conclusion --jq .conclusion)
+          # cancelled meanwhile (by someone), or nothing failed after all: leave it
+          [ "$c" = failure ] || { echo "run $RUN_ID ended $c: not re-running"; exit 0; }
+          gh run rerun "$RUN_ID" --failed
+          echo "re-running the failed jobs of run $RUN_ID"
