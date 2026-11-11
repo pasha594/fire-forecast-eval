@@ -150,7 +150,7 @@ def _polys(g):
 
 def _footprints(pts, pad=0.0):
     return unary_union([shape(transform_geom("EPSG:4326", "EPSG:5070", mapping(Point(lon, lat)))).buffer(r + pad)
-                        for _, lon, lat, r in pts]) if pts else Polygon()
+                        for _, lon, lat, r, *_ in pts]) if pts else Polygon()   # (dt, lon, lat, radius_m[, source])
 
 
 def active_edge(slug, base, base_ms, dt):
