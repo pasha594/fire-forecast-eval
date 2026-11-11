@@ -108,6 +108,9 @@ jobs:
           name: prep
           path: farsite/work
       - name: Hindcast this slice
+        # under the job's limit, so a forecast that runs out of time fails (and is retried, see
+        # the retry job) instead of being cancelled, and its logs still upload
+        timeout-minutes: 335
         run: |
           chmod +x "$FARSITE_WORK/farsite/src/TestFARSITE"
           mkdir -p "$FARSITE_WORK/logs"
@@ -147,6 +150,7 @@ jobs:
         if: always()
         with:
           name: shard-${{ matrix.shard }}
+          overwrite: true           # a retried job replaces its failed attempt's
           retention-days: 7
           path: |
             farsite/work/logs
@@ -196,6 +200,26 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: farsite-results
+          overwrite: true
           path: |
             farsite/work/logs
             farsite/work/data/fires
+
+  # Failed forecast jobs restart on their own: this asks farsite-retry (on main) to re-run the
+  # run's failed jobs once it finishes, keeping the finished ones. At most 3 restarts per run
+  # (attempts 2-4). Only failures count: a run someone cancels isn't restarted.
+  retry:
+    needs: run
+    if: failure() && github.run_attempt < 4
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: Re-run the failed jobs when this run ends
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          echo "attempt ${{ github.run_attempt }}: asking farsite-retry to re-run the failed jobs"
+          gh workflow run farsite-retry.yml --ref main -f run_id=${{ github.run_id }}
