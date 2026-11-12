@@ -20,6 +20,7 @@ import argparse
 import concurrent.futures
 import csv
 import json
+import math
 import shutil
 import sys
 import time
@@ -131,6 +132,22 @@ HS_RADIUS_LANDSAT = 15.0
 HS_ARTIFACT_M = 1000.0
 HS_PERSIST_M = 1000.0
 HS_PASS_GAP_S = 20 * 60   # one source's detections closer in time than this are one overpass
+# One detection reported more than once counts once (see drop_repeats). Cornea's feed, and
+# the archive collect.py keeps from it, often carries a detection twice: one satellite pass,
+# 0-2 minutes apart, the same reading, at locations up to ~300 m apart where the products it
+# came through disagree on geolocation (most over steep ground: ~20 m on Skillet, 40-280 m
+# on Dome). On Dome, Plaskett, Three Queens and Skillet that's 43-50% of NOAA-20's listings
+# (nearly every detection twice) and 24-46% of SNPP's and NOAA-21's, none of MODIS's or
+# Landsat's; footprint area per day shrinks ~2% (median; up to 15%), hs_n by about 40%.
+# Two detections from one satellite at most HS_DUP_S apart are one when
+#  - they carry the same reading (brightness within 0.1 K, FRP within 5%) within
+#    HS_DUP_COPY_M: different pixels both saturated at 367 K differ in FRP, so they stay, or
+#  - they're closer than a sixth of the instrument's pixel (VIIRS 62 m, MODIS 167 m,
+#    Landsat 5 m), which two different pixels of one pass can't be.
+# map.html and report.html drop the same repeats (hotspots.js).
+HS_DUP_S = 3 * 60
+HS_DUP_COPY_M = 300.0
+HS_PIXEL_M = {"viirs": 375.0, "modis": 1000.0, "landsat": 30.0}
 
 
 def log(msg):
@@ -203,7 +220,7 @@ FROZEN_STATE = "sync_frozen.json"
 # its archive files leave raw/ (and so the Actions cache, which raw/ outgrew in Nov 2026).
 # Bump SCORING_VERSION whenever scoring changes: finished fires are then rescored once, their
 # files downloaded again for that run.
-SCORING_VERSION = "2026-11-10"
+SCORING_VERSION = "2026-11-12"   # 11-12: a detection Cornea reports twice counts once
 METRICS_STATE = "metrics_state.json"     # published beside metrics.csv: the version and the
                                          # frozen fingerprint each fire was scored at
 CARRY_FILE = "carry.json"                # raw/: the fires this sync carries over (for compute)
@@ -673,18 +690,54 @@ class PerimeterSet:
         return self._mask[key]
 
 
+def _float_or_none(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def drop_repeats(dets):
+    """detections (dt, lon, lat, radius_m, source, brightness, frp, pixel_m) in time order,
+    less those that repeat one kept before them (see HS_DUP_S) -> (kept, how many dropped)"""
+    kept, by_min, dropped = [], {}, 0
+    for d in dets:
+        dt, lon, lat, _, src, bt, frp, px = d
+        kx = 111320.0 * math.cos(math.radians(lat))
+
+        def same(o):
+            if abs((dt - o[0]).total_seconds()) > HS_DUP_S:
+                return False
+            dm = math.hypot((o[1] - lon) * kx, (o[2] - lat) * 110540.0)
+            if dm < px / 6:
+                return True
+            return (dm <= HS_DUP_COPY_M and None not in (bt, o[5], frp, o[6])
+                    and abs(bt - o[5]) <= 0.1 and abs(frp - o[6]) <= max(0.05, 0.05 * max(frp, o[6])))
+
+        m = int(dt.timestamp() // 60)
+        if any(same(o) for k in range(m - HS_DUP_S // 60, m + 1) for o in by_min.get((src, k), ())):
+            dropped += 1
+            continue
+        kept.append(d)
+        by_min.setdefault((src, m), []).append(d)
+    return kept, dropped
+
+
 class HotspotSet:
     """Timestamped VIIRS/MODIS detections for one fire. Unlike perimeters these
     carry exact acquisition times, so windows need no tolerance: a detection
     either falls inside (run, run+H] or it doesn't. Footprints are disks sized by
     instrument (see HS_RADIUS_VIIRS: VIIRS 187.5 m, MODIS 250 m, Landsat 15 m).
 
-    Every detection is screened once against the fire's whole record (see
+    A detection reported more than once is kept once (see HS_DUP_S). Every
+    detection is screened once against the fire's whole record (see
     HS_ARTIFACT_M): only those that pass are scored; the rest are left out of
     the metric, neither captured nor missed."""
 
     def __init__(self, slug, ps=None):
         self.pts = []  # (dt, lon, lat, radius_m, source)
+        dets = []      # (dt, lon, lat, radius_m, source, brightness, frp, pixel_m)
         for p in sorted((RAW / "hotspot_archive" / slug).glob("*.geojson")):
             try:
                 gj = json.loads(p.read_text())
@@ -702,11 +755,14 @@ class HotspotSet:
                 dt = datetime.strptime(d, "%Y-%m-%d").replace(
                     hour=hm // 100 % 24, minute=hm % 100 % 60, tzinfo=timezone.utc)
                 src = (pr.get("source") or "").lower()
-                r = (HS_RADIUS_MODIS if ("terra" in src or "aqua" in src or "modis" in src)
-                     else HS_RADIUS_LANDSAT if "landsat" in src
-                     else HS_RADIUS_VIIRS)
-                self.pts.append((dt, c[0], c[1], r, src))
-        self.pts.sort(key=lambda x: (x[0], x[4]))
+                inst = ("modis" if ("terra" in src or "aqua" in src or "modis" in src)
+                        else "landsat" if "landsat" in src else "viirs")
+                r = {"modis": HS_RADIUS_MODIS, "landsat": HS_RADIUS_LANDSAT}.get(inst, HS_RADIUS_VIIRS)
+                dets.append((dt, c[0], c[1], r, src, _float_or_none(pr.get("brightness")),
+                             _float_or_none(pr.get("frp")), HS_PIXEL_M[inst]))
+        dets.sort(key=lambda x: (x[0], x[4]))
+        kept, self.repeats = drop_repeats(dets)
+        self.pts = [d[:5] for d in kept]
         # "ok", "artifact" or "transient", per detection
         self.status = (self._screen(ps) if ps is not None and ps.timeline and self.pts
                        else ["ok"] * len(self.pts))

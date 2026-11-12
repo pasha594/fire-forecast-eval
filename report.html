@@ -144,6 +144,7 @@
 </div>
 
 <script src="palette.js"></script>
+<script src="hotspots.js"></script>
 <script>
 "use strict";
 const BUCKET = "https://f005.backblazeb2.com/file/fire-forecast-archive";
@@ -545,12 +546,14 @@ async function renderInspection(row) {
       const hs = await (await fetch(`${CORNEA}/hotspots?bbox=${b.getSouth() - 0.15},${b.getWest() - 0.15},${b.getNorth() + 0.15},${b.getEast() + 0.15}&since=${row.run_dt_utc.slice(0, 10)}&limit=50000`)).json();
       const t0 = Date.parse(row.run_dt_utc), t1 = Date.parse(row.valid_dt_utc);
       let nIn = 0, nCap = 0, nBase = 0;
-      const grp = L.layerGroup();
+      const grp = L.layerGroup(), repeats = HotRepeats.make();
       for (const feat of hs.features || []) {
-        const tms = acqMs(feat.properties || {});
-        if (tms === null || tms <= t0 || tms > t1) continue;
-        nIn++;
+        const pr = feat.properties || {}, tms = acqMs(pr);
+        if (tms === null || tms <= t0 || tms > t1 || !feat.geometry) continue;
         const [lon, lat] = feat.geometry.coordinates;
+        // the same detection reported again counts once, as in the score (hotspots.js)
+        if (!repeats.add({ src: pr.source, t: tms, lon, lat, bright: pr.brightness, frp: pr.frp })) continue;
+        nIn++;
         const [X, Y] = fwd([lon, lat]);
         const rc = Math.floor((meta.ymax - Y) / meta.ph), cc = Math.floor((X - meta.xmin) / meta.pw);
         const k = (rc >= 0 && rc < meta.height && cc >= 0 && cc < meta.width)

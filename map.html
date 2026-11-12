@@ -9,6 +9,7 @@
 <script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js"></script>
 <script src="https://unpkg.com/proj4@2.11.0/dist/proj4.js"></script>
 <script src="palette.js"></script>
+<script src="hotspots.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,600..800&family=Public+Sans:wght@400..800&display=swap">
@@ -2710,7 +2711,7 @@ function loadWindowDetections(f, w, box) {
   let p = windowHotCache.get(key);
   if (p) return p;
   p = (async () => {
-    const dets = [], seen = new Set(), bbox = `${box.s},${box.w},${box.n},${box.e}`;
+    const dets = [], seen = new Set(), repeats = HotRepeats.make(), bbox = `${box.s},${box.w},${box.n},${box.e}`;
     let d = dayOf(w.t0), capped = false;
     for (let guard = 0; guard < 60 && d <= dayOf(w.t1); guard++) {
       const gj = await getJson(`${CORNEA}/hotspots?bbox=${bbox}&since=${new Date(d * DAY).toISOString().slice(0, 10)}&limit=${HOT_LIMIT}`);
@@ -2725,8 +2726,9 @@ function loadWindowDetections(f, w, box) {
         const k = `${pr.acq_date}|${pr.acq_time}|${c[0]}|${c[1]}|${pr.source}`;
         if (seen.has(k)) continue;
         seen.add(k);
-        dets.push({ lon: c[0], lat: c[1], t, src: pr.source, frp: pr.frp, conf: pr.confidence,
-                    bright: pr.brightness });
+        const det = { lon: c[0], lat: c[1], t, src: pr.source, frp: pr.frp, conf: pr.confidence,
+                      bright: pr.brightness };
+        if (repeats.add(det)) dets.push(det);   // not the same detection reported again (hotspots.js)
       }
       if (feats.length < HOT_LIMIT) break;   // complete through today
       if (last === d) { capped = true; d++; }   // one day alone over the cap: the rest of it is out of reach
@@ -4166,7 +4168,7 @@ async function refreshHotspots() {
   // detection by id (for the hover labels); req: the request in flight
   // NB: the API's bbox is lat-first (min_lat,min_lon,max_lat,max_lon)
   state.hot = { bbox: `${box.s},${box.w},${box.n},${box.e}`, span, days: new Map(), recs: [], keys: new Set(),
-                covered: new Set(), capped: false, req: null, flat: null, histError: "" };
+                repeats: HotRepeats.make(), covered: new Set(), capped: false, req: null, flat: null, histError: "" };
   renderHotspots();
   ensureHotCoverage();
 }
@@ -4208,11 +4210,12 @@ async function ensureHotCoverage(historyOnly) {
     if (t === null || !c) continue;
     last = Math.max(last, dayOf(t));
     const key = `${props.acq_date}|${props.acq_time}|${c[0]}|${c[1]}|${props.source}`;
-    if (H.keys.has(key)) continue;
+    if (H.keys.has(key)) continue;   // a day fetched again
     H.keys.add(key);
     const day = dayOf(t), r = { lat: c[1], lon: c[0], t, src: props.source, date: props.acq_date,
                                 time: props.acq_time, frp: props.frp, conf: props.confidence,
                                 bright: props.brightness, id: H.recs.length };
+    if (!H.repeats.add(r)) continue;   // the same detection reported again (hotspots.js)
     H.recs.push(r);
     if (!H.days.has(day)) H.days.set(day, []);
     H.days.get(day).push(r);
