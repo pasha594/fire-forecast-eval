@@ -183,7 +183,8 @@
       <div class="formula"><div class="name">Hotspot capture</div>
         <div class="eq">detections inside the prediction ÷ detections on new ground = <span class="frac"><span data-v="hsIn"></span> ÷ <span data-v="hsNew"></span></span></div>
         <div class="res" data-v="HS"></div>
-        <div class="what">The separate satellite check. The detection on burned-before ground is left out.
+        <div class="what">The separate satellite check. The detection on burned-before ground is left out,
+          and a detection our feed lists twice counts once (<a href="#dupes">section 4</a>).
           (The pipeline weighs each detection by a disk of ground around it: 375 m across for VIIRS, wide enough that
           neighbouring detections touch; 500 m for MODIS, whose 1 km pixels are usually much bigger than the fire
           they caught; and 30 m for Landsat.)</div></div>
@@ -225,7 +226,7 @@
     <li><b>Why hotspots are only a side check.</b> Satellites pass a few times a day and can't see through
       thick smoke or cloud, so missing detections don't mean the ground didn't burn. Hotspots feed the
       capture check only, never precision.</li>
-    <li><b>A detection reported twice counts once.</b> Our feed often lists the same detection twice:
+    <li id="dupes"><b>A detection reported twice counts once.</b> Our feed often lists the same detection twice:
       the same satellite pass, a minute or two apart, with the same brightness and fire power, at
       spots up to about 300 m apart where the products it came through place it differently (most
       over steep ground). Two detections from one satellite within 3 minutes count as one when they
