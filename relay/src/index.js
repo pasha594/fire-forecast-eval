@@ -28,8 +28,9 @@ const ENDPOINTS = {
     layer: "coverageid",
   },
 };
-const ORIGINS = [/^https:\/\/pasha594\.github\.io$/, /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/];
-const HOME = "https://pasha594.github.io";
+const ORIGINS = [/^https:\/\/(www\.)?fireprojector\.com$/, /^https:\/\/pasha594\.github\.io$/,
+                 /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/];
+const HOME = "https://fireprojector.com";
 // tiles of a live run can still fill in as Pyrecast publishes its hours; a coverage is final
 const MAX_AGE = { wms: 900, ows: 3600 };
 
@@ -89,7 +90,7 @@ async function firms(url, env, cors) {
   if (!key) return new Response("FIRMS key not configured", { status: 503, headers: cors });
   const target = firmsUrl(url, key);
   if (!target) return new Response("not relayed", { status: 400, headers: cors });
-  const up = await fetch(target, { headers: { "User-Agent": "cornea-projector-relay (pasha594.github.io)" } });
+  const up = await fetch(target, { headers: { "User-Agent": "cornea-projector-relay (fireprojector.com)" } });
   const text = (await up.text()).split(key).join("…");   // never hand the key back, even in an error
   // FIRMS answers some errors (a bad key, the transaction cap) as plain text: only CSV is
   // passed on, and cached. An archive (SP) day is final; a near-real-time one can still fill
@@ -115,7 +116,7 @@ export default {
     if (!target) return new Response("not relayed", { status: 400, headers: cors });
 
     // a server-side fetch carries no Origin header, which the geoserver accepts
-    const up = await fetch(target, { headers: { "User-Agent": "cornea-projector-relay (pasha594.github.io)" } });
+    const up = await fetch(target, { headers: { "User-Agent": "cornea-projector-relay (fireprojector.com)" } });
     const res = new Response(up.body, up);
     // the geoserver reports some errors as 200 + XML: only images may be cached
     const image = up.ok && /^image\//.test(up.headers.get("Content-Type") || "");
