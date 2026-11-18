@@ -1921,12 +1921,11 @@ function refreshWms() {
   const f = state.fires.find(x => x.slug === state.sel);
   const run = document.getElementById("selRun").value;
   // the run's analysis: the horizon to show for this run and percentile, before the lanes
-  // and the metrics table mark it; taking it off puts back the perimeters picked before
+  // and the metrics table mark it; taking it off leaves its perimeter and playhead as they are
   if (state.scoreOn) state.scoreRow = pickScoreRow();
   else {
     state.scoreRow = null;
     document.getElementById("scoreKey").hidden = true;
-    if (scorePerims) releaseScorePerims();
     if (scoreHot) releaseScorePlayhead();
   }
   const variable = forecastVar();
@@ -2649,7 +2648,7 @@ function resetScore() {
   if (state.scoreOn && state.scoreFcWasShown) markShown("run", true);
   state.scoreOn = false;
   state.scoreRow = null;
-  scorePerims = scoreHot = null;
+  scoreHot = null;
   document.getElementById("scoreKey").hidden = true;
 }
 
@@ -2899,8 +2898,7 @@ async function renderScore(f, run, pct, token) {
   const row = state.scoreRow, key = document.getElementById("scoreKey");
   key.hidden = false;
   if (!row) {
-    // nothing scored here: the perimeter picks and the playhead go back to what they were
-    if (scorePerims) releaseScorePerims();
+    // nothing scored here: no rings (the perimeter picks and the playhead stay as they are)
     if (scoreHot) releaseScorePlayhead();
     renderHotMarks();
     const doc = state.skill.get(f.slug);
@@ -2997,12 +2995,10 @@ function releaseScorePlayhead() {
   if (sh && sh.set != null && state.hotSpan) renderHotspots();
 }
 
-// The perimeter an analysis was scored against takes over the perimeter picker while it's
-// on, alone (the perimeter at run time is the "burned before" area already), so the
+// The perimeter an analysis was scored against takes over the perimeter picker when it's
+// shown, alone (the perimeter at run time is the "burned before" area already), so the
 // timeline's perimeter lane points at it too. Taking the analysis off, or a run with
-// nothing scored, puts back what was picked before, unless the picks were changed meanwhile.
-let scorePerims = null;   // {prev, set}: Sets of the snapshots (ems) picked before, and by the analysis
-
+// nothing scored, leaves the picks as they are (no layer's eye changes them).
 const pickedPerims = () => new Set([...document.querySelectorAll("#perimlist input:checked")].map(i => i.dataset.ems));
 
 function pickPerims(want) {
@@ -3018,20 +3014,9 @@ function pickPerims(want) {
 
 function syncScorePerims(row) {
   if (!state.perimIndex.length) return;   // still loading: loadPerims picks them
-  const want = new Set([String(row[5])]);
-  if (!scorePerims) scorePerims = { prev: pickedPerims(), set: null };
   showLayer("perimeter");
-  pickPerims(want);
-  scorePerims.set = want;
+  pickPerims(new Set([String(row[5])]));
   renderHotMarks();
-}
-
-function releaseScorePerims() {
-  const sp = scorePerims;
-  scorePerims = null;
-  if (!sp || !sp.set) return;
-  const now = pickedPerims();
-  if (now.size === sp.set.size && [...now].every(e => sp.set.has(e))) pickPerims(sp.prev);
 }
 
 // ---------------------------------------------------------------- incident maps
