@@ -2957,9 +2957,9 @@ async function renderScore(f, run, pct, token) {
 // detections show as the analysis's hit / miss rings (even with the hotspots' eye off), in
 // place of the hotspots; scrubbed off it, the hotspots show as ever (eye on), so their
 // progress can be followed, while the analysis stays on the map; scrubbed back (it pulls
-// the playhead in from a few pixels away), the rings return. Taking the analysis off puts
-// the playhead back, unless it was moved meanwhile.
-let scoreHot = null;   // {prev, set}: the playhead slider's value before, and as the view set it
+// the playhead in from a few pixels away), the rings return. Taking the analysis off leaves
+// the playhead where it is (no layer's eye moves it).
+let scoreHot = null;   // {set}: the playhead slider's value at the analysis frame
 
 function scoreWindow() {
   // {t0, t1, h}: the run and window end of the hits & misses on the map, or null
@@ -2972,7 +2972,7 @@ function syncScorePlayhead() {
   const w = scoreWindow(), span = state.hotSpan, el = document.getElementById("hotTime");
   if (!w || !span) return;
   const v = Math.min(+el.max, Math.max(0, Math.round((w.t1 - span.start) / HOUR)));
-  if (!scoreHot) scoreHot = { prev: +el.value, set: null };
+  if (!scoreHot) scoreHot = { set: null };
   el.value = v;
   scoreHot.set = v;
   renderHotspots();
@@ -2991,11 +2991,10 @@ function snapToScoreFrame() {
 }
 
 function releaseScorePlayhead() {
-  const sh = scoreHot, el = document.getElementById("hotTime");
+  // the playhead stays put; on the analysis frame its rings give way to the hotspots
+  const sh = scoreHot;
   scoreHot = null;
-  if (!sh || sh.set == null) return;
-  if (+el.value === sh.set) el.value = sh.prev;
-  if (state.hotSpan) renderHotspots();
+  if (sh && sh.set != null && state.hotSpan) renderHotspots();
 }
 
 // The perimeter an analysis was scored against takes over the perimeter picker while it's
@@ -3476,20 +3475,22 @@ function revealOnTimeline(t, where = 0.75) {
 }
 
 function layoutHotTimeline(span) {
-  // the playhead starts at the axis's end, or stays put when the axis is unchanged (the
-  // hotspots shown again)
+  // a new fire's axis puts the playhead at its end. The same fire's axis laid out again (its
+  // hotspots shown or hidden: a burning fire's "now" has moved on) keeps it at the same time,
+  // at the axis's end if it was there, on the analysis frame if it was there
   const prev = state.hotSpan, el = document.getElementById("hotTime");
-  const keep = prev && prev.start === span.start && prev.end === span.end ? +el.value : null;
+  const same = !!prev && (prev.start === span.start && prev.end === span.end || (!!span.slug && prev.slug === span.slug));
+  const atEnd = +el.value >= +el.max, atFrame = scoreAtFrame(), t = same ? hotPlayhead() : null;
   state.hotSpan = span;
   el.max = Math.max(1, Math.ceil((span.end - span.start) / HOUR));
-  el.value = keep ?? el.max;
+  el.value = same && !atEnd ? Math.min(+el.max, Math.max(0, Math.round((t - span.start) / HOUR))) : el.max;
   sizeTimeline();
   labelPlayhead();
   layoutTimelineAxis();
   renderHotMarks();
-  if (keep === null) revealOnTimeline(hotPlayhead());
+  if (!same) revealOnTimeline(hotPlayhead());
   // a new axis under the hits & misses view: its playhead goes to the window's end again
-  if (keep === null && scoreWindow()) { scoreHot = null; syncScorePlayhead(); }
+  if ((!same || atFrame) && scoreWindow()) { scoreHot = null; syncScorePlayhead(); }
 }
 
 function labelPlayhead() {
