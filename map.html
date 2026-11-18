@@ -830,7 +830,104 @@ const view = { base: "map", want3d: false, is3d: null };   // null until first a
 const remembered = (key, fallback) => { try { return localStorage.getItem(key) || fallback; } catch (e) { return fallback; } };
 const remember = (key, value) => { try { localStorage.setItem(key, value); } catch (e) { /* the choice just isn't remembered */ } };
 
-function setBasemap(name) {
+// ---------------------------------------------------------------- the view in the URL
+
+// The URL carries the whole view, so a link opens what its sender saw: the fire, the model,
+// run, variable and percentile, the analysis (its horizon), the perimeters and the incident
+// map picked (its opacity, whether it follows the timeline), the hotspot playhead, the layers
+// hidden, the basemap and the camera (a pitch and bearing in it = 3D). It's rewritten in
+// place as the view changes (replaceState: no history entries). A link without a camera (an
+// older link, or one typed by hand) keeps the viewer's remembered basemap and 2D/3D.
+//   fire, model    the fire's slug; "farsite" (Pyrecast is the default)
+//   run            the run's timestamp (20260916_180800)
+//   var, pct       the forecast variable and percentile, when not time of arrival / 50th
+//   an             the analysis is on, at this horizon in hours (empty: the first scored)
+//   perim          the perimeters picked, by their ids (epoch ms), comma-separated, or "none"
+//   iap, iapf, iapo   the incident map picked, "1" when it follows the timeline, its opacity %
+//   t              the hotspot playhead in UTC (20260919T2200Z); left out at the axis's end
+//                  ("end" when an analysis is on, whose own frame is elsewhere)
+//   hide           the layers hidden: fc (the forecast), perim, hot
+//   base           "satellite" (the street map is the default)
+//   cam            lat,lon,zoom in 2D; lat,lon,zoom,pitch,bearing in 3D
+const URL_KEYS = ["fire", "model", "run", "var", "pct", "an", "perim", "iap", "iapf", "iapo", "t", "hide", "base", "cam"];
+const URL_PENDING = ["perim", "iap", "iapf", "iapo", "t"];   // applied once their data is in (see select)
+const tToUrl = ms => new Date(ms).toISOString().replace(/[-:]/g, "").slice(0, 13) + "Z";
+function tFromUrl(s) {
+  const m = /^(\d{4})(\d\d)(\d\d)T(\d\d)(\d\d)Z?$/.exec(s || "");
+  return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5]) : null;
+}
+const urlIn = (() => {
+  const P = new URLSearchParams(location.search), get = k => P.get(k);
+  const c = (get("cam") || "").split(",").map(Number);
+  const camOk = (c.length === 3 || c.length === 5) && c.every(Number.isFinite) && Math.abs(c[0]) <= 85 && Math.abs(c[1]) <= 180;
+  const an = get("an");
+  return {
+    fire: get("fire"), run: get("run"), var: get("var"), pct: get("pct"),
+    an: an === null ? undefined : an === "" || !Number.isFinite(+an) ? null : +an,
+    hide: new Set((get("hide") || "").split(",").filter(Boolean)),
+    base: get("base"),
+    cam: camOk ? { center: [c[1], c[0]], zoom: c[2], pitch: c[3] || 0, bearing: c[4] || 0, is3d: c.length === 5 } : null,
+    pending: Object.fromEntries(URL_PENDING.filter(k => P.has(k)).map(k => [k, get(k)])),
+  };
+})();
+let urlRestore = urlIn.fire ? urlIn : null;   // the link's view, until its fire is first picked
+let urlPending = null;    // its picks still waiting on their data: raw values, kept in the URL meanwhile
+let urlLive = false;      // the URL is only rewritten once init has read it
+let urlTimer = 0;
+
+function syncUrl() {   // debounced: playhead drags and map moves stay under Safari's replaceState limit
+  clearTimeout(urlTimer);
+  urlTimer = setTimeout(writeUrl, 400);
+}
+
+function writeUrl() {
+  if (!urlLive) return;
+  const url = new URL(location.href), P = url.searchParams;
+  for (const k of URL_KEYS) P.delete(k);
+  const f = state.sel && state.fires.find(x => x.slug === state.sel);
+  if (f) {
+    const val = id => document.getElementById(id).value;
+    P.set("fire", f.slug);
+    if (state.model !== "pyrecast") P.set("model", state.model);
+    if (val("selRun")) P.set("run", val("selRun"));
+    if (val("selVar") !== "time-of-arrival") P.set("var", val("selVar"));
+    if (val("selPct") !== "50") P.set("pct", val("selPct"));
+    if (state.scoreOn) {
+      const h = scoreShownH() ?? state.scoreH;
+      P.set("an", h == null ? "" : String(Math.round(h * 100) / 100));
+    }
+    if (state.perimIndex.length) {
+      const picked = pickedPerims(), on = state.perimIndex.filter(p => picked.has(p.ems)).map(p => p.ems);
+      P.set("perim", on.length ? on.join(",") : "none");
+    }
+    if (state.iap.id) {
+      P.set("iap", state.iap.id);
+      if (state.iap.follow) P.set("iapf", "1");
+      P.set("iapo", String(Math.round(100 * state.iap.opacity)));
+    }
+    const span = state.hotSpan, el = document.getElementById("hotTime");
+    if (span && span.slug === f.slug) {
+      if (+el.value < +el.max) P.set("t", tToUrl(hotPlayhead()));
+      else if (state.scoreOn) P.set("t", "end");
+    }
+    // under an analysis the forecast's eye is the one it'll come back to
+    const hidden = [["fc", state.scoreOn ? !state.scoreFcWasShown : !layerShown.run],
+                    ["perim", !layerShown.perimeter], ["hot", !layerShown.hot]];
+    const hide = hidden.filter(x => x[1]).map(x => x[0]);
+    if (hide.length) P.set("hide", hide.join(","));
+    if (view.base !== "map") P.set("base", view.base);
+    const c = map.getCenter(), cam = [c.lat.toFixed(5), c.lng.toFixed(5), map.getZoom().toFixed(2)];
+    if (view.is3d) cam.push(Math.round(map.getPitch()), Math.round(map.getBearing()));
+    P.set("cam", cam.join(","));
+    if (urlPending) for (const [k, v] of Object.entries(urlPending)) P.set(k, v);
+  }
+  url.search = P.toString().replace(/%2C/gi, ",");   // commas are fine in a query and read better
+  if (url.href === location.href) return;
+  try { history.replaceState(history.state, "", url); } catch (e) { /* too many updates: the next one catches up */ }
+}
+map.on("moveend", syncUrl);
+
+function setBasemap(name, save = true) {
   view.base = name;
   const vis = on => (on ? "visible" : "none");
   map.setLayoutProperty("osm", "visibility", vis(name === "map"));
@@ -839,7 +936,8 @@ function setBasemap(name) {
   // relief shading only where it helps: on the street map in 3D (imagery has its own)
   map.setLayoutProperty("shade", "visibility", vis(name === "map" && view.is3d));
   for (const b of document.querySelectorAll(".base-toggle button[data-base]")) b.classList.toggle("on", b.dataset.base === name);
-  remember("cornea-basemap", name);
+  if (save) remember("cornea-basemap", name);
+  syncUrl();
 }
 
 function apply3d(animate = true, gesture = false) {
@@ -868,7 +966,7 @@ function apply3d(animate = true, gesture = false) {
       map.setMaxPitch(0);
     }
   }
-  setBasemap(view.base);
+  setBasemap(view.base, false);
 }
 
 // a viewer's right-drag (turn or tilt) or two-finger tilt on the flat map lifts it into
@@ -913,10 +1011,12 @@ class ViewToggles {
 }
 map.addControl(new ViewToggles(), "top-right");
 mapReady.then(() => {
-  const base = remembered("cornea-basemap", "map");
+  // a link with a camera brings its basemap and 2D/3D (not remembered: they're the sender's)
+  const cam = urlIn.cam;
+  const base = cam ? urlIn.base || "map" : remembered("cornea-basemap", "map");
   view.base = base === "satellite" ? "satellite" : "map";
-  view.want3d = remembered("cornea-3d", "0") === "1";
-  setBasemap(view.base);
+  view.want3d = cam ? cam.is3d : remembered("cornea-3d", "0") === "1";
+  setBasemap(view.base, false);
   apply3d(false);
 });
 
@@ -1291,7 +1391,8 @@ async function init() {
     properties: { slug: f.slug, name: f.title || f.slug } })) });
   state.fires = fires.sort((a, b) => b.latest - a.latest || fireName(a).localeCompare(fireName(b)));
   renderList();
-  const want = new URLSearchParams(location.search).get("fire");
+  const want = urlIn.fire;
+  urlLive = true;
   if (want && state.fires.some(x => x.slug === want)) select(want);
   else deselect();
   wirePickers();
@@ -1526,16 +1627,6 @@ function fitOverview() {
 
 // ---------------------------------------------------------------- selection
 
-function setFireParam(slug) {
-  // the fire (and a model other than Pyrecast) in the URL, so a link opens the same view
-  const url = new URL(location.href);
-  if (slug) url.searchParams.set("fire", slug);
-  else url.searchParams.delete("fire");
-  if (slug && state.model !== "pyrecast") url.searchParams.set("model", state.model);
-  else url.searchParams.delete("model");
-  history.replaceState(history.state, "", url);
-}
-
 function deselect() {
   for (const g of state.fires) if (g.pyrecast) useModel(g, "pyrecast");
   state.model = "pyrecast";
@@ -1544,7 +1635,8 @@ function deselect() {
   placeModelLanes();
   state.seq++;              // drops in-flight forecast, perimeter and skill responses
   resetScore();
-  setFireParam(null);
+  urlRestore = urlPending = null;
+  syncUrl();
   document.getElementById("selRun").innerHTML = "";
   map.jumpTo(OVERVIEW_VIEW);   // before refreshWms, whose 3D ease a jump would cut short
   refreshWms();             // with no run this only removes the forecast layer
@@ -1561,15 +1653,31 @@ function deselect() {
 async function select(slug) {
   const f = state.fires.find(x => x.slug === slug);
   if (!f) return;
+  // a link's view, the first time its fire is picked (see "the view in the URL")
+  const R = urlRestore && urlRestore.fire === slug ? urlRestore : null;
+  urlRestore = null;
   state.sel = slug;
   const seq = ++state.seq;   // guard stale async responses after reselect
   resetScore();
   clearHotspots();
-  setFireParam(slug);
+  urlPending = R && Object.keys(R.pending).length ? { ...R.pending } : null;
+  if (R) {
+    // the layers it hid (the eyes are drawn from these by wireEyes, or here by markShown)
+    const shown = { run: !R.hide.has("fc"), perimeter: !R.hide.has("perim"), hot: !R.hide.has("hot") };
+    for (const [kind, on] of Object.entries(shown)) {
+      if (document.querySelector(`.tl-lab[data-kind="${kind}"] .eye`)) markShown(kind, on);
+      else layerShown[kind] = on;
+    }
+    applyPerimVisibility();
+  }
+  syncUrl();
   setMode();
   renderList();
   showSelectedName();
-  if (f.centroid) {
+  if (R && R.cam) {
+    map.jumpTo({ center: R.cam.center, zoom: R.cam.zoom, pitch: R.cam.pitch, bearing: R.cam.bearing });
+    if (PHONE.matches) setPanel(false);
+  } else if (f.centroid) {
     map.jumpTo({ center: f.centroid, zoom: FIRE_ZOOM });
     if (PHONE.matches) setPanel(false);   // the fire is on the map: let the phone show it
   } else if (PHONE.matches) setPanel(true);   // nothing to show on the map: keep its details in view
@@ -1577,15 +1685,60 @@ async function select(slug) {
   // the model picked last, if this fire has it (else Pyrecast); other fires get theirs back
   for (const g of state.fires) if (g !== f && g.pyrecast) useModel(g, "pyrecast");
   useModel(f, modelsFor(f).includes(state.modelPref) ? state.modelPref : "pyrecast");
-  setFireParam(slug);
-  fillRuns(f);
+  fillRuns(f, R && R.run);
+  if (R) {
+    // its variable and percentile (one the model has), and its analysis, as showScore puts one on
+    for (const [id, v] of [["selVar", R.var], ["selPct", R.pct]]) {
+      const el = document.getElementById(id);
+      if (v && [...el.options].some(o => o.value === v && !o.disabled)) el.value = v;
+    }
+    if (R.an !== undefined) {
+      state.scoreH = R.an;
+      state.scoreFcWasShown = layerShown.run;
+      state.scoreOn = true;
+      if (document.querySelector('.tl-lab[data-kind="run"] .eye')) markShown("run", false);
+      else layerShown.run = false;
+    }
+  }
   refreshWms();
-  loadSkill(f, seq);
-  loadIap(f, seq);
+  const skillP = loadSkill(f, seq), iapP = loadIap(f, seq);
   // perimeters first: the hotspot query box is sized from the perimeter bounds
   await loadPerims(f, seq);
   if (state.seq !== seq) return;
   await refreshHotspots();
+  if (!R || state.seq !== seq) return;
+  // the link's picks that wait on data: after the analysis has picked its perimeter and moved
+  // the playhead (its skill file in), and the incident maps are listed
+  await Promise.all([skillP, iapP]);
+  if (state.seq === seq) applyUrlPicks(f, R);
+}
+
+function applyUrlPicks(f, R) {
+  const P = urlPending;
+  urlPending = null;
+  if (P) {
+    if (P.perim != null && state.perimIndex.length) {
+      const ids = P.perim === "none" ? [] : P.perim.split(",").filter(e => state.perimIndex.some(p => p.ems === e));
+      if (P.perim === "none" || ids.length) pickPerims(new Set(ids));
+    }
+    const e = P.iap && state.iap.maps.find(x => x.id === P.iap && x.tiles);
+    if (e) {
+      state.iap.follow = P.iapf === "1";
+      const op = +P.iapo / 100;
+      if (Number.isFinite(op) && P.iapo) state.iap.opacity = Math.min(Math.max(op, 0.1), 1);
+      state.iap.id = null;   // showIap toggles
+      showIap(e.id);
+    }
+    const span = state.hotSpan, el = document.getElementById("hotTime"), t = tFromUrl(P.t);
+    if (span && span.slug === f.slug && (t != null || P.t === "end")) {
+      el.value = P.t === "end" ? +el.max : Math.min(+el.max, Math.max(0, Math.round((t - span.start) / HOUR)));
+      revealOnTimeline(hotPlayhead());
+      renderHotspots();
+    }
+  }
+  // an analysis shows its perimeter's layer: the link may have had it hidden
+  if (layerShown.perimeter === R.hide.has("perim")) { markShown("perimeter", !R.hide.has("perim")); applyPerimVisibility(); }
+  syncUrl();
 }
 
 function fillRuns(f, keep) {
@@ -1644,7 +1797,6 @@ function switchModel(model, run, scoreH) {
   if (!f || !modelsFor(f).includes(model)) return;
   state.modelPref = model;
   useModel(f, model);
-  setFireParam(state.sel);
   fillRuns(f, run);
   if (scoreH != null) state.scoreH = scoreH;
   if (state.scoreOn) refreshWms();
@@ -1765,6 +1917,7 @@ const isDead = layer => deadLive.has(layer) && Date.now() - deadLive.get(layer) 
 
 function refreshWms() {
   const token = ++state.wmsSeq;
+  syncUrl();
   const f = state.fires.find(x => x.slug === state.sel);
   const run = document.getElementById("selRun").value;
   // the run's analysis: the horizon to show for this run and percentile, before the lanes
@@ -3026,6 +3179,7 @@ function showIap(id) {
 
 function renderIapCtl() {
   const e = iapShown(), ctl = document.getElementById("iapCtl"), btn = document.getElementById("iapBtn");
+  syncUrl();
   ctl.hidden = !e;
   if (state.iap.maps.length) btn.textContent = e ? `${iapLabel(e)} · ${e.op_date ? fmtDate(iapDay(e.op_date).getTime()) : "undated"}${e.period ? ` ${e.period}` : ""}` : "None shown";
   if (!e) return;
@@ -3084,6 +3238,7 @@ function wireIap() {
   document.getElementById("iapOp").addEventListener("input", ev => {
     state.iap.opacity = +ev.target.value;
     remember("cornea-iap-opacity", String(state.iap.opacity));
+    syncUrl();
     document.getElementById("iapOpVal").textContent = `${Math.round(100 * state.iap.opacity)}%`;
     if (map.getLayer("iap")) map.setPaintProperty("iap", "raster-opacity", state.iap.opacity);
   });
@@ -3166,6 +3321,7 @@ function perimSummary() {
   document.getElementById("perimBtn").textContent = !shown.length ? "None shown"
     : shown.length > 1 ? `${shown.length} shown · newest ${fmtPerim(shown[0])}`
     : fmtPerim(shown[0]) + (shown[0] === current ? " (current)" : "");
+  syncUrl();
 }
 
 const perimGj = new Map();   // path -> GeoJSON, most recent 60
@@ -3294,7 +3450,7 @@ async function fireSpan(f) {
                ...(state.sel === f.slug ? state.perimIndex.map(p => Date.parse(p.date)) : [])]
     .filter(t => Number.isFinite(t) && t < end);
   if (own.length) start = Math.min(start, Math.min(...own) - DAY / 2);
-  return { start: dayOf(start) * DAY, end, contained: !!containedAt, containedAt };
+  return { start: dayOf(start) * DAY, end, contained: !!containedAt, containedAt, slug: f.slug };
 }
 
 const defaultHotSpan = () => ({ start: dayOf(Date.now() - 14 * DAY) * DAY, end: Date.now(), contained: false, containedAt: null });
@@ -3345,6 +3501,7 @@ function labelPlayhead() {
   el.setAttribute("aria-valuetext", atNow ? "now" : fmtDT(p));
   document.getElementById("tlPh").style.setProperty("--f", pinFrac(p).toFixed(5));
   paintHotLabel();
+  syncUrl();
 }
 
 // the hotspots' label: the playhead's time, as short as the forecast's and perimeter's
@@ -3814,6 +3971,7 @@ const EYE_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="tr
 
 function markShown(kind, on) {
   layerShown[kind] = on;
+  syncUrl();
   for (const lab of document.querySelectorAll(`.tl-lab[data-kind="${kind}"]`)) {
     lab.classList.toggle("hid", !on);
     const eye = lab.querySelector(".eye");
